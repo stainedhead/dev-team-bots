@@ -1,0 +1,56 @@
+# Binaries and build output
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.html
+
+# Config files — defaults live next to the binary, never in git
+config.yaml
+config.json
+config.toml
+*.local.yaml
+*.local.json
+*.local.toml
+
+# Secrets and environment
+.env
+.env.*
+secrets.*
+*.pem
+*.key
+*.p12
+
+# CDK output
+cdk.out/
+cdk.context.json
+
+# Go workspace (if used locally)
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+
+# golangci-lint cache
+.golangci-lint-cache/
+
+# Temporary files
+tmp/
+temp/

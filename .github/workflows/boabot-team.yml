@@ -1,0 +1,108 @@
+name: boabot-team
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'boabot-team/**'
+      - '.github/workflows/boabot-team.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'boabot-team/**'
+      - '.github/workflows/boabot-team.yml'
+
+defaults:
+  run:
+    working-directory: boabot-team/cdk
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cdk-diff:
+    name: CDK Diff
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: CDK diff
+        id: diff
+        run: npx cdk diff 2>&1 | tee diff.txt
+
+      - name: Post diff to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const diff = fs.readFileSync('boabot-team/cdk/diff.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## CDK Diff — boabot-team\n\`\`\`\n${diff}\n\`\`\``
+            });
+
+  cdk-test:
+    name: CDK Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK dependencies
+        run: npm ci
+
+      - name: Run CDK assertion tests
+        run: npm test
+
+  cdk-deploy:
+    name: CDK Deploy
+    runs-on: ubuntu-latest
+    needs: cdk-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: CDK deploy (per-bot stack)
+        run: npx cdk deploy --require-approval never

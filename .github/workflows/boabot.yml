@@ -1,0 +1,135 @@
+name: boabot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'boabot/**'
+      - '.github/workflows/boabot.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'boabot/**'
+      - '.github/workflows/boabot.yml'
+
+defaults:
+  run:
+    working-directory: boabot
+
+env:
+  GO_VERSION: '1.26'
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: boabot
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: boabot/go.sum
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: boabot
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage check
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Coverage: ${COVERAGE}%"
+          awk "BEGIN { if ($COVERAGE < 90) { print \"Coverage ${COVERAGE}% is below 90% threshold\"; exit 1 } }"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: boabot/go.sum
+
+      - name: Build
+        run: go build -o bin/boabot ./cmd/boabot
+
+  containerize:
+    name: Containerize
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image: ${{ steps.build-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: build-push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}"
+          docker build -t "${IMAGE}" -f deployments/Dockerfile .
+          docker push "${IMAGE}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: containerize
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node (CDK)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK dependencies
+        run: cd cdk && npm ci
+
+      - name: CDK deploy (shared stack)
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: cd cdk && npx cdk deploy --require-approval never

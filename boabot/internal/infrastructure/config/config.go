@@ -1,0 +1,62 @@
+package config
+
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	Bot          BotConfig           `yaml:"bot"`
+	Orchestrator OrchestratorConfig  `yaml:"orchestrator"`
+	AWS          AWSConfig           `yaml:"aws"`
+	Models       ModelsConfig        `yaml:"models"`
+}
+
+type BotConfig struct {
+	Name    string `yaml:"name"`
+	BotType string `yaml:"type"`
+}
+
+type OrchestratorConfig struct {
+	Enabled  bool `yaml:"enabled"`
+	APIPort  int  `yaml:"api_port"`
+	WebPort  int  `yaml:"web_port"`
+}
+
+type AWSConfig struct {
+	Region       string `yaml:"region"`
+	SQSQueueURL  string `yaml:"sqs_queue_url"`
+	SNSTopicARN  string `yaml:"sns_topic_arn"`
+	PrivateBucket string `yaml:"private_bucket"`
+	TeamBucket   string `yaml:"team_bucket"`
+	OrchestratorQueueURL string `yaml:"orchestrator_queue_url"`
+}
+
+type ModelsConfig struct {
+	Default   string          `yaml:"default"`
+	Providers []ProviderConfig `yaml:"providers"`
+}
+
+type ProviderConfig struct {
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"`
+	ModelID  string `yaml:"model_id"`
+	Region   string `yaml:"region"`
+	Endpoint string `yaml:"endpoint"`
+}
+
+func Load(path string) (Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("open config %s: %w", path, err)
+	}
+	defer f.Close()
+
+	var cfg Config
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	return cfg, nil
+}

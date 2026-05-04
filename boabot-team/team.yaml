@@ -1,0 +1,29 @@
+# team.yaml — declares the bots that form the active team.
+#
+# Each entry maps a unique bot name to its type (which determines the SOUL.md,
+# AGENTS.md, and role configuration loaded from boabot-team/bots/<type>/).
+#
+# Set `enabled: false` to prevent a bot from being deployed without removing
+# its definition. The CDK stack reads this file and reconciles cluster state.
+
+team:
+  - name: orchestrator
+    type: orchestrator
+    enabled: true
+    orchestrator: true       # enables control plane, kanban board, REST API, web UI
+
+  - name: architect
+    type: architect
+    enabled: false
+
+  - name: implementer
+    type: implementer
+    enabled: false
+
+  - name: reviewer
+    type: reviewer
+    enabled: false
+
+  - name: maintainer
+    type: maintainer
+    enabled: false

@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/stainedhead/dev-team-bots/boabotctl/internal/auth"
+	"github.com/stainedhead/dev-team-bots/boabotctl/internal/client"
 	"github.com/stainedhead/dev-team-bots/boabotctl/internal/commands"
 	"github.com/stainedhead/dev-team-bots/boabotctl/internal/config"
 )
@@ -20,6 +22,8 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	cfg, _ := config.Load()
+	token, _ := auth.Load()
+	c := client.NewHTTPClient(cfg.Endpoint, func() string { return token })
 
 	root := &cobra.Command{
 		Use:     "baobotctl",
@@ -28,11 +32,12 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
-		commands.NewLoginCmd(cfg),
-		commands.NewBoardCmd(cfg),
-		commands.NewTeamCmd(cfg),
-		commands.NewUserCmd(cfg),
-		commands.NewProfileCmd(cfg),
+		commands.NewLoginCmd(c, os.Stdout),
+		commands.NewBoardCmd(c, os.Stdout),
+		commands.NewTeamCmd(c, os.Stdout),
+		commands.NewUserCmd(c, os.Stdout),
+		commands.NewProfileCmd(c, os.Stdout),
+		commands.NewDLQCmd(c, os.Stdout),
 		commands.NewConfigCmd(),
 	)
 

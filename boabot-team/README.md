@@ -32,9 +32,11 @@ bots/
     AGENTS.md       # public interface description
     config.yaml     # runtime configuration
     mcp.json        # optional role-specific MCP tools
-team.yaml           # authoritative deployment configuration
+team.yaml           # authoritative deployment manifest
 cdk/                # per-bot AWS infrastructure (CDK)
 ```
+
+Each bot's CDK resources include a private S3 memory bucket (versioned, with S3 Vectors), an SQS inbound queue, an IAM role, and an ECS task definition and service. The shared stack (`boabot/cdk/`) must be deployed first — it provides the ECS cluster, ALB, SNS topic, team S3 bucket, DynamoDB budget table, and ECR repository.
 
 ## Deploying the Team
 
@@ -43,8 +45,6 @@ cd cdk
 cdk diff    # review changes
 cdk deploy  # provision or update per-bot infrastructure
 ```
-
-The shared stack in `boabot/cdk/` must be deployed first.
 
 ## Adding a Bot
 

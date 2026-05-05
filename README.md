@@ -22,7 +22,7 @@ A system of cooperative, always-on AI agents that function as a software develop
 ## User Documentation
 
 - [`user-docs/getting-started.md`](user-docs/getting-started.md) — set up and connect to a running BaoBot team
-- [`user-docs/baobotctl.md`](user-docs/baobotctl.md) — operator CLI reference
+- [`boabotctl/user-docs/baobotctl.md`](boabotctl/user-docs/baobotctl.md) — operator CLI reference
 
 ## Development
 

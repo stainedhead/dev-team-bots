@@ -1,6 +1,6 @@
 # boabotctl — Operator CLI
 
-The BaoBot operator CLI. A kubectl-style tool for managing the team, Kanban board, and users.
+The BaoBot operator CLI. A kubectl-style tool for managing the team, Kanban board, users, and Agent Skills.
 
 ## Documentation
 

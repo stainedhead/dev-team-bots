@@ -2,6 +2,16 @@
 
 The core BaoBot agent binary. All bots in the team run this binary, differentiated at startup by injected configuration and SOUL.md.
 
+## What It Does
+
+- Polls SQS, monitors Slack and Teams, spawns worker threads for incoming tasks.
+- Executes tasks agentically using a configured language model, built-in harness tools, MCP tools, and Agent Skills.
+- Maintains a git-backed memory directory synced to private S3; uses S3 Vectors for semantic search.
+- Enforces Tool Attention (BM25 scoring) to keep injected tool schemas under the 20-tool cap.
+- Checkpoints worker state and restarts when context window approaches capacity.
+- Tracks token spend and tool call counts in memory, flushed to DynamoDB every 30 seconds.
+- When `orchestrator.enabled: true`: runs the control plane, Kanban board, REST API, and web UI.
+
 ## Documentation
 
 - [`docs/product-summary.md`](docs/product-summary.md) — what this module does
@@ -43,4 +53,4 @@ The binary reads `config.yaml` from its own directory by default. See [`user-doc
 
 ## Infrastructure
 
-Shared infrastructure (ECS cluster, ALB, RDS, SNS, ECR) is defined in [`cdk/`](cdk/). Per-bot infrastructure is defined in [`../boabot-team/cdk/`](../boabot-team/cdk/).
+Shared infrastructure (ECS cluster, ALB, RDS, SNS, DynamoDB, ECR) is defined in [`cdk/`](cdk/). Per-bot infrastructure is defined in [`../boabot-team/cdk/`](../boabot-team/cdk/).

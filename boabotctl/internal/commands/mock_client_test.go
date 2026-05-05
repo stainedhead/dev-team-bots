@@ -186,7 +186,7 @@ func (m *mockClient) DLQDiscard(_ context.Context, id string) error {
 // errClient is a simple client that returns an error for all calls.
 type errClient struct{ err error }
 
-func newErrClient(msg string) *errClient { return &errClient{err: fmt.Errorf(msg)} }
+func newErrClient(msg string) *errClient { return &errClient{err: fmt.Errorf("%s", msg)} }
 func (e *errClient) Login(_ context.Context, _, _ string) (domain.LoginResponse, error) {
 	return domain.LoginResponse{}, e.err
 }

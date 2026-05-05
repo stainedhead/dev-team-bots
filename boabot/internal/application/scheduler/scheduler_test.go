@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,19 +20,29 @@ type fakeClock struct {
 func (f *fakeClock) Now() time.Time { return f.t }
 
 type mockTaskRunner struct {
+	mu       sync.Mutex
 	runFn    func(ctx context.Context, task scheduler.ScheduledTask) error
 	runCalls []scheduler.ScheduledTask
 }
 
 func (m *mockTaskRunner) Run(ctx context.Context, task scheduler.ScheduledTask) error {
+	m.mu.Lock()
 	m.runCalls = append(m.runCalls, task)
+	m.mu.Unlock()
 	if m.runFn != nil {
 		return m.runFn(ctx, task)
 	}
 	return nil
 }
 
+func (m *mockTaskRunner) RunCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.runCalls)
+}
+
 type mockTaskStore struct {
+	mu              sync.Mutex
 	listFn          func(ctx context.Context) ([]scheduler.ScheduledTask, error)
 	updateLastRunFn func(ctx context.Context, id string, lastRunAt time.Time) error
 
@@ -46,11 +57,19 @@ func (m *mockTaskStore) List(ctx context.Context) ([]scheduler.ScheduledTask, er
 }
 
 func (m *mockTaskStore) UpdateLastRun(ctx context.Context, id string, lastRunAt time.Time) error {
+	m.mu.Lock()
 	m.updateLastRunCalls++
+	m.mu.Unlock()
 	if m.updateLastRunFn != nil {
 		return m.updateLastRunFn(ctx, id, lastRunAt)
 	}
 	return nil
+}
+
+func (m *mockTaskStore) UpdateLastRunCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.updateLastRunCalls
 }
 
 // --- NextRun ---

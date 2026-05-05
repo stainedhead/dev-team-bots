@@ -75,7 +75,7 @@ func TestNewConfigLoader_ValidFile(t *testing.T) {
 
 // TestNewConfigLoader_InvalidYAML verifies that malformed YAML returns an error.
 func TestNewConfigLoader_InvalidYAML(t *testing.T) {
-	path := writeTempYAML(t, ":::not valid yaml:::")
+	path := writeTempYAML(t, "workflows: [\x00unclosed")
 	defer os.Remove(path)
 
 	cl, err := infrawf.NewConfigLoader(path)
@@ -139,8 +139,8 @@ func TestReload_InvalidFile_KeepsOldRouter(t *testing.T) {
 
 	firstRouter := cl.Router()
 
-	// Overwrite with invalid YAML.
-	if err := os.WriteFile(path, []byte(":::bad:::"), 0o600); err != nil {
+	// Overwrite with invalid YAML (null byte causes parse error).
+	if err := os.WriteFile(path, []byte("workflows: [\x00bad"), 0o600); err != nil {
 		t.Fatalf("overwrite file: %v", err)
 	}
 

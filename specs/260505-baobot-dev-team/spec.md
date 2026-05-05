@@ -179,6 +179,25 @@ Both modes may be active simultaneously. Each threshold is independently configu
 
 ---
 
+## Architectural Decisions (Closed)
+
+The following decisions were resolved during spec review and are binding for implementation:
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Web UI technology | Go-served HTML + HTMX | Single-operator use; avoids separate frontend build pipeline; Go template rendering is sufficient for Kanban board and status views |
+| SQS topology | Per-bot queue | Cleaner IAM isolation; per-bot DLQ configuration; simpler consumer logic; aligns with FR-026 IAM boundary |
+| Vector store | S3 Vectors (primary); OpenSearch Serverless (fallback if GA unavailable in us-east-1) | Confirm GA status in research phase before M1; architecture uses domain interface so swap is infrastructure-only |
+| OTel ADOT integration | ECS Fargate sidecar | Current AWS-recommended pattern; sidecar shares task lifecycle with app container; no separate service to manage |
+| Work item persistence | PostgreSQL (RDS) | Already in component list; relational model suits work item lifecycle queries; ACID guarantees for optimistic locking on concurrent assignment |
+| Mid-task cap exhaustion | Current LLM call completes → no further invocations → task suspended as `cap_exceeded` → orchestrator logs breach + SNS notification | Avoids partial-output corruption; operator resumes manually next day or increases cap |
+| Concurrent assignment safety | Optimistic locking on work item row (PostgreSQL `version` column) + SQS visibility timeout as secondary guard | Prevents double-assignment under ECS task replacement; idempotent handlers required |
+| DLQ recovery | `baobotctl dlq list/retry/discard` commands; DLQ items visible in Kanban board as error state | Operator-controlled; no automatic retry beyond configured SQS maxReceiveCount |
+| Orchestrator crash recovery | On restart, orchestrator queries PostgreSQL for items in `in_progress` with no heartbeat in last N minutes (configurable); requeues to SQS for bot to re-claim | Heartbeat updated by bot every 60s; N=5 minutes default |
+| Workflow hot-reload | Workflow definition loaded from config file at startup; SIGHUP triggers reload; change takes effect on next item entering each step | No CDK redeploy required for step/role changes; satisfies FR-009 |
+
+---
+
 ## Breaking Changes
 
 - None anticipated for v1 (greenfield implementation on existing skeleton).
@@ -215,6 +234,14 @@ Both modes may be active simultaneously. Each threshold is independently configu
 - [ ] The harness screening layer detects and flags a known injection pattern in a tool output before it reaches the model.
 - [ ] All bot activity, tool calls, and model invocations produce OTel traces visible in a connected observability backend.
 - [ ] The written recommendation document addresses: measured agent throughput and delivery accuracy, actual infrastructure cost per task, workflow friction points and resolutions, and a go/no-go recommendation with stated conditions for company adoption.
+- [ ] An Admin can modify workflow step definitions and role assignments via config (without CDK redeploy); the change takes effect on the next work item to enter that step (FR-009).
+- [ ] A work item can be created in backlog state, have context and attachments added by a user or bot, and remain unstarted until explicitly advanced (FR-013).
+- [ ] After a model provider rate-limit window resets, the harness resumes the paused task from the point of suspension without data loss, and the task completes successfully (FR-024 resume path).
+- [ ] All external responses to users identify as BaoBot; no API response, error message, or log entry visible to an external caller reveals the identity or role of an internal worker bot (FR-025).
+- [ ] An IAM policy test confirms a worker bot's role is denied s3:GetObject on another bot's private bucket ARN (FR-026).
+- [ ] When a bot hits its daily cap mid-task, the current LLM call completes, no further model invocations are dispatched, the task is suspended with status "cap_exceeded", and the orchestrator logs the breach and notifies the PO via SNS.
+- [ ] A message that has exceeded the DLQ retry limit is surfaced in `baobotctl` as a dead-letter item; the operator can inspect, retry, or discard it via CLI commands.
+- [ ] Under concurrent orchestrator startup (e.g. ECS task replacement), two instances cannot assign the same work item to two different bots — the assignment is idempotent via optimistic locking or SQS visibility timeout.
 
 ---
 

@@ -11,7 +11,7 @@
 | Phase | Name | Status | Started | Completed |
 |-------|------|--------|---------|-----------|
 | 0 | Initial Research | 🔄 In Progress | 2026-05-05 | — |
-| 1 | Specification | Not Started | — | — |
+| 1 | Specification | ✅ Complete | 2026-05-05 | 2026-05-05 |
 | 2 | Research & Data Modeling | Not Started | — | — |
 | 3 | Architecture & Planning | Not Started | — | — |
 | 4 | Task Breakdown | Not Started | — | — |
@@ -34,10 +34,11 @@
 
 ## Phase 1 — Specification
 
-- [ ] spec.md reviewed and gaps filled
-- [ ] All FRs have testable acceptance criteria
-- [ ] Architecture layers identified
-- [ ] Scope of changes confirmed
+- [x] spec.md reviewed and gaps filled
+- [x] All FRs have testable acceptance criteria (9 new ACs added for FR-009, FR-013, FR-024, FR-025, FR-026, edge cases)
+- [x] Architecture layers identified
+- [x] Scope of changes confirmed
+- [x] 10 architectural decisions closed (web UI, SQS topology, vector store, OTel ADOT, work item DB, mid-task cap behavior, concurrent assignment, DLQ recovery, crash recovery, workflow hot-reload)
 
 ---
 
@@ -88,3 +89,4 @@ None.
 ## Recent Activity
 
 - 2026-05-05: Spec directory created from PRD; all phase files initialized; Phase 0 in progress.
+- 2026-05-05: Spec review complete. 9 acceptance criteria added for FR-009/013/024/025/026 and edge cases. 10 architectural decisions closed. Phase 1 marked complete.

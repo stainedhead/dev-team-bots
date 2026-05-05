@@ -10,11 +10,11 @@ import (
 )
 
 type RunAgentUseCase struct {
-	identity      domain.BotIdentity
-	queue         domain.MessageQueue
-	broadcaster   domain.Broadcaster
-	workerFactory domain.WorkerFactory
-	monitors      []domain.ChannelMonitor
+	identity             domain.BotIdentity
+	queue                domain.MessageQueue
+	broadcaster          domain.Broadcaster
+	workerFactory        domain.WorkerFactory
+	monitors             []domain.ChannelMonitor
 	orchestratorQueueURL string
 }
 

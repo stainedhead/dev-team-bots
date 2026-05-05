@@ -10,7 +10,9 @@ team:
   - name: orchestrator
     type: orchestrator
     enabled: true
-    orchestrator: true       # enables control plane, kanban board, REST API, web UI
+    orchestrator: true       # enables control plane, kanban board, REST API, web UI,
+                             # shared memory write serialisation, Agent Card distribution,
+                             # and team_snapshot responses
 
   - name: architect
     type: architect

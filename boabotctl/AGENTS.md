@@ -4,15 +4,15 @@ The BaoBot operator CLI. A kubectl-style command-line tool for human operators t
 
 ## Module Purpose
 
-`boabotctl` is a standalone Go binary that communicates with the orchestrator's REST API via the ALB. It provides terminal access to everything the web UI offers: board management, team inspection, user administration, and profile management.
+`boabotctl` is a standalone Go binary that communicates with the orchestrator's REST API via the ALB. It provides terminal access to everything the web UI offers: board management, team inspection, user administration, profile management, and Agent Skills lifecycle management.
 
 ## Package Structure
 
 ```
 cmd/boabotctl/      # main — wiring and cobra root command
 internal/
-  commands/         # one package per command group: board, team, user, profile, login
-  client/           # HTTP client wrapping the orchestrator REST API
+  commands/         # one file per command group: board, team, skills, user, profile, login, config
+  client/           # OrchestratorClient interface + HTTP implementation
   auth/             # JWT storage and attachment (local credential store)
   config/           # endpoint config (~/.baobotctl/config.yaml)
   domain/           # request/response types, shared value objects
@@ -24,7 +24,8 @@ internal/
 - All orchestrator communication goes through `internal/client/` — no raw HTTP calls in command handlers.
 - JWT is stored in `~/.baobotctl/credentials` (mode 0600). Never stored in the config file.
 - Commands are thin: parse flags, call client method, format and print response. No business logic in command handlers.
-- All client methods are behind an interface so command handlers can be unit tested with a mock client.
+- All client methods are behind an `OrchestratorClient` interface so command handlers can be unit tested with a mock client.
+- `skills push` writes directly to the bot's S3 staging prefix — it does not route through the orchestrator. All other skills operations (list, approve, reject, revoke) go through the REST API.
 
 ## Development Rules
 

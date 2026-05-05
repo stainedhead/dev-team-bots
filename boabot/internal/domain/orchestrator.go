@@ -19,6 +19,7 @@ type BotEntry struct {
 	Name          string
 	BotType       string
 	QueueURL      string
+	AgentCardURL  string // S3 URL of the bot's published Agent Card
 	Status        BotStatus
 	LastHeartbeat time.Time
 	RegisteredAt  time.Time
@@ -40,14 +41,15 @@ type BoardStore interface {
 }
 
 type WorkItem struct {
-	ID          string
-	Title       string
-	Description string
-	Status      WorkItemStatus
-	AssignedTo  string
-	CreatedBy   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             string
+	IdempotencyKey string // client-supplied UUID; mutations with a seen key are no-ops
+	Title          string
+	Description    string
+	Status         WorkItemStatus
+	AssignedTo     string
+	CreatedBy      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type WorkItemStatus string
@@ -74,13 +76,13 @@ type UserStore interface {
 }
 
 type User struct {
-	Username        string
-	DisplayName     string
-	PasswordHash    string
-	Role            UserRole
-	Enabled         bool
+	Username           string
+	DisplayName        string
+	PasswordHash       string
+	Role               UserRole
+	Enabled            bool
 	MustChangePassword bool
-	CreatedAt       time.Time
+	CreatedAt          time.Time
 }
 
 type UserRole string

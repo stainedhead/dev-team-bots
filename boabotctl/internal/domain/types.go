@@ -3,14 +3,14 @@ package domain
 import "time"
 
 type WorkItem struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	Description string         `json:"description"`
-	Status      string         `json:"status"`
-	AssignedTo  string         `json:"assigned_to"`
-	CreatedBy   string         `json:"created_by"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Status      string    `json:"status"`
+	AssignedTo  string    `json:"assigned_to"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type CreateWorkItemRequest struct {
@@ -27,10 +27,26 @@ type UpdateWorkItemRequest struct {
 }
 
 type BotEntry struct {
-	Name      string    `json:"name"`
-	BotType   string    `json:"bot_type"`
-	Status    string    `json:"status"`
-	LastSeen  time.Time `json:"last_seen"`
+	Name     string    `json:"name"`
+	BotType  string    `json:"bot_type"`
+	Status   string    `json:"status"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+type TeamHealth struct {
+	Active   int `json:"active"`
+	Inactive int `json:"inactive"`
+	Total    int `json:"total"`
+}
+
+type Skill struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Summary    string    `json:"summary"`
+	BotName    string    `json:"bot_name"`
+	Status     string    `json:"status"`
+	UploadedAt time.Time `json:"uploaded_at"`
+	ApprovedAt time.Time `json:"approved_at,omitempty"`
 }
 
 type User struct {

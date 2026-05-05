@@ -232,3 +232,64 @@ func (m *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	}
 	return []float32{0.1, 0.2, 0.3}, nil
 }
+
+// --- BudgetTracker ---
+
+type BudgetTracker struct {
+	mu sync.Mutex
+
+	CheckAndRecordTokensFn   func(ctx context.Context, count int64) error
+	CheckAndRecordToolCallFn func(ctx context.Context) error
+	FlushFn                  func(ctx context.Context) error
+
+	TokenCalls    []int64
+	ToolCallCount int
+	FlushCount    int
+}
+
+func (m *BudgetTracker) CheckAndRecordTokens(ctx context.Context, count int64) error {
+	m.mu.Lock()
+	m.TokenCalls = append(m.TokenCalls, count)
+	fn := m.CheckAndRecordTokensFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, count)
+	}
+	return nil
+}
+
+func (m *BudgetTracker) CheckAndRecordToolCall(ctx context.Context) error {
+	m.mu.Lock()
+	m.ToolCallCount++
+	fn := m.CheckAndRecordToolCallFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return nil
+}
+
+func (m *BudgetTracker) Flush(ctx context.Context) error {
+	m.mu.Lock()
+	m.FlushCount++
+	fn := m.FlushFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return nil
+}
+
+func (m *BudgetTracker) GetTokenCalls() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int64, len(m.TokenCalls))
+	copy(out, m.TokenCalls)
+	return out
+}
+
+func (m *BudgetTracker) GetToolCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ToolCallCount
+}

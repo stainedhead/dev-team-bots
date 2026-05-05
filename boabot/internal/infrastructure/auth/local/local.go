@@ -156,6 +156,23 @@ func (p *LocalAuthProvider) SetPassword(ctx context.Context, username, plainPass
 	return nil
 }
 
+// VerifyPassword checks that password matches the stored bcrypt hash for username.
+// Returns domainauth.ErrInvalidCredentials if the user is not found, the account
+// is disabled, or the password does not match.
+func (p *LocalAuthProvider) VerifyPassword(ctx context.Context, username, password string) error {
+	u, err := p.loadUser(ctx, username)
+	if err != nil {
+		return domainauth.ErrInvalidCredentials
+	}
+	if u.disabled {
+		return domainauth.ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(password)); err != nil {
+		return domainauth.ErrInvalidCredentials
+	}
+	return nil
+}
+
 // DisableUser marks the user account as disabled.
 func (p *LocalAuthProvider) DisableUser(ctx context.Context, username string) error {
 	_, err := p.db.ExecContext(ctx,

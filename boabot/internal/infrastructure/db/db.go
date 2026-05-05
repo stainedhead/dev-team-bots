@@ -248,7 +248,7 @@ func (r *WorkItemRepo) ListByStatus(ctx context.Context, status domain.WorkItemS
 	if err != nil {
 		return nil, fmt.Errorf("db: list by status: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanWorkItems(rows)
 }
 
@@ -259,7 +259,7 @@ func (r *WorkItemRepo) ListByBot(ctx context.Context, botID string) ([]WorkItem,
 	if err != nil {
 		return nil, fmt.Errorf("db: list by bot: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanWorkItems(rows)
 }
 
@@ -273,7 +273,7 @@ func (r *WorkItemRepo) ListStalled(ctx context.Context, heartbeatCutoff time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("db: list stalled: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanWorkItems(rows)
 }
 
@@ -370,7 +370,7 @@ func (r *WorkflowRepo) ListWorkflows(ctx context.Context) ([]workflow.WorkflowDe
 	if err != nil {
 		return nil, fmt.Errorf("db: list workflows: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var defs []workflow.WorkflowDefinition
 	for rows.Next() {
@@ -458,7 +458,7 @@ func (r *MetricRepo) QueryEvents(ctx context.Context, botID string, from, to tim
 	if err != nil {
 		return nil, fmt.Errorf("db: query events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []MetricEvent
 	for rows.Next() {

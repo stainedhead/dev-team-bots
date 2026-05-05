@@ -59,7 +59,7 @@ func writeTempYAML(t *testing.T, content string) string {
 // non-nil ConfigLoader with a non-nil Router.
 func TestNewConfigLoader_ValidFile(t *testing.T) {
 	path := writeTempYAML(t, minimalYAML)
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestNewConfigLoader_ValidFile(t *testing.T) {
 // TestNewConfigLoader_InvalidYAML verifies that malformed YAML returns an error.
 func TestNewConfigLoader_InvalidYAML(t *testing.T) {
 	path := writeTempYAML(t, "workflows: [\x00unclosed")
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err == nil {
@@ -102,7 +102,7 @@ func TestNewConfigLoader_FileNotFound(t *testing.T) {
 // that Router() returns a router built from the new file contents.
 func TestReload_ReplacesRouter(t *testing.T) {
 	path := writeTempYAML(t, minimalYAML)
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestReload_ReplacesRouter(t *testing.T) {
 // existing router in place (atomic swap only happens on success).
 func TestReload_InvalidFile_KeepsOldRouter(t *testing.T) {
 	path := writeTempYAML(t, minimalYAML)
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err != nil {
@@ -158,7 +158,7 @@ func TestReload_InvalidFile_KeepsOldRouter(t *testing.T) {
 // there are no data races (intended for -race flag).
 func TestRouter_ThreadSafe(t *testing.T) {
 	path := writeTempYAML(t, minimalYAML)
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestRouter_ThreadSafe(t *testing.T) {
 // context is cancelled (no hang).
 func TestWatchSIGHUP_CancelStops(t *testing.T) {
 	path := writeTempYAML(t, minimalYAML)
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	cl, err := infrawf.NewConfigLoader(path)
 	if err != nil {

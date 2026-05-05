@@ -26,7 +26,7 @@ func newMock(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db, mock
 }
 
@@ -372,6 +372,68 @@ func TestLogin_DBError(t *testing.T) {
 	// Should NOT be ErrInvalidCredentials — it's a DB error
 	if errors.Is(err, domainauth.ErrInvalidCredentials) {
 		t.Fatal("expected a non-credential error for DB failures")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VerifyPassword
+// ---------------------------------------------------------------------------
+
+func TestVerifyPassword_Success(t *testing.T) {
+	db, mock := newMock(t)
+	provider := local.NewLocalAuthProvider(db, testSecret)
+
+	hash := hashPassword(t, "correct")
+	mock.ExpectQuery(`SELECT .+ FROM users WHERE username`).
+		WithArgs("alice").
+		WillReturnRows(sqlmock.NewRows(userCols).AddRow("alice", hash, "user", false, false))
+
+	if err := provider.VerifyPassword(context.Background(), "alice", "correct"); err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+}
+
+func TestVerifyPassword_WrongPassword(t *testing.T) {
+	db, mock := newMock(t)
+	provider := local.NewLocalAuthProvider(db, testSecret)
+
+	hash := hashPassword(t, "correct")
+	mock.ExpectQuery(`SELECT .+ FROM users WHERE username`).
+		WithArgs("alice").
+		WillReturnRows(sqlmock.NewRows(userCols).AddRow("alice", hash, "user", false, false))
+
+	err := provider.VerifyPassword(context.Background(), "alice", "wrong")
+	if !errors.Is(err, domainauth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+func TestVerifyPassword_UserNotFound(t *testing.T) {
+	db, mock := newMock(t)
+	provider := local.NewLocalAuthProvider(db, testSecret)
+
+	mock.ExpectQuery(`SELECT .+ FROM users WHERE username`).
+		WithArgs("nobody").
+		WillReturnRows(sqlmock.NewRows(userCols))
+
+	err := provider.VerifyPassword(context.Background(), "nobody", "any")
+	if !errors.Is(err, domainauth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+func TestVerifyPassword_DisabledUser(t *testing.T) {
+	db, mock := newMock(t)
+	provider := local.NewLocalAuthProvider(db, testSecret)
+
+	hash := hashPassword(t, "pass")
+	mock.ExpectQuery(`SELECT .+ FROM users WHERE username`).
+		WithArgs("disabled").
+		WillReturnRows(sqlmock.NewRows(userCols).AddRow("disabled", hash, "user", true, false))
+
+	err := provider.VerifyPassword(context.Background(), "disabled", "pass")
+	if !errors.Is(err, domainauth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials for disabled user, got %v", err)
 	}
 }
 

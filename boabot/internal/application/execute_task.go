@@ -89,11 +89,11 @@ func (u *ExecuteTaskUseCase) buildContext(ctx context.Context, task domain.Task)
 		return task.Instruction, nil
 	}
 
-	context := task.Instruction + "\n\n--- Relevant memory ---\n"
+	result := task.Instruction + "\n\n--- Relevant memory ---\n"
 	for _, r := range results {
 		if data, err := u.memory.Read(ctx, r.Key); err == nil {
-			context += string(data) + "\n"
+			result += string(data) + "\n"
 		}
 	}
-	return context, nil
+	return result, nil
 }

@@ -18,6 +18,10 @@ import (
 type AuthProvider interface {
 	Login(username, password string) (domainauth.Token, error)
 	ValidateToken(token string) (domainauth.Claims, error)
+	// SetPassword hashes newPassword and updates the stored credential for username.
+	SetPassword(ctx context.Context, username, newPassword string) error
+	// VerifyPassword checks that password matches the stored credential for username.
+	VerifyPassword(ctx context.Context, username, password string) error
 }
 
 // Config holds all stores and providers required by the orchestrator server.
@@ -165,7 +169,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 // ── board handlers ────────────────────────────────────────────────────────────
 
 func (s *Server) handleBoardList(w http.ResponseWriter, r *http.Request) {
-	items, err := s.cfg.Board.List(r.Context(), domain.WorkItemFilter{})
+	filter := domain.WorkItemFilter{}
+	if s := r.URL.Query().Get("status"); s != "" {
+		filter.Status = domain.WorkItemStatus(s)
+	}
+	if bot := r.URL.Query().Get("assigned_to"); bot != "" {
+		filter.AssignedTo = bot
+	}
+	items, err := s.cfg.Board.List(r.Context(), filter)
 	if err != nil {
 		writeInternalError(w, "board list", err)
 		return
@@ -439,16 +450,11 @@ func (s *Server) handleUserSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	user, err := s.cfg.Users.Get(r.Context(), username)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password must not be empty")
 		return
 	}
-	// Password hashing is the responsibility of the auth provider; store the
-	// plain value here — the auth adapter will hash it on next login.
-	user.PasswordHash = req.Password
-	user.MustChangePassword = false
-	if _, err := s.cfg.Users.Update(r.Context(), user); err != nil {
+	if err := s.cfg.Auth.SetPassword(r.Context(), username, req.Password); err != nil {
 		writeInternalError(w, "user set password", err)
 		return
 	}
@@ -520,17 +526,16 @@ func (s *Server) handleProfileSetPassword(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	claims := claimsFromContext(r)
-	user, err := s.cfg.Users.Get(r.Context(), claims.Subject)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+	if req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "new_password must not be empty")
 		return
 	}
-	// Password verification is the auth provider's responsibility; update the
-	// stored hash via the user store after verification is confirmed by caller.
-	user.PasswordHash = req.NewPassword
-	user.MustChangePassword = false
-	if _, err := s.cfg.Users.Update(r.Context(), user); err != nil {
+	claims := claimsFromContext(r)
+	if err := s.cfg.Auth.VerifyPassword(r.Context(), claims.Subject, req.OldPassword); err != nil {
+		writeError(w, http.StatusUnauthorized, "incorrect current password")
+		return
+	}
+	if err := s.cfg.Auth.SetPassword(r.Context(), claims.Subject, req.NewPassword); err != nil {
 		writeInternalError(w, "profile set password", err)
 		return
 	}

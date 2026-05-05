@@ -1,0 +1,48 @@
+# Maintainer bot configuration
+
+bot:
+  name: maintainer
+  type: maintainer
+
+models:
+  default: bedrock-claude
+  providers:
+    - name: bedrock-claude
+      type: bedrock
+      model_id: anthropic.claude-sonnet-4-6
+      region: us-east-1
+
+aws:
+  region: us-east-1
+  sqs_queue_url: ""           # injected by CDK at deploy time
+  sns_topic_arn: ""           # injected by CDK at deploy time
+  private_bucket: ""          # injected by CDK at deploy time
+  team_bucket: ""             # injected by CDK at deploy time
+  dynamodb_budget_table: ""   # injected by CDK at deploy time
+
+tools:
+  allowed_tools:
+    - read_file
+    - list_dir
+    - glob
+    - grep
+    - write_file
+    - edit_file
+    - memory_search
+    - send_message
+    - read_messages
+    - todo_write
+    - todo_read
+    - http_request
+    - get_metrics
+  http_allowed_hosts:
+    - api.github.com
+  receive_from:
+    - orchestrator
+
+budget:
+  token_spend_daily: 1000000
+  tool_calls_hourly: 500
+
+context:
+  threshold_tokens: 150000

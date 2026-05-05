@@ -19,6 +19,9 @@ config.toml
 *.local.json
 *.local.toml
 
+# Bot template configs are tracked — they contain no secrets (AWS values injected by CDK)
+!boabot-team/bots/*/config.yaml
+
 # Secrets and environment
 .env
 .env.*

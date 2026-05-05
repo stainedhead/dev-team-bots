@@ -1,0 +1,58 @@
+{
+  "name": "boabot-team-cdk",
+  "version": "1.0.0",
+  "description": "CDK infrastructure for BaoBot dev-team",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.6.0",
+    "aws-cdk-lib": "^2.252.0",
+    "constructs": "^10.6.0",
+    "js-yaml": "^4.1.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "aws-cdk": "^2.1120.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/test"
+    ],
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "target": "ES2020",
+            "module": "commonjs",
+            "esModuleInterop": true,
+            "resolveJsonModule": true,
+            "strict": false,
+            "skipLibCheck": true
+          }
+        }
+      ]
+    }
+  }
+}

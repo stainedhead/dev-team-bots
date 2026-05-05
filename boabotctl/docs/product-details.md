@@ -28,13 +28,24 @@
 | `baobotctl team get <name>` | Get details for a specific bot |
 | `baobotctl team health` | Overall team health summary |
 
+### Skills (Admin only)
+
+| Command | Description |
+|---|---|
+| `baobotctl skills list [--bot <name>]` | List skills in staging or active |
+| `baobotctl skills approve <skill-id>` | Promote a staged skill to active |
+| `baobotctl skills reject <skill-id>` | Reject and discard a staged skill |
+| `baobotctl skills revoke <skill-id>` | Remove an active skill |
+
+Skills are uploaded to a staging prefix in the bot's private S3 bucket by `baobotctl skills push`. An Admin reviews and calls `approve` to promote them to the active prefix, making them available to the bot.
+
 ### User (Admin only)
 
 | Command | Description |
 |---|---|
 | `baobotctl user list` | List all users |
 | `baobotctl user add` | Create a new user account |
-| `baobotctl user remove <username>` | Remove a user |
+| `baabotctl user remove <username>` | Remove a user |
 | `baobotctl user disable <username>` | Disable a user account |
 | `baobotctl user set-pwd <username>` | Reset a user's password |
 | `baobotctl user set-role <username>` | Change a user's role (admin/user) |

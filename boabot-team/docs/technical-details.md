@@ -29,6 +29,8 @@ For each bot, `BotConstruct` creates:
 S3 Bucket (private memory)
   └── S3 Vectors access enabled
   └── S3 Files access enabled
+  └── Versioning enabled
+  └── agent-card/ prefix (Agent Card storage)
 
 SQS Queue (inbound)
   └── Dead-letter queue (maxReceiveCount: 3)
@@ -36,15 +38,18 @@ SQS Queue (inbound)
 
 IAM Role
   └── ECS task execution trust policy
-  └── S3: own bucket (r/w), team bucket (r)
+  └── S3: own private bucket (r/w), team bucket (r)
+  └── S3: agent-card prefix in own bucket (r/w)
   └── SQS: own queue (send, receive, delete)
   └── SNS: broadcast topic (publish)
   └── Bedrock: InvokeModel
   └── Secrets Manager: own path prefix (read)
+  └── DynamoDB: shared budget table (read/write own items)
 
 ECS Task Definition
   └── Container: shared ECR image
-  └── Environment: CONFIG_PATH, QUEUE_URL, PRIVATE_BUCKET, TEAM_BUCKET, SNS_TOPIC_ARN
+  └── Environment: CONFIG_PATH, QUEUE_URL, PRIVATE_BUCKET, TEAM_BUCKET,
+                   SNS_TOPIC_ARN, DYNAMODB_BUDGET_TABLE
   └── Secrets: model provider keys from Secrets Manager
 
 ECS Service
@@ -61,6 +66,7 @@ const clusterArn = Fn.importValue('BoabotClusterArn');
 const ecrUri = Fn.importValue('BoabotEcrUri');
 const snsTopicArn = Fn.importValue('BoabotSnsTopicArn');
 const teamBucketName = Fn.importValue('BoabotTeamBucketName');
+const dynamodbBudgetTable = Fn.importValue('BoabotDynamodbBudgetTable');
 ```
 
 The shared stack must export these values and be deployed before the team stack.

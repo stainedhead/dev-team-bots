@@ -33,3 +33,11 @@ Module-specific decisions. For system-level decisions see root [`docs/architectu
 **Decision:** All commands support `--output json` for machine-readable output.
 
 **Rationale:** Enables scripting and integration with other tools without screen-scraping. Default output remains human-readable tables.
+
+---
+
+## ADR-C005 — Skills commands require Admin role; no push via CLI
+
+**Decision:** `baobotctl skills` commands (list, approve, reject, revoke) are Admin-only operations against the orchestrator REST API. `baobotctl skills push` uploads a skill package directly to the staging prefix of the bot's private S3 bucket; it does not go via the orchestrator.
+
+**Rationale:** Push goes directly to S3 to avoid routing large skill payloads through the orchestrator. Approve/reject/revoke are control-plane operations that require Admin intent — they are enforced by the orchestrator's JWT role check, not by the CLI.

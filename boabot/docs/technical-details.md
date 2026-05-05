@@ -11,10 +11,14 @@ internal/
     agent.go            # Agent interface and lifecycle types
     worker.go           # Worker interface and task types
     memory.go           # MemoryStore interface (vectors + files)
-    message.go          # message types: registration, heartbeat, task, broadcast, shutdown
+    message.go          # message types: registration, heartbeat, task, delegation, broadcast, shutdown
     provider.go         # ModelProvider and ProviderFactory interfaces
     mcp.go              # MCPClient interface
     queue.go            # MessageQueue and Broadcaster interfaces
+    tool.go             # Tool, ToolGater, and ToolScorer interfaces
+    skill.go            # Skill and SkillRegistry interfaces
+    budget.go           # BudgetTracker interface
+    card.go             # AgentCard types and CardRegistry interface
     orchestrator.go     # ControlPlane and BoardStore interfaces (orchestrator mode)
     user.go             # User, Role, and Auth interfaces (orchestrator mode)
     mocks/              # generated/hand-written mocks for all interfaces
@@ -23,19 +27,25 @@ internal/
     run_agent.go        # top-level agent loop use case
     process_message.go  # message routing and dispatch
     execute_task.go     # worker thread execution harness
-    register.go         # bot registration and heartbeat use cases
+    context_manager.go  # progressive disclosure, checkpoint-and-restart
+    register.go         # bot registration, team_snapshot, heartbeat use cases
     memory_ops.go       # read, write, search memory use cases
-    orchestrator/       # orchestrator-mode use cases (board, control plane, auth)
+    delegation.go       # send/receive structured delegation messages
+    skills.go           # skill index loading and script execution
+    budget.go           # budget cap enforcement and DynamoDB flush
+    orchestrator/       # orchestrator-mode use cases (board, control plane, auth, memory writes)
 
   infrastructure/
     aws/
       sqs/              # SQS MessageQueue adapter
       sns/              # SNS Broadcaster adapter
-      s3/               # S3 Files MemoryStore adapter
-      s3vectors/        # S3 Vectors MemoryStore adapter
+      s3/               # S3 object sync adapter (ETag-based memory sync)
+      s3vectors/        # S3 Vectors semantic search adapter
       bedrock/          # Bedrock ModelProvider adapter
-      secrets/          # Secrets Manager loader
-    mcp/                # MCP client adapter
+      secrets/          # Secrets Manager credential loader
+      dynamodb/         # DynamoDB budget counter adapter
+    mcp/                # MCP client adapter (with typed credential resolution)
+    bm25/               # BM25 ToolScorer implementation
     openai/             # OpenAI-compatible ModelProvider adapter
     slack/              # Slack channel monitor adapter
     teams/              # Microsoft Teams adapter
@@ -52,8 +62,11 @@ main goroutine
         ├── SQS poll loop (main thread)
         ├── Slack monitor goroutine
         ├── Teams monitor goroutine
+        ├── Budget flush goroutine (30s interval)
         └── Worker pool
               └── worker goroutine (per task, recover() guards panic)
+                    └── ContextManager (progressive disclosure, checkpoint-and-restart)
+                    └── ToolGater (BM25 scoring, schema injection)
 ```
 
 ## Config File Structure
@@ -83,6 +96,36 @@ aws:
   sns_topic_arn: <arn>
   private_bucket: <name>
   team_bucket: <name>
+  dynamodb_budget_table: <name>
+
+tools:
+  allowed_tools:            # built-in tools this bot may use
+    - read_file
+    - list_dir
+    - glob
+    - grep
+    - write_file
+    - edit_file
+    - memory_search
+    - send_message
+    - read_messages
+    - todo_write
+    - todo_read
+    - http_request
+    - get_metrics
+  http_allowed_hosts:       # hosts http_request may contact
+    - api.github.com
+    - hooks.slack.com
+  receive_from:             # bots permitted to send action-triggering messages
+    - orchestrator
+    - architect
+
+budget:
+  token_spend_daily: 1000000
+  tool_calls_hourly: 500
+
+context:
+  threshold_tokens: 150000  # trigger checkpoint-and-restart at this context size
 ```
 
 ## Key Design Decisions

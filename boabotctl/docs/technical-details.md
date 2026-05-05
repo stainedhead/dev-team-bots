@@ -11,7 +11,8 @@ internal/
     login.go            # login / logout
     board.go            # board subcommands
     team.go             # team subcommands
-    user.go             # user subcommands (admin only)
+    skills.go           # skills subcommands (Admin only)
+    user.go             # user subcommands (Admin only)
     profile.go          # profile subcommands
     config.go           # config subcommands
   client/
@@ -32,6 +33,10 @@ type OrchestratorClient interface {
     Login(username, password string) (token string, mustChangePassword bool, err error)
     BoardList() ([]WorkItem, error)
     BoardCreate(req CreateWorkItemRequest) (WorkItem, error)
+    SkillsList(bot string) ([]Skill, error)
+    SkillsApprove(id string) error
+    SkillsReject(id string) error
+    SkillsRevoke(id string) error
     // ... all API operations
 }
 ```

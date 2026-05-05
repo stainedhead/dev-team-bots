@@ -50,6 +50,18 @@ baobotctl team get <name>       Get details for a specific bot
 baobotctl team health           Overall team health summary
 ```
 
+## baobotctl skills  (Admin only)
+
+```
+baobotctl skills push <path> --bot <name>     Upload a skill package to staging
+baobotctl skills list [--bot <name>]          List staged and active skills
+baobotctl skills approve <skill-id>           Promote a staged skill to active
+baobotctl skills reject <skill-id>            Reject and discard a staged skill
+baobotctl skills revoke <skill-id>            Remove an active skill
+```
+
+`push` uploads a skill directory (containing `SKILL.md` and optional scripts) to the staging prefix of the named bot's private S3 bucket. An Admin must then run `approve` to make the skill available to the bot.
+
 ## baobotctl user  (Admin only)
 
 ```

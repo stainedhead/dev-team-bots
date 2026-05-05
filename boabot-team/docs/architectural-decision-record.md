@@ -22,6 +22,22 @@ Module-specific decisions. For system-level decisions see root [`docs/architectu
 
 ## ADR-T003 — New bots default to enabled: false
 
-**Decision:** New entries in `team.yaml` must start with `enabled: false`. They are flipped to `true` only after review of SOUL.md, AGENTS.md, and config.yaml.
+**Decision:** New entries in `team.yaml` must start with `enabled: false`. They are flipped to `true` only after review of `SOUL.md`, `AGENTS.md`, and `config.yaml`.
 
 **Rationale:** Prevents accidental deployment of incomplete bot definitions. Provides an explicit review gate before a new bot joins the live cluster.
+
+---
+
+## ADR-T004 — DynamoDB budget table in shared stack, items per bot
+
+**Decision:** The DynamoDB table for budget counters is a single shared table provisioned in the shared CDK stack (`boabot/cdk/`). Each bot's IAM role grants read/write access to its own items only (using a condition on the partition key).
+
+**Rationale:** A single table is simpler to operate than one table per bot. IAM conditions enforce item-level isolation without requiring separate tables or resource policies. The table ARN is exported from the shared stack and imported by each `BotConstruct`.
+
+---
+
+## ADR-T005 — S3 versioning on all memory buckets
+
+**Decision:** S3 object versioning is enabled on all private and team memory buckets provisioned by the CDK stack.
+
+**Rationale:** Versioning provides a durable revision history for memory files without requiring git semantics at the remote. Recovery from accidental overwrites or corrupted writes does not require a separate backup mechanism.

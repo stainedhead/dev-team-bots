@@ -14,21 +14,21 @@ Download the latest binary for your platform from the [GitHub Releases](../../re
 
 **macOS (arm64):**
 ```bash
-curl -L https://github.com/<org>/dev-team-bots/releases/latest/download/baobotctl-darwin-arm64 -o baobotctl
+curl -L https://github.com/stainedhead/dev-team-bots/releases/latest/download/baobotctl-darwin-arm64 -o baobotctl
 chmod +x baobotctl
 mv baobotctl /usr/local/bin/
 ```
 
 **macOS (amd64):**
 ```bash
-curl -L https://github.com/<org>/dev-team-bots/releases/latest/download/baobotctl-darwin-amd64 -o baobotctl
+curl -L https://github.com/stainedhead/dev-team-bots/releases/latest/download/baobotctl-darwin-amd64 -o baobotctl
 chmod +x baobotctl
 mv baobotctl /usr/local/bin/
 ```
 
 **Linux (amd64):**
 ```bash
-curl -L https://github.com/<org>/dev-team-bots/releases/latest/download/baobotctl-linux-amd64 -o baobotctl
+curl -L https://github.com/stainedhead/dev-team-bots/releases/latest/download/baobotctl-linux-amd64 -o baobotctl
 chmod +x baobotctl
 mv baobotctl /usr/local/bin/
 ```
@@ -63,8 +63,25 @@ baobotctl board create --title "Add feature X" --assign implementer
 baobotctl profile get
 ```
 
-See [`baobotctl.md`](baobotctl.md) for the full command reference.
+See [`baobotctl/user-docs/baobotctl.md`](../baobotctl/user-docs/baobotctl.md) for the full command reference.
 
 ## Web UI
 
 The Kanban board is also accessible via browser at the orchestrator URL. Log in with your username and password.
+
+## For Admins
+
+Admins have access to additional commands:
+
+```bash
+# Manage users
+baobotctl user list
+baobotctl user add --username <u> --role <admin|user>
+
+# Manage Agent Skills
+baobotctl skills list --bot <name>
+baobotctl skills approve <skill-id>
+baobotctl skills revoke <skill-id>
+```
+
+See [`baobotctl/user-docs/baobotctl.md`](../baobotctl/user-docs/baobotctl.md) for the full Admin command reference.

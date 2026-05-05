@@ -44,17 +44,17 @@ func (uc *CreateWorkItemUseCase) Execute(
 
 	now := uc.now()
 	item := WorkItem{
-		ID:           uc.newID(),
-		Title:        title,
-		Description:  description,
-		WorkflowName: workflowName,
-		WorkflowStep: "backlog",
-		Status:       WorkItemStatusBacklog,
-		Type:         itemType,
-		Priority:     priority,
-		Version:      1,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:            uc.newID(),
+		Title:         title,
+		Description:   description,
+		WorkflowName:  workflowName,
+		WorkflowStep:  "backlog",
+		Status:        WorkItemStatusBacklog,
+		Type:          itemType,
+		Priority:      priority,
+		Version:       1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 		FutureStartAt: futureStartAt,
 	}
 

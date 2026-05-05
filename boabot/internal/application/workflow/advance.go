@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	domainwf "github.com/stainedhead/dev-team-bots/boabot/internal/domain/workflow"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain/metrics"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain/notification"
+	domainwf "github.com/stainedhead/dev-team-bots/boabot/internal/domain/workflow"
 )
 
 // WorkflowAdvancer advances steps in a named workflow definition.

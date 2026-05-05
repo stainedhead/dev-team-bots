@@ -11,9 +11,9 @@ import (
 
 // BedrockRuntimeClient is a hand-written mock of the bedrock.BedrockRuntimeClient interface.
 type BedrockRuntimeClient struct {
-	InvokeModelFn                     func(ctx context.Context, params *bedrockruntime.InvokeModelInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelOutput, error)
-	InvokeModelWithResponseStreamFn   func(ctx context.Context, params *bedrockruntime.InvokeModelWithResponseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelWithResponseStreamOutput, error)
-	InvokeModelCalls                  []*bedrockruntime.InvokeModelInput
+	InvokeModelFn                      func(ctx context.Context, params *bedrockruntime.InvokeModelInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelOutput, error)
+	InvokeModelWithResponseStreamFn    func(ctx context.Context, params *bedrockruntime.InvokeModelWithResponseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelWithResponseStreamOutput, error)
+	InvokeModelCalls                   []*bedrockruntime.InvokeModelInput
 	InvokeModelWithResponseStreamCalls []*bedrockruntime.InvokeModelWithResponseStreamInput
 }
 

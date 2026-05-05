@@ -81,9 +81,9 @@ func (bt *BudgetTracker) DailySpend(ctx context.Context, botID string) (float64,
 func (bt *BudgetTracker) MonthlySpend(ctx context.Context) (float64, error) {
 	month := bt.month()
 	out, err := bt.client.Query(ctx, &awsdynamodb.QueryInput{
-		TableName:              &bt.tableName,
-		IndexName:              strPtr("date-index"),
-		KeyConditionExpression: strPtr("begins_with(#d, :m)"),
+		TableName:                 &bt.tableName,
+		IndexName:                 strPtr("date-index"),
+		KeyConditionExpression:    strPtr("begins_with(#d, :m)"),
 		ExpressionAttributeNames:  map[string]string{"#d": "date"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":m": &types.AttributeValueMemberS{Value: month}},
 	})

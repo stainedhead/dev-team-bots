@@ -2,7 +2,6 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -10,16 +9,30 @@ import (
 )
 
 // promptLine reads a single line of text from r after printing prompt to w.
+// Reads byte-by-byte to avoid consuming lookahead from a shared reader.
 func promptLine(w io.Writer, r io.Reader, prompt string) (string, error) {
 	fmt.Fprint(w, prompt)
-	scanner := bufio.NewScanner(r)
-	if scanner.Scan() {
-		return strings.TrimSpace(scanner.Text()), nil
+	var sb strings.Builder
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			sb.WriteByte(buf[0])
+		}
+		if err == io.EOF {
+			if sb.Len() > 0 {
+				break
+			}
+			return "", io.EOF
+		}
+		if err != nil {
+			return "", err
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		return "", err
-	}
-	return "", io.EOF
+	return strings.TrimSpace(sb.String()), nil
 }
 
 // promptPassword reads a password from r (without echo in a real terminal).

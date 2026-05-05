@@ -38,9 +38,9 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 }
 
 type bedrockRequest struct {
-	System    string             `json:"system,omitempty"`
-	Messages  []bedrockMessage   `json:"messages"`
-	MaxTokens int                `json:"max_tokens"`
+	System    string           `json:"system,omitempty"`
+	Messages  []bedrockMessage `json:"messages"`
+	MaxTokens int              `json:"max_tokens"`
 }
 
 type bedrockMessage struct {
@@ -50,7 +50,7 @@ type bedrockMessage struct {
 
 type bedrockResponse struct {
 	Content    []struct{ Text string } `json:"content"`
-	StopReason string                 `json:"stop_reason"`
+	StopReason string                  `json:"stop_reason"`
 	Usage      struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`

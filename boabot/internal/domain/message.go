@@ -84,13 +84,13 @@ type TaskResultPayload struct {
 }
 
 type DelegatePayload struct {
-	TaskID          string `json:"task_id"`
-	IdempotencyKey  string `json:"idempotency_key"`
-	Instruction     string `json:"instruction,omitempty"`
-	StatusMessage   string `json:"status_message,omitempty"`
-	Output          string `json:"output,omitempty"`
-	Error           string `json:"error,omitempty"`
-	InputPrompt     string `json:"input_prompt,omitempty"`
+	TaskID         string `json:"task_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Instruction    string `json:"instruction,omitempty"`
+	StatusMessage  string `json:"status_message,omitempty"`
+	Output         string `json:"output,omitempty"`
+	Error          string `json:"error,omitempty"`
+	InputPrompt    string `json:"input_prompt,omitempty"`
 }
 
 type MemoryWritePayload struct {

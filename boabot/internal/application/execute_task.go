@@ -8,11 +8,11 @@ import (
 )
 
 type ExecuteTaskUseCase struct {
-	provider  domain.ModelProvider
-	mcp       domain.MCPClient
-	memory    domain.MemoryStore
-	embedder  domain.Embedder
-	vectors   domain.VectorStore
+	provider   domain.ModelProvider
+	mcp        domain.MCPClient
+	memory     domain.MemoryStore
+	embedder   domain.Embedder
+	vectors    domain.VectorStore
 	soulPrompt string
 }
 

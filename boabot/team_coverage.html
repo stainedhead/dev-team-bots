@@ -1,0 +1,747 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>team: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/bot_registry.go (100.0%)</option>
+				
+				<option value="file1">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/mcp.go (100.0%)</option>
+				
+				<option value="file2">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/provider_factory.go (100.0%)</option>
+				
+				<option value="file3">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/team_manager.go (87.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package team provides TeamManager and BotRegistry for starting and managing
+// all enabled bots in-process without any cloud infrastructure.
+package team
+
+import (
+        "sync"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+)
+
+// BotRegistry tracks the identity of every bot that has been started by the
+// TeamManager.  It is safe for concurrent use.
+type BotRegistry struct {
+        mu   sync.RWMutex
+        bots map[string]domain.BotIdentity
+}
+
+// NewBotRegistry constructs an empty BotRegistry.
+func NewBotRegistry() *BotRegistry <span class="cov6" title="17">{
+        return &amp;BotRegistry{
+                bots: make(map[string]domain.BotIdentity),
+        }
+}</span>
+
+// Register adds or overwrites the identity for identity.Name.
+func (r *BotRegistry) Register(identity domain.BotIdentity) <span class="cov8" title="55">{
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        r.bots[identity.Name] = identity
+}</span>
+
+// Get returns the BotIdentity for name, and false if it is not registered.
+func (r *BotRegistry) Get(name string) (domain.BotIdentity, bool) <span class="cov8" title="55">{
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        id, ok := r.bots[name]
+        return id, ok
+}</span>
+
+// List returns a snapshot of all registered identities in an unspecified order.
+func (r *BotRegistry) List() []domain.BotIdentity <span class="cov9" title="65">{
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        out := make([]domain.BotIdentity, 0, len(r.bots))
+        for _, id := range r.bots </span><span class="cov10" title="102">{
+                out = append(out, id)
+        }</span>
+        <span class="cov9" title="65">return out</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package team
+
+import (
+        "context"
+        "fmt"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+)
+
+// noopMCPClient is a stub MCP client used until MCP integration is wired (M5+).
+type noopMCPClient struct{}
+
+func (n *noopMCPClient) ListTools(_ context.Context) ([]domain.MCPTool, error) <span class="cov8" title="1">{
+        return nil, nil
+}</span>
+
+func (n *noopMCPClient) CallTool(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) <span class="cov8" title="1">{
+        return domain.MCPToolResult{}, fmt.Errorf("MCP not configured")
+}</span>
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package team
+
+import (
+        "errors"
+        "fmt"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/anthropic"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+)
+
+// localProviderFactory implements domain.ProviderFactory for local single-binary
+// operation.  It pre-builds every provider at construction time so that Get is
+// a simple map lookup.
+type localProviderFactory struct {
+        providers map[string]domain.ModelProvider
+        errs      map[string]error
+}
+
+// newLocalProviderFactory builds a provider for each entry in cfgs.
+// Unsupported provider types are recorded as errors and returned by Get.
+func newLocalProviderFactory(cfgs []config.ProviderConfig) *localProviderFactory <span class="cov10" title="17">{
+        f := &amp;localProviderFactory{
+                providers: make(map[string]domain.ModelProvider, len(cfgs)),
+                errs:      make(map[string]error, len(cfgs)),
+        }
+        for _, pc := range cfgs </span><span class="cov9" title="16">{
+                p, err := buildProvider(pc)
+                if err != nil </span><span class="cov9" title="14">{
+                        f.errs[pc.Name] = err
+                }</span> else<span class="cov3" title="2"> {
+                        f.providers[pc.Name] = p
+                }</span>
+        }
+        <span class="cov10" title="17">return f</span>
+}
+
+// Get returns the named ModelProvider, or an error if it could not be built or
+// is unknown.
+func (f *localProviderFactory) Get(name string) (domain.ModelProvider, error) <span class="cov10" title="17">{
+        if err, bad := f.errs[name]; bad </span><span class="cov9" title="14">{
+                return nil, err
+        }</span>
+        <span class="cov4" title="3">if p, ok := f.providers[name]; ok </span><span class="cov3" title="2">{
+                return p, nil
+        }</span>
+        <span class="cov1" title="1">return nil, fmt.Errorf("team: unknown provider %q", name)</span>
+}
+
+// buildProvider constructs a ModelProvider for a single ProviderConfig.
+func buildProvider(pc config.ProviderConfig) (domain.ModelProvider, error) <span class="cov9" title="16">{
+        switch pc.Type </span>{
+        case "anthropic":<span class="cov9" title="13">
+                p, err := anthropic.NewFromEnv(pc.ModelID)
+                if err != nil </span><span class="cov8" title="11">{
+                        return nil, fmt.Errorf("team: build anthropic provider %q: %w", pc.Name, err)
+                }</span>
+                <span class="cov3" title="2">return p, nil</span>
+
+        case "bedrock":<span class="cov1" title="1">
+                return nil, errors.New(
+                        "team: bedrock provider requires AWS SDK setup; use ANTHROPIC_API_KEY for local mode",
+                )</span>
+
+        case "openai":<span class="cov1" title="1">
+                return nil, errors.New("team: openai provider not yet implemented")</span>
+
+        default:<span class="cov1" title="1">
+                return nil, fmt.Errorf("team: unsupported provider type %q", pc.Type)</span>
+        }
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package team
+
+import (
+        "context"
+        "fmt"
+        "log/slog"
+        "math"
+        "os"
+        "path/filepath"
+        "sync"
+        "time"
+
+        "gopkg.in/yaml.v3"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/application"
+        appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+        githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/budget"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+)
+
+// TeamConfig is the parsed team.yaml structure.
+type TeamConfig struct {
+        Team []BotEntry `yaml:"team"`
+}
+
+// BotEntry describes a single bot in the team roster.
+type BotEntry struct {
+        Name         string `yaml:"name"`
+        Type         string `yaml:"type"`
+        Enabled      bool   `yaml:"enabled"`
+        Orchestrator bool   `yaml:"orchestrator"`
+}
+
+// ManagerConfig holds the configuration for a TeamManager.
+type ManagerConfig struct {
+        // TeamFilePath is the path to team.yaml.
+        TeamFilePath string
+        // BotsDir is the directory that contains bots/&lt;type&gt;/ subdirectories.
+        BotsDir string
+        // MemoryRoot is the base path for per-bot memory files. Defaults to ./memory.
+        MemoryRoot string
+        // RestartDelay is the initial back-off on panic restart. Defaults to 1s.
+        RestartDelay time.Duration
+        // MaxRestartDelay is the maximum back-off. Defaults to 5 minutes.
+        MaxRestartDelay time.Duration
+        // WatchdogCfg configures the heap memory watchdog. Zero means disabled.
+        WatchdogCfg watchdog.Config
+}
+
+func (c *ManagerConfig) applyDefaults() <span class="cov7" title="15">{
+        if c.RestartDelay &lt;= 0 </span><span class="cov2" title="2">{
+                c.RestartDelay = time.Second
+        }</span>
+        <span class="cov7" title="15">if c.MaxRestartDelay &lt;= 0 </span><span class="cov2" title="2">{
+                c.MaxRestartDelay = 5 * time.Minute
+        }</span>
+        <span class="cov7" title="15">if c.MemoryRoot == "" </span><span class="cov2" title="2">{
+                c.MemoryRoot = "memory"
+        }</span>
+}
+
+// simpleWorkerFactory wraps a single pre-wired Worker so that WorkerFactory.New
+// always returns the same instance.  This is fine for the local single-binary
+// model because each bot has exactly one goroutine calling New at a time.
+type simpleWorkerFactory struct {
+        worker domain.Worker
+}
+
+func (f *simpleWorkerFactory) New() domain.Worker <span class="cov1" title="1">{ return f.worker }</span>
+
+// TeamManager starts and manages all enabled bots in-process.
+// Create one with NewTeamManager and call Run to start the team.
+type TeamManager struct {
+        cfg      ManagerConfig
+        router   *queue.Router
+        bus      *bus.Bus
+        registry *BotRegistry
+
+        // botRunner is called once per enabled bot. Defaults to (*TeamManager).startBot.
+        // Replaced in tests via export_test.go to avoid real file I/O and network calls.
+        botRunner func(ctx context.Context, entry BotEntry, orchestratorName string) error
+
+        wg     sync.WaitGroup
+        cancel context.CancelFunc
+}
+
+// NewTeamManager constructs a TeamManager.  Call Run to start the team.
+func NewTeamManager(cfg ManagerConfig, router *queue.Router, bus *bus.Bus) *TeamManager <span class="cov7" title="14">{
+        cfg.applyDefaults()
+        tm := &amp;TeamManager{
+                cfg:      cfg,
+                router:   router,
+                bus:      bus,
+                registry: NewBotRegistry(),
+        }
+        tm.botRunner = tm.startBot
+        return tm
+}</span>
+
+// Registry returns the BotRegistry so callers can inspect running bots.
+func (tm *TeamManager) Registry() *BotRegistry <span class="cov1" title="1">{ return tm.registry }</span>
+
+// Run reads team.yaml, starts all enabled bots, blocks until ctx is cancelled,
+// then calls Shutdown.  It returns an error if the team file cannot be parsed
+// or if no bots could be started.
+func (tm *TeamManager) Run(ctx context.Context) error <span class="cov6" title="13">{
+        teamCfg, err := loadTeamConfig(tm.cfg.TeamFilePath)
+        if err != nil </span><span class="cov1" title="1">{
+                return fmt.Errorf("team: load team config: %w", err)
+        }</span>
+
+        // Identify the orchestrator bot — its name is used as the target for
+        // registration messages in local mode.
+        <span class="cov6" title="12">orchestratorName := ""
+        for _, e := range teamCfg.Team </span><span class="cov6" title="13">{
+                if e.Orchestrator &amp;&amp; e.Enabled </span><span class="cov6" title="10">{
+                        orchestratorName = e.Name
+                        break</span>
+                }
+        }
+        // If there is no enabled orchestrator, fall back to the first enabled bot so
+        // that bots can still attempt to register (even if nothing handles it).
+        <span class="cov6" title="12">if orchestratorName == "" </span><span class="cov2" title="2">{
+                for _, e := range teamCfg.Team </span><span class="cov2" title="2">{
+                        if e.Enabled </span><span class="cov1" title="1">{
+                                orchestratorName = e.Name
+                                break</span>
+                        }
+                }
+        }
+
+        // Pre-register all enabled bots with the Router so channels exist before
+        // any bot tries to send to another.
+        <span class="cov6" title="12">for _, e := range teamCfg.Team </span><span class="cov7" title="15">{
+                if !e.Enabled </span><span class="cov2" title="2">{
+                        continue</span>
+                }
+                <span class="cov6" title="13">tm.router.Register(e.Name, 0)</span>
+        }
+
+        // Start each enabled bot in its own goroutine.
+        <span class="cov6" title="12">started := 0
+        runCtx, cancel := context.WithCancel(ctx)
+        tm.cancel = cancel
+
+        for _, e := range teamCfg.Team </span><span class="cov7" title="15">{
+                if !e.Enabled </span><span class="cov2" title="2">{
+                        continue</span>
+                }
+                <span class="cov6" title="13">entry := e // capture loop variable
+                tm.wg.Add(1)
+                go func() </span><span class="cov6" title="13">{
+                        defer tm.wg.Done()
+                        tm.runBotWithRestart(runCtx, entry, orchestratorName)
+                }</span>()
+                <span class="cov6" title="13">started++</span>
+        }
+
+        <span class="cov6" title="12">if started == 0 </span><span class="cov1" title="1">{
+                cancel()
+                return fmt.Errorf("team: no enabled bots found in %s", tm.cfg.TeamFilePath)
+        }</span>
+
+        // Start the heap watchdog if either threshold is configured.
+        <span class="cov6" title="11">if tm.cfg.WatchdogCfg.WarnMB &gt; 0 || tm.cfg.WatchdogCfg.HardMB &gt; 0 </span><span class="cov1" title="1">{
+                wd := watchdog.New(tm.cfg.WatchdogCfg, cancel)
+                tm.wg.Add(1)
+                go func() </span><span class="cov1" title="1">{
+                        defer tm.wg.Done()
+                        wd.Run(runCtx)
+                }</span>()
+        }
+
+        <span class="cov6" title="11">slog.Info("team started", "bots", started, "orchestrator", orchestratorName)
+
+        &lt;-runCtx.Done()
+        return tm.Shutdown(context.Background())</span>
+}
+
+// Shutdown sends a ShutdownMessage to all registered bots then waits for all
+// goroutines to exit.  If the provided context is already cancelled it uses a
+// 30-second timeout.
+func (tm *TeamManager) Shutdown(ctx context.Context) error <span class="cov6" title="12">{
+        if tm.cancel != nil </span><span class="cov6" title="12">{
+                tm.cancel()
+        }</span>
+
+        // Broadcast shutdown to all bots so their poll loops unblock.
+        <span class="cov6" title="12">shutdownCtx := ctx
+        if ctx.Err() != nil </span><span class="cov1" title="1">{
+                var cancel context.CancelFunc
+                shutdownCtx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+                defer cancel()
+        }</span>
+
+        <span class="cov6" title="12">for _, id := range tm.registry.List() </span><span class="cov1" title="1">{
+                msg := domain.Message{
+                        Type: domain.MessageTypeShutdown,
+                        From: "team-manager",
+                        To:   id.Name,
+                }
+                if err := tm.router.SendTo(shutdownCtx, id.Name, msg); err != nil </span><span class="cov0" title="0">{
+                        slog.Warn("shutdown message delivery failed", "bot", id.Name, "err", err)
+                }</span>
+        }
+
+        <span class="cov6" title="12">done := make(chan struct{})
+        go func() </span><span class="cov6" title="12">{
+                tm.wg.Wait()
+                close(done)
+        }</span>()
+
+        <span class="cov6" title="12">select </span>{
+        case &lt;-done:<span class="cov6" title="12">
+                return nil</span>
+        case &lt;-shutdownCtx.Done():<span class="cov0" title="0">
+                return fmt.Errorf("team: shutdown timed out waiting for goroutines: %w", shutdownCtx.Err())</span>
+        }
+}
+
+// runBotWithRestart runs a bot goroutine, restarting it on panic with
+// exponential back-off capped at MaxRestartDelay.  It exits cleanly when ctx
+// is cancelled.
+func (tm *TeamManager) runBotWithRestart(ctx context.Context, entry BotEntry, orchestratorName string) <span class="cov6" title="13">{
+        delay := tm.cfg.RestartDelay
+        for </span><span class="cov10" title="47">{
+                if ctx.Err() != nil </span><span class="cov0" title="0">{
+                        return
+                }</span>
+                <span class="cov10" title="47">crashed := tm.runBot(ctx, entry, orchestratorName, tm.botRunner)
+                if !crashed </span><span class="cov6" title="10">{
+                        // Clean exit (ctx cancelled).
+                        return
+                }</span>
+                // Exponential back-off.
+                <span class="cov9" title="37">slog.Warn("bot crashed, restarting", "bot", entry.Name, "delay", delay)
+                select </span>{
+                case &lt;-time.After(delay):<span class="cov9" title="34"></span>
+                case &lt;-ctx.Done():<span class="cov3" title="3">
+                        return</span>
+                }
+                <span class="cov9" title="34">delay = time.Duration(math.Min(float64(delay*2), float64(tm.cfg.MaxRestartDelay)))</span>
+        }
+}
+
+// runBot starts a single bot and returns true if it panicked, false if it
+// exited normally (ctx cancelled or clean error).
+func (tm *TeamManager) runBot(
+        ctx context.Context,
+        entry BotEntry,
+        orchestratorName string,
+        runner func(context.Context, BotEntry, string) error,
+) (panicked bool) <span class="cov10" title="47">{
+        defer func() </span><span class="cov10" title="47">{
+                if r := recover(); r != nil </span><span class="cov2" title="2">{
+                        slog.Error("bot panic recovered", "bot", entry.Name, "panic", r)
+                        panicked = true
+                }</span>
+        }()
+
+        <span class="cov10" title="47">if err := runner(ctx, entry, orchestratorName); err != nil </span><span class="cov9" title="35">{
+                if ctx.Err() != nil </span><span class="cov0" title="0">{
+                        return false // context cancelled — not a crash
+                }</span>
+                <span class="cov9" title="35">slog.Error("bot exited with error", "bot", entry.Name, "err", err)
+                return true</span> // treat non-context errors as crashes so the bot is restarted
+        }
+        <span class="cov6" title="10">return false</span>
+}
+
+// validateEmbedderProvider checks that the provider named in botCfg.Memory.Embedder
+// exists in botCfg.Models.Providers and that its type supports embeddings.
+// Currently only "openai" supports the /v1/embeddings endpoint.
+func validateEmbedderProvider(botCfg config.Config) error <span class="cov7" title="15">{
+        embedderName := botCfg.Memory.Embedder
+        for _, pc := range botCfg.Models.Providers </span><span class="cov7" title="15">{
+                if pc.Name == embedderName </span><span class="cov7" title="14">{
+                        if pc.Type != "openai" </span><span class="cov6" title="13">{
+                                return fmt.Errorf(
+                                        "provider %q (type %q) does not support embeddings; only openai does",
+                                        pc.Name, pc.Type,
+                                )
+                        }</span>
+                        <span class="cov1" title="1">return nil</span>
+                }
+        }
+        <span class="cov1" title="1">return fmt.Errorf("embedder provider %q not found in providers list", embedderName)</span>
+}
+
+// startBot wires adapters and runs the RunAgentUseCase for a single bot.
+func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestratorName string) error <span class="cov9" title="34">{
+        // Load per-bot config from &lt;botsDir&gt;/&lt;type&gt;/config.yaml.
+        botCfgPath := filepath.Join(tm.cfg.BotsDir, entry.Type, "config.yaml")
+        botCfg, err := config.Load(botCfgPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("load bot config for %q: %w", entry.Name, err)
+        }</span>
+
+        // Validate embedder provider if a non-bm25 embedder is configured.
+        <span class="cov9" title="34">if botCfg.Memory.Embedder != "" &amp;&amp; botCfg.Memory.Embedder != "bm25" </span><span class="cov6" title="11">{
+                if err := validateEmbedderProvider(botCfg); err != nil </span><span class="cov6" title="11">{
+                        return fmt.Errorf("embedder validation for %q: %w", entry.Name, err)
+                }</span>
+        }
+
+        // Read SOUL.md from &lt;botsDir&gt;/&lt;type&gt;/SOUL.md.
+        <span class="cov8" title="23">soulPath := filepath.Join(tm.cfg.BotsDir, entry.Type, "SOUL.md")
+        soulBytes, err := os.ReadFile(soulPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("read SOUL.md for %q: %w", entry.Name, err)
+        }</span>
+        <span class="cov8" title="23">soulPrompt := string(soulBytes)
+
+        // Per-bot memory directory.
+        memPath := filepath.Join(tm.cfg.MemoryRoot, entry.Name)
+
+        // Wire optional GitHub memory backup. Restore runs before adapters initialise
+        // so that restored files (including budget.json) are visible on first load.
+        var backupUC *appbackup.ScheduledBackupUseCase
+        if botCfg.Backup.Enabled </span><span class="cov6" title="12">{
+                token := os.Getenv("BOABOT_BACKUP_TOKEN")
+                gb, err := githubbackup.New(githubbackup.Config{
+                        RepoURL:     botCfg.Backup.GitHub.Repo,
+                        Branch:      botCfg.Backup.GitHub.Branch,
+                        AuthorName:  botCfg.Backup.GitHub.AuthorName,
+                        AuthorEmail: botCfg.Backup.GitHub.AuthorEmail,
+                        MemoryPath:  memPath,
+                        Token:       token,
+                })
+                if err != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("create github backup for %q: %w", entry.Name, err)
+                }</span>
+                <span class="cov6" title="12">if botCfg.Backup.RestoreOnEmpty </span><span class="cov6" title="12">{
+                        empty, err := isDirEmpty(memPath)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return fmt.Errorf("check memory dir for %q: %w", entry.Name, err)
+                        }</span>
+                        <span class="cov6" title="12">if empty </span><span class="cov6" title="12">{
+                                if err := gb.Restore(ctx); err != nil </span><span class="cov6" title="12">{
+                                        return fmt.Errorf("restore on empty for %q: %w", entry.Name, err)
+                                }</span>
+                        }
+                }
+                <span class="cov0" title="0">backupUC = appbackup.New(gb, botCfg.Backup.Schedule)</span>
+        }
+
+        // Wire domain.MemoryStore.
+        <span class="cov6" title="11">memStore, err := fs.New(memPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("create FS for %q: %w", entry.Name, err)
+        }</span>
+
+        // Wire domain.VectorStore.
+        <span class="cov6" title="11">vecStore, err := vector.New(memPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("create VectorStore for %q: %w", entry.Name, err)
+        }</span>
+
+        // Wire domain.BudgetTracker.
+        <span class="cov6" title="11">bt, err := budget.New(botCfg.Budget, memPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("create BudgetTracker for %q: %w", entry.Name, err)
+        }</span>
+        // Use a derived context for the budget flusher so it is cancelled when
+        // startBot returns (whether cleanly or due to an error). Wait for the
+        // goroutine to exit before returning so no files are written after startBot
+        // returns (prevents t.TempDir() cleanup races in tests).
+        <span class="cov6" title="11">budgetCtx, budgetCancel := context.WithCancel(ctx)
+        var budgetDone sync.WaitGroup
+        budgetDone.Add(1)
+        defer func() </span><span class="cov6" title="11">{
+                budgetCancel()
+                budgetDone.Wait()
+        }</span>()
+        <span class="cov6" title="11">go func() </span><span class="cov6" title="11">{
+                defer budgetDone.Done()
+                _ = bt.Run(budgetCtx)
+        }</span>()
+
+        // Run the scheduled backup loop if configured.
+        <span class="cov6" title="11">if backupUC != nil </span><span class="cov0" title="0">{
+                backupCtx, backupCancel := context.WithCancel(ctx)
+                var backupDone sync.WaitGroup
+                backupDone.Add(1)
+                defer func() </span><span class="cov0" title="0">{
+                        backupCancel()
+                        backupDone.Wait()
+                }</span>()
+                <span class="cov0" title="0">go func() </span><span class="cov0" title="0">{
+                        defer backupDone.Done()
+                        _ = backupUC.Run(backupCtx)
+                }</span>()
+        }
+
+        // Wire domain.ModelProvider.
+        <span class="cov6" title="11">pf := newLocalProviderFactory(botCfg.Models.Providers)
+        providerName := botCfg.Models.Default
+        provider, err := pf.Get(providerName)
+        if err != nil </span><span class="cov6" title="10">{
+                return fmt.Errorf("get provider %q for %q: %w", providerName, entry.Name, err)
+        }</span>
+
+        // Wire domain.Embedder.
+        // BM25 is the only wired embedder. When a named provider is configured,
+        // validation above has confirmed it supports embeddings; we log a warning
+        // and fall back to BM25 until an OpenAI embedder adapter is implemented.
+        <span class="cov1" title="1">embedder := bm25.DefaultEmbedder()
+        if botCfg.Memory.Embedder != "" &amp;&amp; botCfg.Memory.Embedder != "bm25" </span><span class="cov0" title="0">{
+                slog.Warn("embedder provider configured but OpenAI embedder not yet implemented; using BM25",
+                        "bot", entry.Name, "embedder", botCfg.Memory.Embedder)
+        }</span>
+
+        // Wire no-op MCP client.
+        <span class="cov1" title="1">mcpClient := &amp;noopMCPClient{}
+
+        // Construct the worker (ExecuteTaskUseCase).
+        worker := application.NewExecuteTaskUseCase(
+                provider,
+                mcpClient,
+                memStore,
+                embedder,
+                vecStore,
+                soulPrompt,
+        )
+        worker.WithBudgetTracker(bt)
+
+        workerFactory := &amp;simpleWorkerFactory{worker: worker}
+
+        // Build the BotIdentity.
+        identity := domain.BotIdentity{
+                Name:     entry.Name,
+                BotType:  entry.Type,
+                QueueURL: entry.Name, // in local mode, queue URL == bot name
+        }
+        tm.registry.Register(identity)
+
+        // Get the bot's own queue (already registered by Run).
+        q := tm.router.QueueFor(entry.Name)
+
+        // Run the agent loop.
+        uc := application.NewRunAgentUseCase(
+                identity,
+                q,
+                tm.bus,
+                workerFactory,
+                nil, // no channel monitors for now
+                orchestratorName,
+        )
+        return uc.Run(ctx)</span>
+}
+
+// --- helpers -----------------------------------------------------------------
+
+// isDirEmpty returns true if path does not exist or is an empty directory.
+func isDirEmpty(path string) (bool, error) <span class="cov6" title="12">{
+        entries, err := os.ReadDir(path)
+        if err != nil </span><span class="cov6" title="12">{
+                if os.IsNotExist(err) </span><span class="cov6" title="12">{
+                        return true, nil
+                }</span>
+                <span class="cov0" title="0">return false, err</span>
+        }
+        <span class="cov0" title="0">return len(entries) == 0, nil</span>
+}
+
+func loadTeamConfig(path string) (TeamConfig, error) <span class="cov7" title="15">{
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov1" title="1">{
+                return TeamConfig{}, fmt.Errorf("read %s: %w", path, err)
+        }</span>
+        <span class="cov7" title="14">var tc TeamConfig
+        if err := yaml.Unmarshal(data, &amp;tc); err != nil </span><span class="cov1" title="1">{
+                return TeamConfig{}, fmt.Errorf("parse %s: %w", path, err)
+        }</span>
+        <span class="cov6" title="13">return tc, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

@@ -15,6 +15,15 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-sonnet-4-6
+    - name: ollama-embed
+      type: openai
+      model_id: nomic-embed-text:v1.5
+      endpoint: http://localhost:11434/v1
+
+memory:
+  embedder: ollama-embed
+  heap_warn_mb: 512
+  heap_hard_mb: 1024
 
 tools:
   allowed_tools:
@@ -38,7 +47,3 @@ budget:
 
 context:
   threshold_tokens: 150000
-
-memory:
-  heap_warn_mb: 512
-  heap_hard_mb: 1024

@@ -25,6 +25,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
+	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 )
@@ -476,14 +477,32 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		return fmt.Errorf("get provider %q for %q: %w", providerName, entry.Name, err)
 	}
 
-	// Wire domain.Embedder.
-	// BM25 is the only wired embedder. When a named provider is configured,
-	// validation above has confirmed it supports embeddings; we log a warning
-	// and fall back to BM25 until an OpenAI embedder adapter is implemented.
-	embedder := bm25.DefaultEmbedder()
-	if botCfg.Memory.Embedder != "" && botCfg.Memory.Embedder != "bm25" {
-		slog.Warn("embedder provider configured but OpenAI embedder not yet implemented; using BM25",
-			"bot", entry.Name, "embedder", botCfg.Memory.Embedder)
+	// Wire domain.Embedder — defaults to BM25; switches to the named provider
+	// if memory.embedder is set and the provider exposes an OpenAI-compatible
+	// embeddings endpoint.
+	embedder := domain.Embedder(bm25.DefaultEmbedder())
+	if name := botCfg.Memory.Embedder; name != "" && name != "bm25" {
+		var found bool
+		for _, pc := range botCfg.Models.Providers {
+			if pc.Name != name {
+				continue
+			}
+			found = true
+			e, embedErr := openaiembedder.NewEmbedder(pc.Endpoint, pc.ModelID)
+			if embedErr != nil {
+				slog.Warn("could not build OpenAI embedder; falling back to BM25",
+					"bot", entry.Name, "embedder", name, "err", embedErr)
+			} else {
+				embedder = e
+				slog.Info("using OpenAI-compatible embedder", "bot", entry.Name,
+					"embedder", name, "endpoint", pc.Endpoint, "model", pc.ModelID)
+			}
+			break
+		}
+		if !found {
+			slog.Warn("embedder provider not found in providers list; falling back to BM25",
+				"bot", entry.Name, "embedder", name)
+		}
 	}
 
 	// Wire no-op MCP client.

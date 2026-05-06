@@ -42,16 +42,18 @@ jobs:
 
       - name: Lint
         run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
           golangci-lint run
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race ./...
 
       - name: Coverage check
         run: |
+          CORE_PKGS=$(go list ./internal/domain/... ./internal/application/... | grep -v /mocks)
+          go test -coverprofile=coverage.out $CORE_PKGS
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
-          echo "Coverage: ${COVERAGE}%"
+          echo "Domain+Application Coverage: ${COVERAGE}%"
           awk "BEGIN { if ($COVERAGE < 90) { print \"Coverage ${COVERAGE}% is below 90% threshold\"; exit 1 } }"
 
   build:

@@ -1198,11 +1198,29 @@ const kanbanHTML = `<!DOCTYPE html>
     });
   }
 
+  function populateBotSelectors(){
+    // Keep the chat selector in sync whenever team data changes.
+    var sel=ge('chat-bot-sel');
+    if(!sel)return;
+    var prev=sel.value;
+    sel.innerHTML='';
+    var defaultVal='';
+    allBots.forEach(function(b){
+      var o=document.createElement('option');
+      o.value=b.name;
+      o.textContent=b.name+(b.status==='active'?'':' (offline)');
+      if(!defaultVal||b.bot_type==='orchestrator')defaultVal=b.name;
+      sel.appendChild(o);
+    });
+    sel.value=(prev&&allBots.some(function(b){return b.name===prev}))?prev:defaultVal;
+  }
+
   function loadTeam(){
     api('GET','/api/v1/team',null)
       .then(function(bots){
         allBots=bots||[];
         renderRoster();
+        populateBotSelectors();
         var act=allBots.filter(function(b){return b.status==='active'}).length;
         var pill=ge('hpill');
         pill.textContent=act+' / '+allBots.length+' active';
@@ -1366,18 +1384,9 @@ const kanbanHTML = `<!DOCTYPE html>
   function loadChat(){
     var el=ge('chat-hist');
     if(!token){el.innerHTML='<div class="nil">Sign in to chat</div>';return}
-    // Populate bot selector from all known bots; default to orchestrator.
-    var sel=ge('chat-bot-sel');
-    var prev=sel.value;
-    sel.innerHTML='';
-    var defaultVal='';
-    allBots.forEach(function(b){
-      var o=document.createElement('option');o.value=b.name;o.textContent=b.name+(b.status==='active'?'':' (offline)');
-      if(!defaultVal||b.bot_type==='orchestrator')defaultVal=b.name;
-      sel.appendChild(o);
-    });
-    // Restore previous selection or default to orchestrator.
-    sel.value=(prev&&allBots.some(function(b){return b.name===prev}))?prev:defaultVal;
+    // Ensure selector is current (loadTeam populates it; this is a safety call
+    // for the case where the user switches to Chat before loadTeam resolves).
+    if(!ge('chat-bot-sel').options.length)populateBotSelectors();
     api('GET','/api/v1/chat',null)
       .then(function(msgs){
         el.innerHTML='';

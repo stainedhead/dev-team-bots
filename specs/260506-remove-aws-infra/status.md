@@ -18,7 +18,7 @@
 | 5 | Implementation — M2: Anthropic Provider | Complete |
 | 6 | Implementation — M3: Vector Store + Embedder | Complete |
 | 7 | Implementation — M4: TeamManager + Wiring | Complete |
-| 8 | Implementation — M5: GitHub Backup | Not Started |
+| 8 | Implementation — M5: GitHub Backup | Complete |
 | 9 | Implementation — M6: Config + Credentials + Watchdog | Not Started |
 | 10 | Implementation — M7: Remove AWS + CDK + Docs | Not Started |
 | 11 | Tests & Quality | Not Started |
@@ -88,6 +88,29 @@
 
 ---
 
+## Phase 8 Tasks (M5: GitHub Backup)
+
+- [x] `domain.MemoryBackup` interface + `domain.BackupStatus` added to `boabot/internal/domain/memory.go`
+- [x] `github.com/go-git/go-git/v5 v5.18.0` added as direct dependency to `boabot/go.mod`
+- [x] `boabot/internal/infrastructure/github/backup/backup.go` — GitHubBackup implementing domain.MemoryBackup (coverage: 90.1%)
+  - `New(cfg Config) (*GitHubBackup, error)` — validates config, wires opener
+  - `Backup(ctx)` — AddGlob + status check + commit + push with pull-and-retry on diverge
+  - `Restore(ctx)` — PlainClone on fresh path; PullContext on existing repo
+  - `Status(ctx)` — last commit timestamp + pending file count + remote URL
+  - injectable `gitRepo` interface for unit-testability (push/pull both on repo, not worktree)
+  - `//go:build integration` test in `backup_integration_test.go` (skipped unless `BOABOT_BACKUP_TOKEN` + `BOABOT_BACKUP_REPO_URL` set)
+- [x] `boabot/internal/application/backup/scheduled_backup.go` — ScheduledBackupUseCase (coverage: 100%)
+  - injectable `cronRunner` interface enables synchronous unit tests without wall-clock waits
+  - default schedule `*/30 * * * *`; backup errors are logged non-fatally
+- [x] `boabotctl/internal/domain/types.go` — `MemoryStatusResponse` added
+- [x] `boabotctl/internal/client/client.go` — `MemoryBackup`, `MemoryRestore`, `MemoryStatus` added to `OrchestratorClient`
+- [x] `boabotctl/internal/client/http_client.go` — HTTP implementations for all three memory methods
+- [x] `boabotctl/internal/commands/memory.go` — `NewMemoryCmd` with backup/restore/status subcommands (coverage: 100%)
+- [x] `boabotctl/cmd/boabotctl/main.go` — `NewMemoryCmd` wired into root command
+- [x] All packages pass `go test -race`, `go fmt`, `go vet`, `golangci-lint` with 0 issues
+
+---
+
 ## Blockers
 
 None.
@@ -101,3 +124,4 @@ None.
 - 2026-05-06 — M2 complete: Anthropic SDK provider implemented with TDD, 100% coverage on implementation; anthropic-sdk-go v1.40.0 added
 - 2026-05-06 — M3 complete: local VectorStore (cosine similarity, 92.4% coverage) + BM25 embedder (feature hashing, 100% coverage); 40ms/search at 100k×512-dim
 - 2026-05-06 — M4 complete: TeamManager + BotRegistry + localProviderFactory + main.go rewired to TeamManager; 94.5% coverage on team package; binary builds and starts without AWS
+- 2026-05-06 — M5 complete: GitHub memory backup adapter (90.1% cov) + ScheduledBackupUseCase (100% cov) + boabotctl memory subcommands (100% cov); go-git v5.18.0 added

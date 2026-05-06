@@ -48,4 +48,9 @@ type OrchestratorClient interface {
 	DLQList(ctx context.Context) ([]domain.DLQItem, error)
 	DLQRetry(ctx context.Context, id string) error
 	DLQDiscard(ctx context.Context, id string) error
+
+	// Memory backup
+	MemoryBackup(ctx context.Context) error
+	MemoryRestore(ctx context.Context) error
+	MemoryStatus(ctx context.Context) (domain.MemoryStatusResponse, error)
 }

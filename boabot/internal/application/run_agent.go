@@ -9,6 +9,9 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
+// TaskResultHandler is a callback invoked when a task.result message is received.
+type TaskResultHandler func(ctx context.Context, p domain.TaskResultPayload)
+
 type RunAgentUseCase struct {
 	identity             domain.BotIdentity
 	queue                domain.MessageQueue
@@ -16,6 +19,14 @@ type RunAgentUseCase struct {
 	workerFactory        domain.WorkerFactory
 	monitors             []domain.ChannelMonitor
 	orchestratorQueueURL string
+	taskResultHandler    TaskResultHandler
+}
+
+// WithTaskResultHandler registers a callback that is invoked whenever a
+// task.result message is received by the agent. The handler is called
+// synchronously in the message-handling goroutine.
+func (u *RunAgentUseCase) WithTaskResultHandler(h TaskResultHandler) {
+	u.taskResultHandler = h
 }
 
 func NewRunAgentUseCase(
@@ -110,6 +121,8 @@ func (u *RunAgentUseCase) handle(ctx context.Context, rm domain.ReceivedMessage)
 	switch rm.Message.Type {
 	case domain.MessageTypeTask:
 		u.handleTask(ctx, rm)
+	case domain.MessageTypeTaskResult:
+		u.handleTaskResult(ctx, rm)
 	case domain.MessageTypeOrchestratorPresence:
 		u.handleOrchestratorPresence(ctx, rm)
 	case domain.MessageTypeShutdown:
@@ -140,6 +153,20 @@ func (u *RunAgentUseCase) handleTask(ctx context.Context, rm domain.ReceivedMess
 	}
 
 	slog.Info("task completed", "task_id", result.TaskID, "success", result.Success)
+}
+
+// handleTaskResult processes an incoming task.result message. If a handler is
+// registered via WithTaskResultHandler, it is invoked with the decoded payload.
+func (u *RunAgentUseCase) handleTaskResult(ctx context.Context, rm domain.ReceivedMessage) {
+	if u.taskResultHandler == nil {
+		return
+	}
+	var p domain.TaskResultPayload
+	if err := json.Unmarshal(rm.Message.Payload, &p); err != nil {
+		slog.Error("failed to unmarshal task result payload", "err", err)
+		return
+	}
+	u.taskResultHandler(ctx, p)
 }
 
 // re-register with the new orchestrator instance when it broadcasts its presence.

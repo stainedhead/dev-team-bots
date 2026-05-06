@@ -404,6 +404,10 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		}()
 	}
 
+	// Orchestrator-specific stores, populated only when orchestrator mode is active.
+	var orchTaskStore domain.DirectTaskStore
+	var orchChatStore domain.ChatStore
+
 	// Wire orchestrator HTTP server before provider validation so the dashboard
 	// is reachable even when ANTHROPIC_API_KEY is not yet configured.
 	if botCfg.Orchestrator.Enabled && botCfg.Orchestrator.APIPort > 0 {
@@ -428,8 +432,12 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		// Wire direct-task store and dispatcher. The orchestrator's own queue
 		// can route to any bot because queueURL == bot name in local mode.
 		taskStore := orchestratorlocal.NewInMemoryDirectTaskStore()
+		orchTaskStore = taskStore
 		routerQueue := tm.router.QueueFor(entry.Name)
 		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(taskStore, routerQueue, entry.Name)
+
+		chatStore := orchestratorlocal.NewInMemoryChatStore()
+		orchChatStore = chatStore
 
 		srv := httpserver.New(httpserver.Config{
 			Auth:       oAuth,
@@ -440,6 +448,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			DLQ:        orchestratorlocal.NoopDLQStore{},
 			Tasks:      taskStore,
 			Dispatcher: dispatcher,
+			Chat:       chatStore,
 		})
 
 		httpSrv := &http.Server{
@@ -549,6 +558,33 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		nil, // no channel monitors for now
 		orchestratorName,
 	)
+
+	// If this is the orchestrator bot, register a task-result handler so that
+	// bot replies to operator-initiated chat tasks are captured as inbound
+	// ChatMessages.
+	if orchChatStore != nil && orchTaskStore != nil {
+		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
+			// Only record a chat message if the task originated from a chat
+			// (i.e. it exists in the direct-task store).
+			if _, err := orchTaskStore.Get(handlerCtx, p.TaskID); err != nil {
+				return // not a tracked task — skip
+			}
+			msg := domain.ChatMessage{
+				BotName:   "", // filled below via TaskID lookup
+				Direction: domain.ChatDirectionInbound,
+				Content:   p.Output,
+				TaskID:    p.TaskID,
+			}
+			// Best-effort: look up the original task to get the bot name.
+			if task, getErr := orchTaskStore.Get(handlerCtx, p.TaskID); getErr == nil {
+				msg.BotName = task.BotName
+			}
+			if appendErr := orchChatStore.Append(handlerCtx, msg); appendErr != nil {
+				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
+			}
+		})
+	}
+
 	return uc.Run(ctx)
 }
 

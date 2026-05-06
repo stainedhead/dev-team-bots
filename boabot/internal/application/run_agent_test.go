@@ -594,6 +594,67 @@ func TestRunAgent_Poll_OrchestratorPresence_ReregistrationError(t *testing.T) {
 	}
 }
 
+// TestRunAgent_TaskResultHandler_CalledOnTaskResult verifies that when a
+// task.result message is received and a handler is registered via
+// WithTaskResultHandler, the handler is called with the decoded payload.
+func TestRunAgent_TaskResultHandler_CalledOnTaskResult(t *testing.T) {
+	resultPayload, _ := json.Marshal(domain.TaskResultPayload{
+		TaskID:  "task-42",
+		Output:  "all tests pass",
+		Success: true,
+	})
+
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeTaskResult,
+				From:    "dev-1",
+				Payload: resultPayload,
+			},
+			ReceiptHandle: "receipt-result",
+		},
+	}
+
+	handlerCalled := make(chan domain.TaskResultPayload, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, _ string) error { return nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithTaskResultHandler(func(_ context.Context, p domain.TaskResultPayload) {
+		handlerCalled <- p
+	})
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case p := <-handlerCalled:
+		if p.TaskID != "task-42" {
+			t.Errorf("expected TaskID=task-42, got %q", p.TaskID)
+		}
+		if p.Output != "all tests pass" {
+			t.Errorf("expected Output='all tests pass', got %q", p.Output)
+		}
+		if !p.Success {
+			t.Error("expected Success=true")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for task result handler to be called")
+	}
+}
+
 // TestRunAgent_Poll_OrchestratorPresence verifies that receiving an
 // orchestrator presence message triggers re-registration.
 func TestRunAgent_Poll_OrchestratorPresence(t *testing.T) {

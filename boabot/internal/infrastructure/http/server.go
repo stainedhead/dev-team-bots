@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -34,6 +35,7 @@ type Config struct {
 	DLQ        domain.DLQStore
 	Tasks      domain.DirectTaskStore
 	Dispatcher domain.TaskDispatcher
+	Chat       domain.ChatStore
 }
 
 // Server is the orchestrator HTTP server.
@@ -94,6 +96,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tasks", s.auth(s.handleTaskList))
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
+
+	// Chat — require auth
+	mux.HandleFunc("GET /api/v1/chat", s.auth(s.handleChatList))
+	mux.HandleFunc("GET /api/v1/chat/{bot}", s.auth(s.handleChatBotList))
+	mux.HandleFunc("POST /api/v1/chat/{bot}", s.auth(s.handleChatSend))
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)
@@ -268,6 +275,17 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "board update", err)
 		return
 	}
+
+	// If status moved to in-progress and a bot is assigned, dispatch a task.
+	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
+		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
+			updated.Title, updated.Description, updated.ID)
+		if _, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil); dispErr != nil {
+			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
+			// Non-fatal: the board update already succeeded.
+		}
+	}
+
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -644,6 +662,73 @@ func (s *Server) handleBotTaskList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
+// ── chat handlers ─────────────────────────────────────────────────────────────
+
+func (s *Server) handleChatList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	msgs, err := s.cfg.Chat.ListAll(r.Context())
+	if err != nil {
+		writeInternalError(w, "chat list all", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Server) handleChatBotList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	bot := r.PathValue("bot")
+	msgs, err := s.cfg.Chat.List(r.Context(), bot)
+	if err != nil {
+		writeInternalError(w, "chat bot list", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil || s.cfg.Dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	bot := r.PathValue("bot")
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Content == "" {
+		writeError(w, http.StatusBadRequest, "content must not be empty")
+		return
+	}
+
+	msg := domain.ChatMessage{
+		BotName:   bot,
+		Direction: domain.ChatDirectionOutbound,
+		Content:   req.Content,
+	}
+	if err := s.cfg.Chat.Append(r.Context(), msg); err != nil {
+		writeInternalError(w, "chat append", err)
+		return
+	}
+
+	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), bot, req.Content, nil)
+	if err != nil {
+		writeInternalError(w, "chat dispatch", err)
+		return
+	}
+
+	msg.TaskID = task.ID
+	writeJSON(w, http.StatusCreated, msg)
+}
+
 // ── enum validation helpers ────────────────────────────────────────────────────
 
 func isValidRole(role string) bool {
@@ -781,6 +866,17 @@ const kanbanHTML = `<!DOCTYPE html>
     .da{margin-top:1rem;display:flex;gap:.4rem;justify-content:flex-end}
     .errmsg{color:#f87171;font-size:.7rem;margin-top:.4rem}
 
+    /* ── Chat ── */
+    .chat-wrap{display:flex;flex-direction:column;flex:1;overflow:hidden}
+    .chat-hist{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.5rem}
+    .chat-bubble{max-width:70%;padding:.5rem .75rem;border-radius:.5rem;font-size:.8rem;line-height:1.4}
+    .chat-out{background:#1e3a5f;color:#e2e8f0;align-self:flex-end;border-bottom-right-radius:.125rem}
+    .chat-in{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:.125rem}
+    .chat-meta{font-size:.62rem;color:#475569;margin-top:.2rem}
+    .chat-input-row{display:flex;gap:.5rem;padding:.75rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
+    .chat-input-row textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px}
+    .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+
     /* ── Scrollbars ── */
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
@@ -816,6 +912,7 @@ const kanbanHTML = `<!DOCTYPE html>
     <div class="tabbar">
       <button class="tab on" onclick="tab('board')">Board</button>
       <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
+      <button class="tab" onclick="tab('chat')" id="t-chat">Chat</button>
       <button class="tab" onclick="tab('skills')" id="t-skills">Skills</button>
       <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
       <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>
@@ -847,6 +944,21 @@ const kanbanHTML = `<!DOCTYPE html>
     <div class="pane" id="pane-tasks">
       <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
       <div id="tasks-body"><div class="empty-state">Loading…</div></div>
+    </div>
+
+    <!-- Chat -->
+    <div class="pane" id="pane-chat">
+      <div class="chat-wrap">
+        <div class="sec-hdr" style="flex-shrink:0;padding:.75rem 1rem 0">
+          <div class="sec-title">Chat</div>
+        </div>
+        <div class="chat-hist" id="chat-hist"></div>
+        <div class="chat-input-row">
+          <select id="chat-bot-sel"><option value="">— select bot —</option></select>
+          <textarea id="chat-input" placeholder="Message… (Shift+Enter to send)"></textarea>
+          <button class="btn btn-primary" onclick="sendChat()">Send</button>
+        </div>
+      </div>
     </div>
 
     <!-- Skills -->
@@ -999,6 +1111,7 @@ const kanbanHTML = `<!DOCTYPE html>
     document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.getAttribute('onclick').indexOf("'"+name+"'")>-1)});
     document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='pane-'+name)});
     if(name==='tasks')loadTasks();
+    if(name==='chat')loadChat();
     if(name==='skills')loadSkills();
     if(name==='dlq')loadDLQ();
     if(name==='users')loadUsers();
@@ -1249,10 +1362,70 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
+  // ── Chat ──────────────────────────────────────────────────────────────────────
+  function loadChat(){
+    var el=ge('chat-hist');
+    if(!token){el.innerHTML='<div class="nil">Sign in to chat</div>';return}
+    // Populate bot selector from active bots.
+    var sel=ge('chat-bot-sel');
+    sel.innerHTML='<option value="">— select bot —</option>';
+    allBots.filter(function(b){return b.status==='active'}).forEach(function(b){
+      var o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.appendChild(o);
+    });
+    api('GET','/api/v1/chat',null)
+      .then(function(msgs){
+        el.innerHTML='';
+        if(!msgs||!msgs.length){el.innerHTML='<div class="nil">No messages yet</div>';return}
+        // API returns newest-first; reverse to show oldest-first.
+        var ordered=msgs.slice().reverse();
+        ordered.forEach(function(m){el.appendChild(renderChatMsg(m))});
+        el.scrollTop=el.scrollHeight;
+      })
+      .catch(function(){el.innerHTML='<div class="nil">Failed to load chat</div>'});
+  }
+
+  function renderChatMsg(msg){
+    var wrap=document.createElement('div');
+    var isOut=msg.direction==='outbound';
+    wrap.style.display='flex';
+    wrap.style.flexDirection='column';
+    wrap.style.alignItems=isOut?'flex-end':'flex-start';
+    var bubble=document.createElement('div');
+    bubble.className='chat-bubble '+(isOut?'chat-out':'chat-in');
+    bubble.textContent=msg.content||'';
+    var meta=document.createElement('div');
+    meta.className='chat-meta';
+    meta.textContent=esc(msg.bot_name)+' &bull; '+ago(msg.created_at);
+    wrap.appendChild(bubble);
+    wrap.appendChild(meta);
+    return wrap;
+  }
+
+  function sendChat(){
+    var bot=ge('chat-bot-sel').value;
+    var content=ge('chat-input').value.trim();
+    if(!bot){alert('Select a bot first');return}
+    if(!content)return;
+    api('POST','/api/v1/chat/'+bot,{content:content})
+      .then(function(){ge('chat-input').value='';loadChat()})
+      .catch(function(e){alert('Send failed: '+e.message)});
+  }
+
+  // Shift+Enter sends; Enter inserts newline.
+  document.addEventListener('DOMContentLoaded',function(){
+    var ta=ge('chat-input');
+    if(ta){
+      ta.addEventListener('keydown',function(e){
+        if(e.key==='Enter'&&e.shiftKey){e.preventDefault();sendChat()}
+      });
+    }
+  });
+
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function refreshAll(){
     loadBoard(); loadTeam();
     if(activeTab==='tasks')loadTasks();
+    if(activeTab==='chat')loadChat();
     if(activeTab==='skills')loadSkills();
     if(activeTab==='dlq')loadDLQ();
     if(activeTab==='users')loadUsers();

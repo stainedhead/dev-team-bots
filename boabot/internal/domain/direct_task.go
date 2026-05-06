@@ -42,3 +42,30 @@ type DirectTaskStore interface {
 type TaskDispatcher interface {
 	Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (DirectTask, error)
 }
+
+// ChatMessage represents one turn in an operator↔bot conversation.
+type ChatMessage struct {
+	ID        string        `json:"id"`
+	BotName   string        `json:"bot_name"`
+	Direction ChatDirection `json:"direction"` // "outbound" | "inbound"
+	Content   string        `json:"content"`
+	TaskID    string        `json:"task_id,omitempty"` // links to the DirectTask
+	CreatedAt time.Time     `json:"created_at"`
+}
+
+// ChatDirection indicates which side sent the message.
+type ChatDirection string
+
+const (
+	// ChatDirectionOutbound is a message from the operator to the bot.
+	ChatDirectionOutbound ChatDirection = "outbound"
+	// ChatDirectionInbound is a message from the bot to the operator.
+	ChatDirectionInbound ChatDirection = "inbound"
+)
+
+// ChatStore persists and retrieves chat messages.
+type ChatStore interface {
+	Append(ctx context.Context, msg ChatMessage) error
+	List(ctx context.Context, botName string) ([]ChatMessage, error)
+	ListAll(ctx context.Context) ([]ChatMessage, error)
+}

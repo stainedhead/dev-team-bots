@@ -16,16 +16,16 @@ team:
 
   - name: architect
     type: architect
-    enabled: false
+    enabled: true
 
   - name: implementer
     type: implementer
-    enabled: false
+    enabled: true
 
   - name: reviewer
     type: reviewer
-    enabled: false
+    enabled: true
 
   - name: maintainer
     type: maintainer
-    enabled: false
+    enabled: true

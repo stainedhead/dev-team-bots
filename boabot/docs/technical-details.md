@@ -17,23 +17,27 @@ internal/
     queue.go            # MessageQueue and Broadcaster interfaces
     tool.go             # Tool, ToolGater, and ToolScorer interfaces
     skill.go            # Skill and SkillRegistry interfaces
-    budget.go           # BudgetTracker interface
+    budget.go           # BudgetTracker interface (token + tool-call caps; DynamoDB-backed)
+    dlq.go              # DLQStore interface (list / retry / discard dead-letter queue items)
     card.go             # AgentCard types and CardRegistry interface
-    orchestrator.go     # ControlPlane and BoardStore interfaces (orchestrator mode)
+    orchestrator.go     # ControlPlane, BoardStore interfaces (orchestrator mode)
     user.go             # User, Role, and Auth interfaces (orchestrator mode)
     mocks/              # generated/hand-written mocks for all interfaces
 
   application/
     run_agent.go        # top-level agent loop use case
     process_message.go  # message routing and dispatch
-    execute_task.go     # worker thread execution harness
+    execute_task.go     # worker thread execution harness; optional BudgetTracker enforcement
+                        # (WithBudgetTracker wires cost gate: CheckAndRecordToolCall before
+                        #  Invoke, CheckAndRecordTokens after using actual usage counts)
     context_manager.go  # progressive disclosure, checkpoint-and-restart
     register.go         # bot registration, team_snapshot, heartbeat use cases
     memory_ops.go       # read, write, search memory use cases
     delegation.go       # send/receive structured delegation messages
     skills.go           # skill index loading and script execution
-    budget.go           # budget cap enforcement and DynamoDB flush
-    orchestrator/       # orchestrator-mode use cases (board, control plane, auth, memory writes)
+    cost/               # EnforceBudgetUseCase, DailyCostReviewUseCase
+    scheduler/          # cron-based task scheduler; TriageUseCase for label-based routing
+    workflow/           # CreateWorkItem, AdvanceWorkflow, AssignBot, StalledItemRecovery
 
   infrastructure/
     aws/
@@ -41,17 +45,26 @@ internal/
       sns/              # SNS Broadcaster adapter
       s3/               # S3 object sync adapter (ETag-based memory sync)
       s3vectors/        # S3 Vectors semantic search adapter
-      bedrock/          # Bedrock ModelProvider adapter
+      bedrock/          # Bedrock ModelProvider adapter; RateLimitError for ThrottlingException
       secrets/          # Secrets Manager credential loader
-      dynamodb/         # DynamoDB budget counter adapter
+      secretsmanager/   # SecretStore: TTL-cached GetSecret / GetSecretJSON
+      dynamodb/         # DynamoDB BudgetTracker: per-bot daily spend, CheckBudget, DailySpend
+                        # BudgetTrackerAdapter wraps BudgetTracker to satisfy domain.BudgetTracker
+                        #   (botID, perBotCap, systemBudget injected at construction; Flush is no-op)
+    auth/local/         # LocalAuthProvider: bcrypt (cost 12) + HS256 JWT (24 h TTL)
+                        # VerifyPassword validates credentials without issuing a token
+    db/                 # PostgreSQL repository: work items, workflow, metrics, users
+                        # UserRepo: CRUD against `users` table; Enabled inverts the `disabled` column
     mcp/                # MCP client adapter (with typed credential resolution)
-    bm25/               # BM25 ToolScorer implementation
-    openai/             # OpenAI-compatible ModelProvider adapter
-    slack/              # Slack channel monitor adapter
-    teams/              # Microsoft Teams adapter
-    http/               # REST API server and web UI handler (orchestrator mode)
-    db/                 # MariaDB adapters for control plane and board (orchestrator mode)
-    config/             # config file loading (YAML), SOUL.md and mcp.json loading from S3
+    otel/               # OpenTelemetry provider: OTLP/HTTP trace + metric exporters; noop fallback
+    screening/          # RegexScreener: injection-pattern detection + [REDACTED] sanitisation
+    workflow/           # ConfigLoader: YAML workflow config with SIGHUP hot-reload
+    http/               # Orchestrator REST API (Go 1.22 ServeMux) + HTMX Kanban board web UI
+                        # Auth: Bearer JWT middleware; admin-only guard on protected routes
+                        # Routes: /api/v1/{auth,board,team,skills,users,profile,dlq}
+                        # Web UI: / → HTMX Kanban board (auto-refreshes every 30s)
+                        # htmx loaded from unpkg.com with SHA-384 SRI hash for supply-chain safety
+    config/             # config file loading (YAML)
 ```
 
 ## Threading Model

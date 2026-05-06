@@ -18,6 +18,7 @@ A system of cooperative, always-on AI agents that function as a software develop
 - [`docs/product-details.md`](docs/product-details.md) — full feature and product specification
 - [`docs/technical-details.md`](docs/technical-details.md) — system architecture and infrastructure
 - [`docs/architectural-decision-record.md`](docs/architectural-decision-record.md) — key decisions and their rationale
+- [`docs/viability-recommendation.md`](docs/viability-recommendation.md) — agent team viability assessment and measurement protocol
 
 ## User Documentation
 

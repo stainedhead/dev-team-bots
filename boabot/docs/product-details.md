@@ -80,8 +80,8 @@ Enabled by `orchestrator.enabled: true` in config. Adds:
 - **Shared memory writes** — applies `memory_write` messages from bots to the team S3 bucket sequentially.
 - **Kanban board** — manages work items in RDS MariaDB. States: backlog, in-progress, blocked, done. Notifies assigned bots on assignment. All mutations include client-supplied idempotency tokens.
 - **Restart durability** — all message handlers are idempotent. SQS visibility timeouts re-deliver messages if the orchestrator crashes before acknowledging.
-- **REST API** — JWT-authenticated access to control plane and board at `/api/*`.
-- **Web UI** — HTML Kanban board at `/*`.
+- **REST API** — JWT-authenticated access to control plane and board at `/api/v1/`. All 26 endpoints match the `baobotctl` CLI contract (auth, board, team, skills, users, profile, DLQ). Admin-only routes return 403 for non-admin callers.
+- **Web UI** — HTMX Kanban board at `/`; auto-refreshes board columns and team health every 30 seconds without a full page reload.
 - **User management** — two roles: Admin and User. JWT issued on login, forced password change on first use.
 
 Conflict detection: on startup, broadcasts presence to SNS. If another orchestrator responds, logs an error and exits.

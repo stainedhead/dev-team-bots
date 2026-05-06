@@ -59,9 +59,38 @@ type User struct {
 type CreateUserRequest struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	Password string `json:"password,omitempty"`
 }
 
 type LoginResponse struct {
 	Token              string `json:"token"`
 	MustChangePassword bool   `json:"must_change_password"`
+}
+
+// DLQItem represents a message in the dead-letter queue.
+type DLQItem struct {
+	ID            string    `json:"id"`
+	QueueName     string    `json:"queue_name"`
+	Body          string    `json:"body"`
+	ReceivedCount int       `json:"received_count"`
+	FirstReceived time.Time `json:"first_received"`
+	LastReceived  time.Time `json:"last_received"`
+}
+
+// Priority and start fields for board create.
+type CreateWorkItemRequestV2 struct {
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+	AssignedTo  string  `json:"assigned_to,omitempty"`
+	Priority    int     `json:"priority,omitempty"`
+	StartAt     *string `json:"start_at,omitempty"`
+}
+
+// UpdateWorkItemRequestV2 includes priority.
+type UpdateWorkItemRequestV2 struct {
+	Title       *string `json:"title,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Status      *string `json:"status,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
+	AssignedTo  *string `json:"assigned_to,omitempty"`
 }

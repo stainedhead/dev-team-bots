@@ -43,4 +43,9 @@ type OrchestratorClient interface {
 	ProfileGet(ctx context.Context) (domain.User, error)
 	ProfileSetName(ctx context.Context, displayName string) error
 	ProfileSetPassword(ctx context.Context, currentPassword, newPassword string) error
+
+	// DLQ
+	DLQList(ctx context.Context) ([]domain.DLQItem, error)
+	DLQRetry(ctx context.Context, id string) error
+	DLQDiscard(ctx context.Context, id string) error
 }

@@ -20,7 +20,7 @@
 | 7 | Implementation — M4: TeamManager + Wiring | Complete |
 | 8 | Implementation — M5: GitHub Backup | Complete |
 | 9 | Implementation — M6: Config + Credentials + Watchdog | Complete |
-| 10 | Implementation — M7: Remove AWS + CDK + Docs | Not Started |
+| 10 | Implementation — M7: Remove AWS + CDK + Docs | Complete |
 | 11 | Tests & Quality | Not Started |
 
 ---
@@ -145,3 +145,4 @@ None.
 - 2026-05-06 — M4 complete: TeamManager + BotRegistry + localProviderFactory + main.go rewired to TeamManager; 94.5% coverage on team package; binary builds and starts without AWS
 - 2026-05-06 — M5 complete: GitHub memory backup adapter (90.1% cov) + ScheduledBackupUseCase (100% cov) + boabotctl memory subcommands (100% cov); go-git v5.18.0 added
 - 2026-05-06 — M6 complete: config schema expanded, INI credentials parser, heap watchdog, embedder validation; all packages ≥90% coverage; binary builds
+- 2026-05-06 — M7 complete: deleted AWS packages (sqs/sns/dynamodb/secretsmanager/s3/s3vectors/secrets), CDK, AWSConfig; rewired go.mod; updated all docs

@@ -1,27 +1,23 @@
 # Product Summary — boabot
 
-`boabot` is the BaoBot agent runtime. It is a single Go binary and container image that all team bots run. Role differentiation is applied at runtime via injected configuration — the binary is the same, the bot's identity is not.
+`boabot` is the BaoBot agent runtime. It is a single Go binary that all team bots run as local processes. Role differentiation is applied at runtime via injected configuration — the binary is the same, the bot's identity is not.
 
 ## What It Does
 
-- Runs as a long-lived ECS process monitoring incoming messages from SQS, Slack, and Microsoft Teams.
-- Spawns worker threads that execute tasks agentically using a configured language model, built-in harness tools, MCP tools, and Agent Skills.
-- Maintains a local git-backed memory directory synced to its private S3 bucket (ETag-based object sync); uses S3 Vectors for semantic retrieval.
-- On startup, requests a `team_snapshot` from the orchestrator to populate the local Agent Card cache, then registers with the orchestrator.
-- Invokes language models via the provider abstraction (Bedrock or OpenAI-compatible).
-- Connects to MCP servers as defined by shared and optional private `mcp.json` configuration, resolving credentials from Secrets Manager at startup.
-- Enforces Tool Attention (BM25 scoring) to keep injected tool schemas under the 20-tool cap.
-- Checkpoints durable state to memory and restarts worker threads when the context window approaches capacity.
-- Tracks token spend and tool call counts in memory, flushed to DynamoDB every 30 seconds.
+- Runs as a local process; no cloud account or AWS infrastructure is required to self-host.
+- Bots communicate via an in-process message router (`local/queue` package) rather than a cloud messaging service.
+- Spawns worker goroutines that execute tasks agentically using a configured language model, built-in harness tools, MCP tools, and Agent Skills.
+- Maintains a local filesystem memory directory (`local/fs` package); optional scheduled GitHub git backup keeps memory durable across restarts (configurable, default every 30 minutes).
+- Performs semantic search via a local BM25 feature-hash embedder (`local/bm25`) and cosine similarity vector store (`local/vector`) — no external embedding API required.
+- Tracks token spend and tool call counts in a local budget tracker (`local/budget`), persisted to a JSON file.
+- Monitors heap usage via a configurable watchdog (`local/watchdog`) that logs a warning at a soft limit and shuts down gracefully if the hard limit is exceeded.
+- Anthropic Claude is the primary model provider, configured via `ANTHROPIC_API_KEY`; AWS Bedrock is supported as an optional alternative model provider via `internal/infrastructure/aws/bedrock`.
+- Configuration loaded from per-bot `config.yaml` and a shared `team.yaml`; credentials loaded from `~/.boabot/credentials` INI file and environment variables — no secrets are stored in config files.
 
 ## Orchestrator Mode
 
 When `orchestrator.enabled: true` is set in config, the same binary additionally:
-- Runs the control plane (team registry in RDS MariaDB).
-- Runs the Kanban board (work tracking in RDS MariaDB).
-- Serves the REST API and web UI via configured ports (fronted by ALB).
+- Runs the control plane (team registry).
+- Runs the Kanban board (work tracking).
+- Serves the REST API and web UI via configured ports.
 - Manages user authentication (JWT).
-- Serialises all writes to the shared team memory bucket.
-- Fetches Agent Cards from S3 at bot registration and distributes them via SNS broadcast.
-- Responds to `team_snapshot` requests from newly started bots.
-- Mediates all database writes on behalf of the team via idempotent, SQS-driven handlers.

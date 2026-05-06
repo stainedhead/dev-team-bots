@@ -129,28 +129,6 @@ func TestLoad_TeamFileConfig(t *testing.T) {
 	}
 }
 
-// TestLoad_AWSBlockStillParses verifies that a config file containing an aws:
-// block still loads without error (deletion is M7).
-func TestLoad_AWSBlockStillParses(t *testing.T) {
-	dir := t.TempDir()
-	p := writeConfig(t, dir, `aws:
-  region: us-east-1
-  sqs_queue_url: https://sqs.us-east-1.amazonaws.com/123/queue
-  sns_topic_arn: arn:aws:sns:us-east-1:123:topic
-  private_bucket: my-private-bucket
-  team_bucket: my-team-bucket
-  dynamodb_budget_table: budget
-  orchestrator_queue_url: https://sqs.us-east-1.amazonaws.com/123/orch
-`)
-	cfg, err := config.Load(p)
-	if err != nil {
-		t.Fatalf("config with aws block should still parse: %v", err)
-	}
-	if cfg.AWS.Region != "us-east-1" {
-		t.Errorf("AWS.Region: got %q, want us-east-1", cfg.AWS.Region)
-	}
-}
-
 // TestLoad_FullConfig verifies a comprehensive config with all sections.
 func TestLoad_FullConfig(t *testing.T) {
 	dir := t.TempDir()

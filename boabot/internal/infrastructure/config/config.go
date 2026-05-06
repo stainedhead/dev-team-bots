@@ -10,7 +10,6 @@ import (
 type Config struct {
 	Bot          BotConfig          `yaml:"bot"`
 	Orchestrator OrchestratorConfig `yaml:"orchestrator"`
-	AWS          AWSConfig          `yaml:"aws"`
 	Models       ModelsConfig       `yaml:"models"`
 	Tools        ToolsConfig        `yaml:"tools"`
 	Budget       BudgetConfig       `yaml:"budget"`
@@ -63,16 +62,6 @@ type OrchestratorConfig struct {
 	Enabled bool `yaml:"enabled"`
 	APIPort int  `yaml:"api_port"`
 	WebPort int  `yaml:"web_port"`
-}
-
-type AWSConfig struct {
-	Region               string `yaml:"region"`
-	SQSQueueURL          string `yaml:"sqs_queue_url"`
-	SNSTopicARN          string `yaml:"sns_topic_arn"`
-	PrivateBucket        string `yaml:"private_bucket"`
-	TeamBucket           string `yaml:"team_bucket"`
-	DynamoDBBudgetTable  string `yaml:"dynamodb_budget_table"`
-	OrchestratorQueueURL string `yaml:"orchestrator_queue_url"`
 }
 
 type ModelsConfig struct {

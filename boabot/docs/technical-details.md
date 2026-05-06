@@ -10,14 +10,14 @@ internal/
   domain/
     agent.go            # Agent interface and lifecycle types
     worker.go           # Worker interface and task types
-    memory.go           # MemoryStore interface (vectors + files)
+    memory.go           # MemoryStore, VectorStore, Embedder, MemoryBackup interfaces
     message.go          # message types: registration, heartbeat, task, delegation, broadcast, shutdown
     provider.go         # ModelProvider and ProviderFactory interfaces
     mcp.go              # MCPClient interface
     queue.go            # MessageQueue and Broadcaster interfaces
     tool.go             # Tool, ToolGater, and ToolScorer interfaces
     skill.go            # Skill and SkillRegistry interfaces
-    budget.go           # BudgetTracker interface (token + tool-call caps; DynamoDB-backed)
+    budget.go           # BudgetTracker interface (token + tool-call caps; local JSON-backed)
     dlq.go              # DLQStore interface (list / retry / discard dead-letter queue items)
     card.go             # AgentCard types and CardRegistry interface
     orchestrator.go     # ControlPlane, BoardStore interfaces (orchestrator mode)
@@ -27,35 +27,42 @@ internal/
   application/
     run_agent.go        # top-level agent loop use case
     process_message.go  # message routing and dispatch
-    execute_task.go     # worker thread execution harness; optional BudgetTracker enforcement
+    execute_task.go     # worker goroutine execution harness; optional BudgetTracker enforcement
                         # (WithBudgetTracker wires cost gate: CheckAndRecordToolCall before
                         #  Invoke, CheckAndRecordTokens after using actual usage counts)
     context_manager.go  # progressive disclosure, checkpoint-and-restart
-    register.go         # bot registration, team_snapshot, heartbeat use cases
+    register.go         # bot registration, heartbeat use cases
     memory_ops.go       # read, write, search memory use cases
     delegation.go       # send/receive structured delegation messages
     skills.go           # skill index loading and script execution
+    backup/             # ScheduledBackupUseCase (cron-driven GitHub backup)
     cost/               # EnforceBudgetUseCase, DailyCostReviewUseCase
     scheduler/          # cron-based task scheduler; TriageUseCase for label-based routing
+    team/               # TeamManager (goroutine-per-bot), BotRegistry, localProviderFactory
     workflow/           # CreateWorkItem, AdvanceWorkflow, AssignBot, StalledItemRecovery
 
   infrastructure/
     aws/
-      sqs/              # SQS MessageQueue adapter
-      sns/              # SNS Broadcaster adapter
-      s3/               # S3 object sync adapter (ETag-based memory sync)
-      s3vectors/        # S3 Vectors semantic search adapter
-      bedrock/          # Bedrock ModelProvider adapter; RateLimitError for ThrottlingException
-      secrets/          # Secrets Manager credential loader
-      secretsmanager/   # SecretStore: TTL-cached GetSecret / GetSecretJSON
-      dynamodb/         # DynamoDB BudgetTracker: per-bot daily spend, CheckBudget, DailySpend
-                        # BudgetTrackerAdapter wraps BudgetTracker to satisfy domain.BudgetTracker
-                        #   (botID, perBotCap, systemBudget injected at construction; Flush is no-op)
+      bedrock/          # Bedrock ModelProvider adapter (optional); RateLimitError for ThrottlingException
+    anthropic/          # Anthropic API ModelProvider adapter (primary); rate-limit mapping
+    credentials/        # INI credentials loader (~/.boabot/credentials); BOABOT_PROFILE env var
+    github/
+      backup/           # GitHubBackup implementing domain.MemoryBackup; go-git v5 based
+    local/
+      queue/            # in-process Router + per-bot Queue implementing domain.MessageQueue
+      bus/              # in-process Bus implementing domain.Broadcaster
+      fs/               # local filesystem FS implementing domain.MemoryStore
+      budget/           # local JSON-backed BudgetTracker implementing domain.BudgetTracker
+      vector/           # cosine similarity VectorStore implementing domain.VectorStore
+                        # on-disk format: <key>.vec (LE binary) + <key>.meta (JSON)
+                        # atomic writes via temp-file + os.Rename; O(n) flat-slice search
+      bm25/             # BM25 feature-hash Embedder; FNV-1a hashing, L2-normalised, 512-dim
+      watchdog/         # heap watchdog; injectable readMem seam; warn/hard limit goroutine
     auth/local/         # LocalAuthProvider: bcrypt (cost 12) + HS256 JWT (24 h TTL)
                         # VerifyPassword validates credentials without issuing a token
     db/                 # PostgreSQL repository: work items, workflow, metrics, users
                         # UserRepo: CRUD against `users` table; Enabled inverts the `disabled` column
-    mcp/                # MCP client adapter (with typed credential resolution)
+    mcp/                # MCP client adapter
     otel/               # OpenTelemetry provider: OTLP/HTTP trace + metric exporters; noop fallback
     screening/          # RegexScreener: injection-pattern detection + [REDACTED] sanitisation
     workflow/           # ConfigLoader: YAML workflow config with SIGHUP hot-reload
@@ -71,15 +78,13 @@ internal/
 
 ```
 main goroutine
-  └── Agent.Start()
-        ├── SQS poll loop (main thread)
-        ├── Slack monitor goroutine
-        ├── Teams monitor goroutine
-        ├── Budget flush goroutine (30s interval)
-        └── Worker pool
-              └── worker goroutine (per task, recover() guards panic)
-                    └── ContextManager (progressive disclosure, checkpoint-and-restart)
-                    └── ToolGater (BM25 scoring, schema injection)
+  └── TeamManager.Run()
+        ├── bot goroutine (per enabled bot, runBotWithRestart + recover)
+        │     └── RunAgentUseCase.Run()
+        │           └── Worker goroutines (per task, recover() guards panic)
+        │                 └── ContextManager (progressive disclosure, checkpoint-and-restart)
+        │                 └── ToolGater (BM25 scoring, schema injection)
+        └── watchdog goroutine (heap monitor, optional; cancels shared context on hard limit)
 ```
 
 ## Config File Structure
@@ -98,18 +103,31 @@ models:
   default: <provider-name>
   providers:
     - name: <provider-name>
-      type: bedrock | openai
+      type: anthropic | bedrock | openai
       model_id: <model-id>
       endpoint: <url>        # openai only
       region: <region>       # bedrock only
 
-aws:
-  region: us-east-1
-  sqs_queue_url: <url>
-  sns_topic_arn: <arn>
-  private_bucket: <name>
-  team_bucket: <name>
-  dynamodb_budget_table: <name>
+memory:
+  path: ./memory             # default: <binary-dir>/memory
+  vector_index: cosine       # "cosine" (default) | future options
+  embedder: bm25             # "bm25" (default) | "openai" (requires OPENAI_API_KEY)
+  heap_warn_mb: 512          # 0 = disabled
+  heap_hard_mb: 1024         # 0 = disabled
+
+backup:
+  enabled: false
+  schedule: "*/30 * * * *"
+  restore_on_empty: true
+  github:
+    repo: org/repo
+    branch: main
+    author_name: BaoBot
+    author_email: baobot@example.com
+
+team:
+  file_path: ./team.yaml
+  bots_dir: ./bots
 
 tools:
   allowed_tools:            # built-in tools this bot may use
@@ -140,6 +158,8 @@ budget:
 context:
   threshold_tokens: 150000  # trigger checkpoint-and-restart at this context size
 ```
+
+Credentials (API keys) are **never** stored in `config.yaml`. They are read from `~/.boabot/credentials` (INI format) or environment variables at startup. The `BOABOT_PROFILE` environment variable selects a non-default profile.
 
 ## Key Design Decisions
 

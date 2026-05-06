@@ -51,6 +51,16 @@ Output goes to `bin/` (gitignored). Config file is expected next to the binary a
 
 Update all relevant files when behaviour changes. The goal is documentation that is always true.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
+This must be done for every PR opened in this repo.
+
 ## Key Patterns
 
 - Interfaces defined in `internal/domain/`. Implementations in `internal/infrastructure/`.

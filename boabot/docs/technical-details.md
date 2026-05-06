@@ -49,8 +49,12 @@ internal/
       secrets/          # Secrets Manager credential loader
       secretsmanager/   # SecretStore: TTL-cached GetSecret / GetSecretJSON
       dynamodb/         # DynamoDB BudgetTracker: per-bot daily spend, CheckBudget, DailySpend
+                        # BudgetTrackerAdapter wraps BudgetTracker to satisfy domain.BudgetTracker
+                        #   (botID, perBotCap, systemBudget injected at construction; Flush is no-op)
     auth/local/         # LocalAuthProvider: bcrypt (cost 12) + HS256 JWT (24 h TTL)
-    db/                 # PostgreSQL repository: work items, workflow, users; optimistic locking
+                        # VerifyPassword validates credentials without issuing a token
+    db/                 # PostgreSQL repository: work items, workflow, metrics, users
+                        # UserRepo: CRUD against `users` table; Enabled inverts the `disabled` column
     mcp/                # MCP client adapter (with typed credential resolution)
     otel/               # OpenTelemetry provider: OTLP/HTTP trace + metric exporters; noop fallback
     screening/          # RegexScreener: injection-pattern detection + [REDACTED] sanitisation
@@ -59,6 +63,7 @@ internal/
                         # Auth: Bearer JWT middleware; admin-only guard on protected routes
                         # Routes: /api/v1/{auth,board,team,skills,users,profile,dlq}
                         # Web UI: / → HTMX Kanban board (auto-refreshes every 30s)
+                        # htmx loaded from unpkg.com with SHA-384 SRI hash for supply-chain safety
     config/             # config file loading (YAML)
 ```
 

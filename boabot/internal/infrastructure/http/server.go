@@ -955,7 +955,7 @@ const kanbanHTML = `<!DOCTYPE html>
         <div class="chat-hist" id="chat-hist"></div>
         <div class="chat-input-row">
           <select id="chat-bot-sel"><option value="">— select bot —</option></select>
-          <textarea id="chat-input" placeholder="Message… (Shift+Enter to send)"></textarea>
+          <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
           <button class="btn btn-primary" onclick="sendChat()">Send</button>
         </div>
       </div>
@@ -1417,6 +1417,7 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function sendChat(){
+    if(!token){alert('Please sign in first');return}
     var bot=ge('chat-bot-sel').value;
     var content=ge('chat-input').value.trim();
     if(!bot){alert('Select a bot first');return}
@@ -1426,12 +1427,12 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(e){alert('Send failed: '+e.message)});
   }
 
-  // Shift+Enter sends; Enter inserts newline.
+  // Enter sends; Shift+Enter inserts newline.
   document.addEventListener('DOMContentLoaded',function(){
     var ta=ge('chat-input');
     if(ta){
       ta.addEventListener('keydown',function(e){
-        if(e.key==='Enter'&&e.shiftKey){e.preventDefault();sendChat()}
+        if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}
       });
     }
   });

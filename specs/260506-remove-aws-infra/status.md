@@ -14,7 +14,7 @@
 | 1 | Research | Not Started |
 | 2 | Data Modeling | Not Started |
 | 3 | Architecture | Not Started |
-| 4 | Implementation — M1: Local Adapters | Not Started |
+| 4 | Implementation — M1: Local Adapters | Complete |
 | 5 | Implementation — M2: Anthropic Provider | Not Started |
 | 6 | Implementation — M3: Vector Store + Embedder | Not Started |
 | 7 | Implementation — M4: TeamManager + Wiring | Not Started |
@@ -39,6 +39,18 @@
 
 ---
 
+## Phase 4 Tasks (M1: Local Adapters)
+
+- [x] `internal/infrastructure/local/queue/queue.go` — Router + Queue implementing domain.MessageQueue (coverage: 95.1%)
+- [x] `internal/infrastructure/local/bus/bus.go` — Bus implementing domain.Broadcaster (coverage: 96.0%)
+- [x] `internal/infrastructure/local/fs/fs.go` — FS implementing domain.MemoryStore (coverage: 93.5%)
+- [x] `internal/infrastructure/local/budget/budget.go` — BudgetTracker implementing domain.BudgetTracker (coverage: 91.9%)
+- [x] All packages pass `go test -race ./internal/infrastructure/local/...`
+- [x] `go fmt`, `go vet`, `golangci-lint` all pass with 0 issues
+- [x] No new external dependencies (stdlib only)
+
+---
+
 ## Blockers
 
 None.
@@ -48,3 +60,4 @@ None.
 ## Recent Activity
 
 - 2026-05-06 — Spec directory created from remove-aws-infra-PRD.md
+- 2026-05-06 — M1 complete: four local adapters implemented with TDD, all ≥90% coverage

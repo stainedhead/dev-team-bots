@@ -94,11 +94,40 @@ gh pr merge --auto --merge <PR-number>
 
 This applies to every PR opened in this repo, with no exceptions.
 
+## Working in This Repo
+
+Each module is an independent Go module. When working on a module, `cd` into it first.
+
+```bash
+# Run all checks for a module
+cd boabot
+go fmt ./...
+go vet ./...
+golangci-lint run
+go test -race -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out   # check coverage %
+```
+
+## Builds
+
+```bash
+cd boabot && go build -o bin/boabot ./cmd/boabot
+cd boabotctl && go build -o bin/boabotctl ./cmd/boabotctl
+```
+
+Output goes to `bin/` (gitignored). Config file is expected next to the binary at runtime.
+
+## Adding a New Bot
+
+1. Create `boabot-team/bots/<type>/` with `SOUL.md`, `AGENTS.md`, `config.yaml`.
+2. Add the bot entry to `boabot-team/team.yaml` (set `enabled: false` until ready to deploy).
+3. Update `boabot-team/docs/` and `boabot-team/README.md`.
+
 ## Build and Configuration
 
 - Builds output to `bin/` in each module directory. This directory is gitignored.
 - The default config file location is **next to the binary** at runtime. Do not hardcode paths.
-- Secrets are never stored in config files or committed to git. They are read from AWS Secrets Manager at runtime.
+- Secrets are never stored in config files or committed to git.
 
 ## Documentation Requirements
 

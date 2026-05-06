@@ -4,16 +4,18 @@ This is the BaoBot agent runtime. All bots in the team run this binary, differen
 
 ## Module Purpose
 
-`boabot` implements the long-running agent process. It provides:
-- Main thread: monitors SQS queue, Slack, and Microsoft Teams for inbound messages.
+Local single-binary agent runtime. `TeamManager` runs all enabled bots as in-process goroutines. It provides:
+- Main thread: monitors the local in-process message queue, Slack, and Microsoft Teams for inbound messages.
 - Worker threads: agent harness instances that execute tasks using model inference, built-in tools, MCP tools, and skills. Each worker is guarded with `recover()`.
 - Tool Attention: BM25 scoring selects which tool schemas are fully injected (cap: 20); the rest are stubs.
 - Context management: checkpoints durable state and restarts worker threads when context window approaches the threshold.
-- Budget tracking: token spend and tool call counts enforced in memory, flushed to DynamoDB every 30 seconds.
-- Agent Skills: modular capability packages loaded from S3; scripts run in restricted subprocesses.
+- Budget tracking: token spend and tool call counts enforced in memory, persisted to `budget.json` (`local/budget`).
+- Memory: local filesystem (`local/fs`) with optional GitHub git backup; BM25 + cosine similarity vector store (`local/vector`) for semantic search.
+- Agent Skills: modular capability packages; scripts run in restricted subprocesses.
 - Orchestrator mode: control plane, Kanban board, REST API, and web UI (enabled by config flag).
-- Memory: local git-backed directory synced to private S3 via ETag comparison; S3 Vectors for semantic search.
-- Model provider abstraction: Bedrock and OpenAI-compatible endpoints via a named provider factory.
+- Model provider abstraction: Anthropic (primary) and Bedrock/OpenAI-compatible endpoints via a named provider factory.
+- Heap watchdog: graceful shutdown when memory exceeds the configured hard limit.
+- No AWS services are required to run.
 
 ## Package Structure
 
@@ -28,7 +30,7 @@ internal/
     memory.go       # MemoryStore, VectorStore, Embedder
     provider.go     # ModelProvider, ProviderFactory
     mcp.go          # MCPClient, MCPTool, MCPToolResult
-    queue.go        # MessageQueue, Broadcaster
+    queue.go        # MessageQueue
     tool.go         # Tool, ToolStub, ToolScorer, ToolGater
     skill.go        # Skill, SkillStatus, SkillRegistry
     budget.go       # BudgetTracker
@@ -36,33 +38,30 @@ internal/
     orchestrator.go # ControlPlane, BoardStore, UserStore and related types
     mocks/          # generated/hand-written mocks for all interfaces
   application/
-    run_agent.go        # top-level agent loop use case
-    process_message.go  # message routing and dispatch
-    execute_task.go     # worker thread execution harness
-    context_manager.go  # progressive disclosure, checkpoint-and-restart
-    register.go         # registration, team_snapshot, heartbeat use cases
-    memory_ops.go       # read, write, search memory use cases
-    delegation.go       # send/receive structured delegation messages
-    skills.go           # skill index loading and script execution
-    budget.go           # budget cap enforcement and DynamoDB flush
-    orchestrator/       # orchestrator-mode use cases
+    team/           # TeamManager — starts and supervises all bot goroutines
+    backup/         # GitHub memory backup use case
+    orchestrator/   # orchestrator-mode use cases
+    ... (other use case packages)
   infrastructure/
-    aws/
-      sqs/        # SQS MessageQueue adapter
-      sns/        # SNS Broadcaster adapter
-      s3/         # S3 MemoryStore adapter (ETag-based object sync)
-      s3vectors/  # S3 Vectors VectorStore adapter
-      bedrock/    # Bedrock ModelProvider adapter
-      secrets/    # Secrets Manager credential loader
-      dynamodb/   # DynamoDB BudgetTracker adapter
-    mcp/          # MCP client adapter (with typed credential resolution)
-    bm25/         # BM25 ToolScorer implementation
-    openai/       # OpenAI-compatible ModelProvider adapter
-    slack/        # Slack channel monitor adapter
-    teams/        # Microsoft Teams adapter
-    http/         # REST API server and web UI handler (orchestrator mode)
-    db/           # MariaDB adapters (orchestrator mode)
-    config/       # config file loading (YAML)
+    anthropic/      # Anthropic ModelProvider adapter (primary)
+    aws/bedrock/    # Bedrock ModelProvider adapter (optional)
+    local/
+      queue/        # in-process message queue and router
+      bus/          # in-process event bus
+      fs/           # filesystem MemoryStore adapter
+      vector/       # cosine similarity VectorStore adapter
+      bm25/         # BM25 Embedder/ToolScorer
+      budget/       # budget.json BudgetTracker adapter
+      watchdog/     # heap watchdog goroutine
+    github/backup/  # GitHub git backup adapter
+    openai/         # OpenAI-compatible ModelProvider adapter
+    mcp/            # MCP client adapter
+    slack/          # Slack ChannelMonitor adapter
+    teams/          # Microsoft Teams adapter
+    http/           # REST API server and web UI handler (orchestrator mode)
+    db/             # MariaDB adapters (orchestrator mode)
+    config/         # config file loading (YAML)
+    credentials/    # credentials file loader
 ```
 
 ## Key Interfaces (domain layer)
@@ -71,18 +70,17 @@ internal/
 - `ChannelMonitor` — Start, Stop (Slack/Teams monitors).
 - `Worker` — Execute(task) Task — runs a single agentic task.
 - `WorkerFactory` — New() Worker.
-- `MessageQueue` — Send, Receive, Delete (SQS adapter target).
-- `Broadcaster` — Broadcast(message) (SNS adapter target).
-- `MemoryStore` — Write, Read, Delete (S3 ETag-sync adapter target).
-- `VectorStore` — Upsert, Search (S3 Vectors adapter target).
-- `Embedder` — Embed(text) []float32.
-- `ModelProvider` — Invoke(prompt, options) (Bedrock and OpenAI adapters).
+- `MessageQueue` — Send, Receive, Delete (local queue adapter target).
+- `MemoryStore` — Write, Read, Delete (local filesystem adapter target).
+- `VectorStore` — Upsert, Search (local cosine similarity adapter target).
+- `Embedder` — Embed(text) []float32 (local BM25 adapter target).
+- `ModelProvider` — Invoke(prompt, options) (Anthropic, Bedrock, OpenAI adapters).
+- `BudgetTracker` — CheckAndRecordTokens, CheckAndRecordToolCall, Flush (budget.json adapter target).
 - `ProviderFactory` — Get(name) ModelProvider.
 - `MCPClient` — ListTools, CallTool.
 - `ToolScorer` — Score(query, tools) []ScoredTool (BM25 adapter target).
 - `ToolGater` — Select(intent, allTools) → full schemas + stubs.
 - `SkillRegistry` — List, Get, Approve, Reject, Revoke.
-- `BudgetTracker` — CheckAndRecordTokens, CheckAndRecordToolCall, Flush.
 - `CardRegistry` — Get, Set, List (local in-memory Agent Card cache).
 - `ControlPlane`, `BoardStore`, `UserStore` — orchestrator mode only.
 
@@ -91,6 +89,8 @@ internal/
 - Follow TDD: failing test before any production code.
 - 90%+ coverage target. Run `go test -race -coverprofile=coverage.out ./...` to check.
 - All infrastructure calls go through interfaces. No AWS SDK imports in `domain/` or `application/`.
+- **Orchestrator mode is additive.** All orchestrator features are behind the `orchestrator.enabled` config flag — removing the flag must leave a normal bot running cleanly.
+- **Worker thread panics must not kill the main thread.** Use `recover()` in all worker goroutines.
 - `cmd/boabot/main.go` does wiring only — instantiate adapters, inject into use cases, start the agent.
 - Mocks live in `internal/domain/mocks/`.
 
@@ -124,3 +124,22 @@ go fmt ./...
 go vet ./...
 golangci-lint run
 ```
+
+## Adding a New Infrastructure Adapter
+
+1. Define the interface in `internal/domain/` if it doesn't exist.
+2. Write a failing test for the use case that needs it (mock the interface).
+3. Implement the adapter in `internal/infrastructure/<service>/`.
+4. Write integration tests for the adapter separately, tagged `//go:build integration`.
+5. Wire it in `cmd/boabot/main.go`.
+
+## Adding Orchestrator Features
+
+All orchestrator-specific code lives in packages clearly named or tagged for orchestrator mode. The config flag `orchestrator.enabled` gates their activation. Do not let orchestrator code paths execute on non-orchestrator bots.
+
+## Docs to Update When Changing This Module
+
+- `docs/technical-details.md` — if architecture or key packages change.
+- `docs/product-details.md` — if agent behaviour changes.
+- `docs/architectural-decision-record.md` — for significant decisions.
+- Root `docs/technical-details.md` — if system-level architecture changes.

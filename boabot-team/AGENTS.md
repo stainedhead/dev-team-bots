@@ -5,9 +5,10 @@ The team definition directory. Declares which bots exist, their personalities, a
 ## Module Purpose
 
 `boabot-team` is not a Go module — it contains:
-- `team.yaml` — the authoritative list of bots to deploy, with enabled/disabled flags.
+- `team.yaml` — the authoritative list of bots, with enabled/disabled flags.
 - `bots/<type>/` — per-bot directory containing `SOUL.md`, `AGENTS.md`, `config.yaml`, and optionally `mcp.json`.
-- `cdk/` — AWS CDK stack that reads `team.yaml` and provisions per-bot infrastructure.
+
+The `boabot` runtime reads `team.yaml` at startup and starts all enabled bots as in-process goroutines. No cloud infrastructure is required.
 
 ## Adding a New Bot
 
@@ -29,18 +30,6 @@ bots/<type>/
 └── mcp.json        # optional — role-specific MCP tool config with typed credential field
 ```
 
-## CDK Stack
-
-The `cdk/` stack reads `team.yaml` and for each enabled bot provisions:
-- Private S3 memory bucket (S3 Vectors + S3 Files, versioning enabled).
-- S3 prefix for Agent Card storage within the private bucket.
-- SQS inbound queue with dead-letter queue (14-day retention, 3 retries).
-- IAM role with least-privilege policies: own S3 bucket (r/w), team S3 bucket (r), own SQS queue, SNS publish, Bedrock InvokeModel, Secrets Manager own prefix, DynamoDB shared budget table (own items).
-- ECS task definition and service (referencing the shared ECR image from `boabot/cdk`).
-- Secrets Manager entries for model provider credentials.
-
-Shared infrastructure ARNs (ECS cluster, ECR repo, SNS topic, team S3 bucket, DynamoDB table) are imported from the `boabot/cdk` stack via cross-stack references.
-
 ## Pull Requests
 
 After opening a PR with `gh pr create`, immediately enable automerge:
@@ -52,6 +41,28 @@ gh pr merge --auto --merge <PR-number>
 ## Rules
 
 - Every bot must have all three required files: `SOUL.md`, `AGENTS.md`, `config.yaml`.
-- `team.yaml` is the single source of truth for what is deployed. Do not deploy bots by hand.
-- The CDK stack should be re-run after any change to `team.yaml`.
+- `team.yaml` is the single source of truth. Never configure bots outside this file and `bots/<type>/`.
 - New bots start with `enabled: false` — they are defined before they are deployed.
+- Never commit secrets, real API keys, or credentials into config files. Use a `config.example.yaml` as the template.
+
+## Adding a Bot
+
+```bash
+# 1. Create the bot directory
+mkdir -p bots/<type>
+
+# 2. Create required files
+# SOUL.md, AGENTS.md, config.yaml (see existing bots for reference)
+
+# 3. Add to team.yaml (enabled: false)
+
+# 4. After review, set enabled: true
+# The boabot runtime will start the new bot goroutine on next launch
+```
+
+## Docs to Update When Changing This Directory
+
+- `docs/product-summary.md` — if the team roster changes.
+- `docs/technical-details.md` — if the directory structure changes.
+- `README.md` — update the team table when bots are added or removed.
+- `user-docs/adding-bots.md` — if the process for adding bots changes.

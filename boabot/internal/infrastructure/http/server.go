@@ -873,6 +873,16 @@ const kanbanHTML = `<!DOCTYPE html>
     .chat-out{background:#1e3a5f;color:#e2e8f0;align-self:flex-end;border-bottom-right-radius:.125rem}
     .chat-in{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:.125rem}
     .chat-meta{font-size:.62rem;color:#475569;margin-top:.2rem}
+    .chat-thinking{display:flex;gap:4px;align-items:center;padding:.4rem .6rem}
+    .chat-thinking span{width:7px;height:7px;border-radius:50%;background:#475569;animation:blink 1.4s infinite both}
+    .chat-thinking span:nth-child(2){animation-delay:.2s}
+    .chat-thinking span:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+    .convo-bar{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;padding:.5rem 1rem;border-bottom:1px solid #1a2744;min-height:2.5rem}
+    .convo-chip{display:flex;align-items:center;gap:.3rem;background:#1e3a5f;border-radius:1rem;padding:.15rem .55rem;font-size:.72rem;color:#93c5fd}
+    .convo-chip button{background:none;border:none;color:#64748b;cursor:pointer;font-size:.8rem;line-height:1;padding:0}
+    .convo-chip button:hover{color:#e2e8f0}
+    .convo-add{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.72rem;padding:.15rem .4rem;cursor:pointer}
     .chat-input-row{display:flex;gap:.5rem;padding:.75rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
     .chat-input-row textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px}
     .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
@@ -953,12 +963,13 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="sec-title">Chat</div>
         </div>
         <div class="chat-hist" id="chat-hist"></div>
+        <div class="convo-bar" id="convo-bar"></div>
         <div class="chat-input-row">
-          <select id="chat-bot-sel"><option value="">— select bot —</option></select>
           <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
           <button class="btn btn-primary" onclick="sendChat()">Send</button>
         </div>
       </div>
+      <select id="chat-bot-sel" style="display:none"></select>
     </div>
 
     <!-- Skills -->
@@ -1049,6 +1060,7 @@ const kanbanHTML = `<!DOCTYPE html>
   // ── State ───────────────────────────────────────────────────────────────────
   var token=null, me=null, myRole=null;
   var allItems=[], allBots=[];
+  var selectedBots=[], pendingTasks={}, fastPollTimer=null;
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
 
@@ -1213,6 +1225,75 @@ const kanbanHTML = `<!DOCTYPE html>
       sel.appendChild(o);
     });
     sel.value=(prev&&allBots.some(function(b){return b.name===prev}))?prev:defaultVal;
+    // Init selectedBots to orchestrator on first load.
+    if(!selectedBots.length){
+      var orch=allBots.find(function(b){return b.bot_type==='orchestrator'});
+      if(orch)selectedBots=[orch.name];
+      else if(allBots.length)selectedBots=[allBots[0].name];
+    }
+    renderConvoBar();
+  }
+
+  function renderConvoBar(){
+    var bar=ge('convo-bar');
+    if(!bar)return;
+    bar.innerHTML='';
+    selectedBots.forEach(function(name){
+      var chip=document.createElement('div');chip.className='convo-chip';
+      chip.innerHTML='<span>'+esc(name)+'</span>'+(selectedBots.length>1?'<button onclick="removeBotFromChat(\''+esc(name)+'\')">&#x2715;</button>':'');
+      bar.appendChild(chip);
+    });
+    // "Add bot" dropdown — only show bots not already in conversation
+    var remaining=allBots.filter(function(b){return selectedBots.indexOf(b.name)<0});
+    if(remaining.length){
+      var sel=document.createElement('select');sel.className='convo-add';sel.id='convo-add-sel';
+      var ph=document.createElement('option');ph.value='';ph.textContent='+ Add bot';sel.appendChild(ph);
+      remaining.forEach(function(b){
+        var o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.appendChild(o);
+      });
+      sel.onchange=function(){if(this.value){addBotToChat(this.value);this.value=''}};
+      bar.appendChild(sel);
+    }
+  }
+
+  function addBotToChat(name){
+    if(selectedBots.indexOf(name)<0){selectedBots.push(name);renderConvoBar()}
+  }
+
+  function removeBotFromChat(name){
+    selectedBots=selectedBots.filter(function(n){return n!==name});
+    if(!selectedBots.length&&allBots.length){
+      var orch=allBots.find(function(b){return b.bot_type==='orchestrator'});
+      selectedBots=orch?[orch.name]:[allBots[0].name];
+    }
+    renderConvoBar();
+  }
+
+  function startFastPoll(){
+    if(fastPollTimer)return;
+    fastPollTimer=setInterval(function(){if(activeTab==='chat')loadChat()},2000);
+  }
+
+  function stopFastPoll(){
+    clearInterval(fastPollTimer);fastPollTimer=null;
+  }
+
+  function showThinking(bot,taskId){
+    var hist=ge('chat-hist');if(!hist)return;
+    var wrap=document.createElement('div');
+    wrap.id='thinking-'+taskId;
+    wrap.style.display='flex';wrap.style.flexDirection='column';wrap.style.alignItems='flex-start';
+    var label=document.createElement('div');label.className='chat-meta';label.style.marginBottom='.2rem';
+    label.textContent=esc(bot)+' • thinking…';
+    var dots=document.createElement('div');dots.className='chat-thinking';
+    dots.innerHTML='<span></span><span></span><span></span>';
+    wrap.appendChild(label);wrap.appendChild(dots);
+    hist.appendChild(wrap);
+    hist.scrollTop=hist.scrollHeight;
+  }
+
+  function hideThinking(taskId){
+    var el=ge('thinking-'+taskId);if(el)el.remove();
   }
 
   function loadTeam(){
@@ -1395,6 +1476,15 @@ const kanbanHTML = `<!DOCTYPE html>
         var ordered=msgs.slice().reverse();
         ordered.forEach(function(m){el.appendChild(renderChatMsg(m))});
         el.scrollTop=el.scrollHeight;
+        // Resolve any pending thinking indicators.
+        var resolved=[];
+        (msgs||[]).forEach(function(m){
+          if(m.direction==='inbound'&&m.task_id&&pendingTasks[m.task_id]){
+            resolved.push(m.task_id);
+          }
+        });
+        resolved.forEach(function(id){hideThinking(id);delete pendingTasks[id]});
+        if(!Object.keys(pendingTasks).length)stopFastPoll();
       })
       .catch(function(){el.innerHTML='<div class="nil">Failed to load chat</div>'});
   }
@@ -1418,13 +1508,21 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function sendChat(){
     if(!token){alert('Please sign in first');return}
-    var bot=ge('chat-bot-sel').value;
     var content=ge('chat-input').value.trim();
-    if(!bot){alert('Select a bot first');return}
     if(!content)return;
-    api('POST','/api/v1/chat/'+bot,{content:content})
-      .then(function(){ge('chat-input').value='';loadChat()})
-      .catch(function(e){alert('Send failed: '+e.message)});
+    if(!selectedBots.length){alert('Select a bot first');return}
+    ge('chat-input').value='';
+    var promises=selectedBots.map(function(bot){
+      return api('POST','/api/v1/chat/'+bot,{content:content})
+        .then(function(msg){
+          if(msg&&msg.task_id){
+            pendingTasks[msg.task_id]=bot;
+            showThinking(bot,msg.task_id);
+          }
+        })
+        .catch(function(e){alert('Send to '+bot+' failed: '+e.message)});
+    });
+    Promise.all(promises).then(function(){startFastPoll();loadChat()});
   }
 
   // Enter sends; Shift+Enter inserts newline.

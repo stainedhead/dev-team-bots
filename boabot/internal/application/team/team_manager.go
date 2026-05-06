@@ -96,6 +96,11 @@ type TeamManager struct {
 	// Used by startBot to pre-register the full team in the orchestrator control plane.
 	teamEntries []BotEntry
 
+	// sharedChatStore and sharedTaskStore are created once in Run and used by all
+	// bots so that any bot's reply surfaces in the orchestrator chat interface.
+	sharedChatStore domain.ChatStore
+	sharedTaskStore domain.DirectTaskStore
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
@@ -155,6 +160,11 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 		tm.router.Register(e.Name, 0)
 		tm.teamEntries = append(tm.teamEntries, e)
 	}
+
+	// Create shared stores. The orchestrator HTTP server uses these; all bots
+	// register a result handler against them so any bot's reply appears in chat.
+	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore()
+	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore()
 
 	// Start each enabled bot in its own goroutine.
 	started := 0
@@ -441,13 +451,11 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		// Wire direct-task store and dispatcher. The orchestrator's own queue
 		// can route to any bot because queueURL == bot name in local mode.
-		taskStore := orchestratorlocal.NewInMemoryDirectTaskStore()
-		orchTaskStore = taskStore
+		orchTaskStore = tm.sharedTaskStore
 		routerQueue := tm.router.QueueFor(entry.Name)
-		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(taskStore, routerQueue, entry.Name)
+		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(tm.sharedTaskStore, routerQueue, entry.Name)
 
-		chatStore := orchestratorlocal.NewInMemoryChatStore()
-		orchChatStore = chatStore
+		orchChatStore = tm.sharedChatStore
 
 		srv := httpserver.New(httpserver.Config{
 			Auth:       oAuth,
@@ -456,9 +464,9 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			Users:      oAuth,
 			Skills:     orchestratorlocal.NoopSkillRegistry{},
 			DLQ:        orchestratorlocal.NoopDLQStore{},
-			Tasks:      taskStore,
+			Tasks:      orchTaskStore,
 			Dispatcher: dispatcher,
-			Chat:       chatStore,
+			Chat:       orchChatStore,
 		})
 
 		httpSrv := &http.Server{
@@ -569,27 +577,23 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		orchestratorName,
 	)
 
-	// If this is the orchestrator bot, register a task-result handler so that
-	// bot replies to operator-initiated chat tasks are captured as inbound
-	// ChatMessages.
-	if orchChatStore != nil && orchTaskStore != nil {
+	// Register result handler on every bot so any bot's reply surfaces in chat.
+	sharedChat := tm.sharedChatStore
+	sharedTasks := tm.sharedTaskStore
+	if sharedChat != nil && sharedTasks != nil {
 		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
-			// Only record a chat message if the task originated from a chat
-			// (i.e. it exists in the direct-task store).
-			if _, err := orchTaskStore.Get(handlerCtx, p.TaskID); err != nil {
-				return // not a tracked task — skip
+			if _, err := sharedTasks.Get(handlerCtx, p.TaskID); err != nil {
+				return // not a tracked chat task
 			}
 			msg := domain.ChatMessage{
-				BotName:   "", // filled below via TaskID lookup
 				Direction: domain.ChatDirectionInbound,
 				Content:   p.Output,
 				TaskID:    p.TaskID,
 			}
-			// Best-effort: look up the original task to get the bot name.
-			if task, getErr := orchTaskStore.Get(handlerCtx, p.TaskID); getErr == nil {
+			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
 				msg.BotName = task.BotName
 			}
-			if appendErr := orchChatStore.Append(handlerCtx, msg); appendErr != nil {
+			if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil {
 				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
 			}
 		})

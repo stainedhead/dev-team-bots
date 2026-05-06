@@ -17,7 +17,7 @@
 | 4 | Implementation — M1: Local Adapters | Complete |
 | 5 | Implementation — M2: Anthropic Provider | Complete |
 | 6 | Implementation — M3: Vector Store + Embedder | Complete |
-| 7 | Implementation — M4: TeamManager + Wiring | Not Started |
+| 7 | Implementation — M4: TeamManager + Wiring | Complete |
 | 8 | Implementation — M5: GitHub Backup | Not Started |
 | 9 | Implementation — M6: Config + Credentials + Watchdog | Not Started |
 | 10 | Implementation — M7: Remove AWS + CDK + Docs | Not Started |
@@ -100,3 +100,4 @@ None.
 - 2026-05-06 — M1 complete: four local adapters implemented with TDD, all ≥90% coverage
 - 2026-05-06 — M2 complete: Anthropic SDK provider implemented with TDD, 100% coverage on implementation; anthropic-sdk-go v1.40.0 added
 - 2026-05-06 — M3 complete: local VectorStore (cosine similarity, 92.4% coverage) + BM25 embedder (feature hashing, 100% coverage); 40ms/search at 100k×512-dim
+- 2026-05-06 — M4 complete: TeamManager + BotRegistry + localProviderFactory + main.go rewired to TeamManager; 94.5% coverage on team package; binary builds and starts without AWS

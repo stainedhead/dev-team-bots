@@ -15,6 +15,22 @@ type Config struct {
 	Tools        ToolsConfig        `yaml:"tools"`
 	Budget       BudgetConfig       `yaml:"budget"`
 	Context      ContextConfig      `yaml:"context"`
+	Team         TeamFileConfig     `yaml:"team"`
+	Memory       MemoryConfig       `yaml:"memory"`
+}
+
+// TeamFileConfig holds paths used by TeamManager to locate team.yaml and the
+// per-bot configuration directories.  Fields are additive — M6 will populate
+// them fully; for now they default to paths relative to the binary.
+type TeamFileConfig struct {
+	FilePath string `yaml:"file_path"`
+	BotsDir  string `yaml:"bots_dir"`
+}
+
+// MemoryConfig holds the base path for per-bot memory and vector files.
+// M6 will expand this with retention and quota settings.
+type MemoryConfig struct {
+	Path string `yaml:"path"`
 }
 
 type BotConfig struct {

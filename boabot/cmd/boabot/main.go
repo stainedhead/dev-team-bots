@@ -8,8 +8,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 )
 
 var version = "dev"
@@ -45,25 +49,32 @@ func defaultConfigPath() string {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
-	// TODO: wire infrastructure adapters and use cases, then start agent.
-	// Wiring order:
-	//   1.  AWS session (aws.LoadDefaultConfig)
-	//   2.  Infrastructure adapters: SQS, SNS, S3, S3 Vectors, DynamoDB, Secrets Manager
-	//   3.  MCP client: load mcp.json from shared S3 bucket, then private S3 bucket; merge;
-	//         resolve credentials from Secrets Manager
-	//   4.  Provider factory (Bedrock + OpenAI adapters)
-	//   5.  BudgetTracker: seed counters from DynamoDB; start 30s flush goroutine
-	//   6.  ToolScorer (BM25) and ToolGater
-	//   7.  Worker factory (pre-wired with provider, MCP client, ToolGater, BudgetTracker)
-	//   8.  Channel monitors (Slack, Teams)
-	//   9.  CardRegistry (in-memory)
-	//   10. Publish own Agent Card to private S3 bucket
-	//   11. Request team_snapshot from orchestrator; populate CardRegistry
-	//   12. Register with orchestrator (send register message)
-	//   13. If orchestrator.enabled: start orchestrator services + HTTP servers
-	//   14. RunAgentUseCase.Run(ctx) — blocks until ctx cancelled (SIGTERM/SIGINT)
-	//   15. Shutdown: checkpoint active workers, broadcast shutdown, flush budget to DynamoDB
-	_ = cfg
-	<-ctx.Done()
-	return nil
+	router := queue.NewRouter()
+	b := bus.New()
+
+	managerCfg := team.ManagerConfig{
+		TeamFilePath:    cfg.Team.FilePath,
+		BotsDir:         cfg.Team.BotsDir,
+		MemoryRoot:      cfg.Memory.Path,
+		RestartDelay:    time.Second,
+		MaxRestartDelay: 5 * time.Minute,
+	}
+
+	// Apply sensible binary-relative defaults for fields not yet in the config
+	// file.  M6 will wire these from config.yaml fully.
+	exe, _ := os.Executable()
+	binDir := filepath.Dir(exe)
+
+	if managerCfg.TeamFilePath == "" {
+		managerCfg.TeamFilePath = filepath.Join(binDir, "team.yaml")
+	}
+	if managerCfg.BotsDir == "" {
+		managerCfg.BotsDir = filepath.Join(binDir, "bots")
+	}
+	if managerCfg.MemoryRoot == "" {
+		managerCfg.MemoryRoot = filepath.Join(binDir, "memory")
+	}
+
+	mgr := team.NewTeamManager(managerCfg, router, b)
+	return mgr.Run(ctx)
 }

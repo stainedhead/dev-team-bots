@@ -50,6 +50,30 @@ func (r *Router) Register(botName string, bufferSize int) *Queue {
 	return &Queue{router: r, name: botName, ch: ch}
 }
 
+// QueueFor returns the Queue for an already-registered bot.
+// Panics if botName has not been registered yet.
+func (r *Router) QueueFor(botName string) *Queue {
+	r.mu.RLock()
+	ch, ok := r.channels[botName]
+	r.mu.RUnlock()
+	if !ok {
+		panic(fmt.Sprintf("local/queue: bot %q not registered", botName))
+	}
+	return &Queue{router: r, name: botName, ch: ch}
+}
+
+// SendTo delivers msg directly to the channel of the named bot.
+// It is a convenience wrapper used by TeamManager.Shutdown.
+func (r *Router) SendTo(_ context.Context, botName string, msg domain.Message) error {
+	if msg.ID == "" {
+		msg.ID = generateID()
+	}
+	return r.send(botName, domain.ReceivedMessage{
+		Message:       msg,
+		ReceiptHandle: msg.ID,
+	})
+}
+
 // send routes a ReceivedMessage to the channel of the named bot.
 // Returns an error if the bot is unknown or its channel is full.
 func (r *Router) send(botName string, rm domain.ReceivedMessage) error {

@@ -63,6 +63,12 @@ type mockClient struct {
 	dlqRetryErr   error
 	dlqDiscardErr error
 
+	// Memory
+	memoryBackupErr  error
+	memoryRestoreErr error
+	memoryStatusResp domain.MemoryStatusResponse
+	memoryStatusErr  error
+
 	// recorded calls
 	lastBoardCreateReq  domain.CreateWorkItemRequest
 	lastBoardUpdateID   string
@@ -182,6 +188,11 @@ func (m *mockClient) DLQDiscard(_ context.Context, id string) error {
 	m.lastDLQDiscardID = id
 	return m.dlqDiscardErr
 }
+func (m *mockClient) MemoryBackup(_ context.Context) error  { return m.memoryBackupErr }
+func (m *mockClient) MemoryRestore(_ context.Context) error { return m.memoryRestoreErr }
+func (m *mockClient) MemoryStatus(_ context.Context) (domain.MemoryStatusResponse, error) {
+	return m.memoryStatusResp, m.memoryStatusErr
+}
 
 // errClient is a simple client that returns an error for all calls.
 type errClient struct{ err error }
@@ -233,3 +244,8 @@ func (e *errClient) ProfileSetPassword(_ context.Context, _, _ string) error { r
 func (e *errClient) DLQList(_ context.Context) ([]domain.DLQItem, error)     { return nil, e.err }
 func (e *errClient) DLQRetry(_ context.Context, _ string) error              { return e.err }
 func (e *errClient) DLQDiscard(_ context.Context, _ string) error            { return e.err }
+func (e *errClient) MemoryBackup(_ context.Context) error                    { return e.err }
+func (e *errClient) MemoryRestore(_ context.Context) error                   { return e.err }
+func (e *errClient) MemoryStatus(_ context.Context) (domain.MemoryStatusResponse, error) {
+	return domain.MemoryStatusResponse{}, e.err
+}

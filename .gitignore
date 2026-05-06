@@ -1,5 +1,7 @@
 # Binaries and build output
 bin/
+boabot/boabot
+boabotctl/boabotctl
 *.exe
 *.exe~
 *.dll
@@ -29,10 +31,6 @@ secrets.*
 *.pem
 *.key
 *.p12
-
-# CDK output
-cdk.out/
-cdk.context.json
 
 # Go workspace (if used locally)
 go.work

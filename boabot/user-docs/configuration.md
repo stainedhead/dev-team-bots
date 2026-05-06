@@ -2,47 +2,79 @@
 
 The agent reads `config.yaml` from the same directory as the binary by default. Override with `--config <path>`.
 
-Use `config.example.yaml` (in this directory) as a starting point. Never commit a real config file.
+Credentials (API keys, tokens) are **never** stored in `config.yaml`. They are read from `~/.boabot/credentials` (INI format) or environment variables at startup.
 
-## Required Fields
+## Minimal Required Fields
 
 ```yaml
 bot:
   name: <string>      # unique name for this bot instance
   type: <string>      # bot type — must match a directory in boabot-team/bots/
 
-aws:
-  region: <string>               # e.g. us-east-1
-  sqs_queue_url: <string>        # injected by CDK at deploy time
-  sns_topic_arn: <string>        # injected by CDK at deploy time
-  private_bucket: <string>       # injected by CDK at deploy time
-  team_bucket: <string>          # injected by CDK at deploy time
-  dynamodb_budget_table: <string> # injected by CDK at deploy time
-
 models:
   default: <provider-name>   # name of the default provider
   providers:
-    - name: <string>
-      type: bedrock           # or: openai
-      model_id: <string>
-      region: <string>        # bedrock only
-      endpoint: <url>         # openai only
+    - name: <provider-name>
+      type: anthropic         # or: bedrock | openai
+      model_id: <string>      # e.g. claude-sonnet-4-6
+
+budget:
+  token_spend_daily: 1000000   # 0 = disabled
+  tool_calls_hourly: 500       # 0 = disabled
+
+context:
+  threshold_tokens: 150000
 ```
+
+## Team File
+
+```yaml
+team:
+  file_path: ./team.yaml    # path to team.yaml (required if using TeamManager)
+  bots_dir: ./bots          # directory containing per-bot subdirectories
+```
+
+## Memory
+
+```yaml
+memory:
+  path: ./memory             # local directory for bot memory files (default: <binary-dir>/memory)
+  vector_index: cosine       # only "cosine" supported today
+  embedder: bm25             # "bm25" (default, no API key needed) | provider name (e.g. "openai")
+  heap_warn_mb: 512          # log warning at this heap usage (0 = disabled)
+  heap_hard_mb: 1024         # shut down gracefully at this heap usage (0 = disabled)
+```
+
+## GitHub Backup (Optional)
+
+```yaml
+backup:
+  enabled: false
+  schedule: "*/30 * * * *"    # cron expression (default: every 30 minutes)
+  restore_on_empty: true       # clone from remote if local memory directory is empty on startup
+  github:
+    repo: org/repo             # e.g. myorg/baobot-memory
+    branch: main
+    author_name: BaoBot
+    author_email: baobot@example.com
+```
+
+The GitHub token is read from `BOABOT_BACKUP_TOKEN` (env var) or the `backup_token` key in `~/.boabot/credentials`. It is never read from `config.yaml`.
 
 ## Orchestrator Mode
 
 ```yaml
 orchestrator:
-  enabled: true     # false by default
-  api_port: 8080    # REST API port
-  web_port: 8081    # web UI port
+  enabled: false    # set to true to activate the control plane, Kanban board, REST API, and web UI
+  api_port: 8080
+  web_port: 8081
 ```
 
 ## Tools
 
 ```yaml
 tools:
-  allowed_tools:          # built-in tools this bot is permitted to use
+  allowed_tools:
     - read_file
     - list_dir
     - glob
@@ -66,11 +98,11 @@ tools:
 
 ```yaml
 budget:
-  token_spend_daily: 1000000   # maximum tokens per calendar day (UTC)
-  tool_calls_hourly: 500       # maximum tool dispatches per hour
+  token_spend_daily: 1000000   # maximum tokens per calendar day (UTC); 0 = disabled
+  tool_calls_hourly: 500       # maximum tool dispatches per hour; 0 = disabled
 ```
 
-Budget counters are maintained in memory and flushed to DynamoDB every 30 seconds. On startup they are seeded from DynamoDB so caps survive process restarts.
+Counters are persisted to `budget.json` in the bot's memory directory and restored on startup.
 
 ## Context Management
 
@@ -79,25 +111,25 @@ context:
   threshold_tokens: 150000   # context size at which checkpoint-and-restart is triggered
 ```
 
-## Secrets
+## Credentials File
 
-API keys, database credentials, and MCP server credentials are not in the config file. They are loaded from AWS Secrets Manager at startup using the bot's IAM role. The config file is safe to inspect — it contains no secrets.
+API keys are stored in `~/.boabot/credentials` (INI format, mode 0600):
 
-MCP server credentials are referenced in `mcp.json` using a typed `credential` field:
+```ini
+[default]
+anthropic_api_key = sk-ant-...
+backup_token = ghp_...
 
-```json
-{
-  "servers": [
-    {
-      "name": "github",
-      "url": "...",
-      "credential": {
-        "type": "static_secret",
-        "secret_arn": "arn:aws:secretsmanager:us-east-1:123456789:secret:boabot/github-token"
-      }
-    }
-  ]
-}
+[staging]
+anthropic_api_key = sk-ant-...
 ```
 
-Supported credential types: `static_secret` (Secrets Manager ARN lookup). `oauth2` is reserved for future implementation.
+Select a non-default profile with `BOABOT_PROFILE=staging`. Values in the credentials file are applied only if the corresponding environment variable is not already set — environment variables always take precedence.
+
+## Provider Types
+
+| Type | Env var / credential key | Notes |
+|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` / `anthropic_api_key` | Primary provider. Any non-empty key accepted at startup. |
+| `bedrock` | AWS SDK credentials (standard chain) | Requires AWS account; region set in provider config. |
+| `openai` | `OPENAI_API_KEY` / `openai_api_key` | OpenAI-compatible; `endpoint` overrides base URL (e.g. for Ollama). |

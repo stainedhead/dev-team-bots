@@ -16,7 +16,7 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ## ADR-002 — Shared binary, per-bot configuration
 
-**Decision:** All bots run the same compiled binary and container image. Role differentiation is applied at runtime via injected configuration (SOUL.md, config.yaml, queue ARNs).
+**Decision:** All bots run the same compiled binary. Role differentiation is applied at runtime via injected configuration (SOUL.md, config.yaml, per-bot model and tool settings).
 
 **Rationale:** Eliminates per-bot build pipelines. A single image simplifies patching and deployment. Configuration-driven differentiation keeps the delivery surface small.
 
@@ -24,23 +24,23 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ---
 
-## ADR-003 — SQS per-bot queues + SNS broadcast for agent messaging; A2A-shaped envelope for structured delegation
+## ADR-003 — In-process queues + broadcaster for agent messaging; A2A-shaped envelope for structured delegation
 
-**Decision:** Each bot has a dedicated SQS inbound queue for direct messages. A shared SNS topic fans out to all bot queues for broadcasts. Bot-to-bot task delegation uses a structured SQS message envelope whose schema is modelled on the A2A task format, carrying a task lifecycle (`submitted → working → input-required → completed → failed`). The A2A HTTP transport protocol is not adopted.
+**Decision:** Each bot has a dedicated in-process queue (`local/queue`) for direct messages. A shared in-process broadcaster (`local/bus`) fans out to all bot queues for team-wide broadcasts. Bot-to-bot task delegation uses a structured message envelope whose schema is modelled on the A2A task format, carrying a task lifecycle (`submitted → working → input-required → completed → failed`). The A2A HTTP transport protocol is not adopted.
 
-**Rationale:** SQS is durable, AWS-native, and integrates directly with EventBridge. The A2A task schema provides structured lifecycle tracking without the operational complexity of running HTTP listeners on every ECS task (ephemeral IPs, extra ports, audit gaps). The envelope schema is intentionally A2A-compatible so the transport can be upgraded later without changing the data model. SNS Agent Card distribution (see ADR-016) piggybacks on the existing broadcast channel.
+**Rationale:** In-process queues require no infrastructure and have zero network latency, making them the right default for a local single-binary runtime. The A2A task schema provides structured lifecycle tracking without the operational complexity of running HTTP listeners. The envelope schema is intentionally A2A-compatible so the transport can be upgraded to SQS or HTTP later without changing the data model.
 
-**Rejected:** Direct HTTP/gRPC between bots (ECS tasks lack stable addresses, adds listener complexity); A2A HTTP transport (same reasons, plus SDK assumes HTTP which conflicts with SQS-native design).
+**Rejected:** Direct HTTP/gRPC between goroutines (unnecessary overhead for in-process communication); A2A HTTP transport (same reasons, plus SDK assumes HTTP which conflicts with the local in-process design); SQS/SNS (requires AWS account and infrastructure provisioning).
 
 ---
 
-## ADR-004 — Git-backed local memory + S3 object sync; S3 Vectors for semantic retrieval
+## ADR-004 — Local filesystem memory + GitHub git backup; BM25 + cosine similarity vector store for semantic retrieval
 
-**Decision:** Each bot's structured memory is a local git repository — agents interact with it via file tools. The harness syncs changed objects to S3 individually using ETag comparison (not git remote protocol). S3 object versioning provides remote revision history. S3 Vectors provides semantic retrieval via the `memory_search` harness tool.
+**Decision:** Each bot's structured memory is a local filesystem directory — agents interact with it via file tools. An optional scheduled GitHub git backup (`github/backup`) commits and pushes the memory directory to a configured GitHub repository on a cron schedule (default: every 30 minutes), providing durability across restarts. Semantic retrieval uses a local BM25 feature-hash embedder (`local/bm25`) and cosine similarity vector store (`local/vector`), with no external embedding API required.
 
-**Rationale:** The MemFS pattern (Letta V1) gives agents a uniform interface — memory feels like files, no separate memory API. Git provides local history, diffs, and conflict detection. S3 object sync is simpler and more reliable than git-over-S3 transports (git-remote-s3, tarball repack). S3 Vectors handles semantic search without a separate vector database.
+**Rationale:** The MemFS pattern (Letta V1) gives agents a uniform interface — memory feels like files, no separate memory API. Local filesystem is the simplest possible backing store; no cloud account is required. GitHub git backup provides durable history and enables restore from remote without requiring always-on cloud storage. The local BM25 + vector store provides fast semantic search (40ms at 100k × 512-dim) with zero external dependencies — no API key, no network call.
 
-**Rejected:** git-remote-s3 (fragile, poorly maintained); tarball repack on S3 (full repack on every sync, last-write-wins race); AWS CodeCommit (in maintenance mode); Bedrock Knowledge Bases (pipeline complexity); OpenSearch Serverless (separate service).
+**Rejected:** S3 object sync (requires AWS account); S3 Vectors (requires AWS account and S3 Vectors preview access); git-remote-s3 (fragile, poorly maintained); neural embedder as default (200–500 MB memory overhead, API key required, unavailable offline).
 
 ---
 
@@ -56,11 +56,11 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ## ADR-006 — Orchestrator as sole writer to shared mutable state
 
-**Decision:** All writes to the control plane DB, Kanban board DB, and shared team memory bucket are performed exclusively by the orchestrator. Other bots interact via SQS messages to the orchestrator.
+**Decision:** All writes to the control plane DB and Kanban board DB are performed exclusively by the orchestrator. Other bots interact via in-process messages to the orchestrator. Per-bot memory is each bot's own responsibility — written directly to the bot's local filesystem.
 
-**Rationale:** Single writer eliminates concurrency and access control complexity. All mutations are auditable through one actor. Database credentials and shared memory write permissions are scoped to the orchestrator IAM role only. Shared memory writes via SQS (fire-and-forget) keep the cost low and are consistent with the existing message-passing model.
+**Rationale:** Single writer eliminates concurrency and access control complexity for shared state. All mutations to shared structures are auditable through one actor. Per-bot memory isolation removes the need for shared write coordination at the filesystem level.
 
-**Rejected:** S3 conditional writes (optimistic concurrency — correct but adds per-write retry complexity); convention-only file partitioning (not enforced, fragile under bugs or prompt injection).
+**Rejected:** Shared memory mutex per bot (fragile, error-prone); convention-only file partitioning for shared state (not enforced, fragile under bugs or prompt injection).
 
 ---
 
@@ -86,7 +86,7 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ## ADR-009 — MCP client with shared and optional private configuration; typed credential field
 
-**Decision:** All bots are MCP clients. Tool configuration is loaded from two optional sources: a shared `mcp.json` on the team S3 bucket and an optional private `mcp.json` on each bot's S3 bucket. Each server entry may include a typed `credential` field (`static_secret` for Secrets Manager lookup, `oauth2` reserved for future implementation).
+**Decision:** All bots are MCP clients. Tool configuration is loaded from two optional local sources: a shared `mcp.json` in the team bots directory and an optional private `mcp.json` in the bot's own directory. Each server entry may include a typed `credential` field (`static_secret` for `~/.boabot/credentials` lookup, `oauth2` reserved for future implementation).
 
 **Rationale:** MCP provides a standardised protocol for tool integration. The two-file pattern allows team-wide tools to be defined once while enabling role-specific tool access. The typed credential field supports the 2026 MCP OAuth 2.1 spec while keeping the initial implementation simple (static API keys cover the majority of real servers). The union type design means adding OAuth 2.1 support is a new credential provider with no schema changes.
 
@@ -110,15 +110,14 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ---
 
-## ADR-012 — Three CI/CD workflows with path filters, all at repo root
+## ADR-012 — Two CI/CD workflows with path filters, all at repo root
 
-**Decision:** Three GitHub Actions workflow files live at `.github/workflows/` in the repository root, each with `paths:` filters scoped to its module directory.
+**Decision:** Two GitHub Actions workflow files live at `.github/workflows/` in the repository root, each with `paths:` filters scoped to its module directory.
 
-- `boabot.yml` — test → lint → build → containerise → CDK deploy (shared stack)
+- `boabot.yml` — test → lint → build
 - `boabotctl.yml` — test → lint → build; release binaries on tag `boabotctl/v*`
-- `boabot-team.yml` — CDK test → CDK diff on PR → CDK deploy on main
 
-**Rationale:** GitHub Actions only processes workflow files at the repository root `.github/workflows/`. Path filters provide the logical per-module separation. CDK diff posted as a PR comment gives reviewers infrastructure change visibility before merge.
+**Rationale:** GitHub Actions only processes workflow files at the repository root `.github/workflows/`. Path filters provide the logical per-module separation. There is no CDK infrastructure to deploy — the runtime is a local binary.
 
 **Rejected:** Workflow files in subdirectories (not supported by GitHub Actions).
 
@@ -136,31 +135,31 @@ Each entry records a significant decision: what was decided, why, and what was r
 
 ## ADR-014 — Agent Skills: runtime upload with Admin approval gate
 
-**Decision:** Agent Skills (SKILL.md + optional scripts) are uploaded at runtime via `baobotctl skills push` to a `skills/staging/` prefix in S3. An Admin must promote skills via `baobotctl skills approve` before they are discoverable by agents. Supporting scripts run in restricted subprocesses (stripped environment, temporary working directory, security-group-constrained network).
+**Decision:** Agent Skills (SKILL.md + optional scripts) are uploaded at runtime via `baobotctl skills push` to a `skills/staging/` prefix in the bot's memory directory. An Admin must promote skills via `baobotctl skills approve` before they are discoverable by agents. Supporting scripts run in restricted subprocesses (stripped environment, temporary working directory).
 
-**Rationale:** Runtime upload allows fast iteration without a full CDK deploy cycle. The mandatory Admin approval gate prevents unapproved scripts from becoming executable. Restricted subprocess execution limits the blast radius of buggy or malicious skill scripts without requiring full OS-level sandboxing (the ECS task security group already limits network egress).
+**Rationale:** Runtime upload allows fast iteration without any deploy cycle. The mandatory Admin approval gate prevents unapproved scripts from becoming executable. Restricted subprocess execution limits the blast radius of buggy or malicious skill scripts.
 
-**Rejected:** Skills as code in `boabot-team/` repo (slower iteration, full deploy cycle required); unrestricted subprocess execution (bot credentials and filesystem accessible to skill scripts).
-
----
-
-## ADR-015 — Budget caps in DynamoDB with periodic flush
-
-**Decision:** Per-bot token spend (daily) and tool call counts (hourly) are enforced by the harness. Counters are maintained in memory and flushed to a shared DynamoDB table every 30 seconds and on graceful shutdown. On startup the harness seeds from DynamoDB.
-
-**Rationale:** In-memory counters keep enforcement off the hot path. A 30-second flush interval is an acceptable error margin for daily token budgets and hourly tool call caps — worst-case exposure is one flush interval of uninhibited calls after a crash. DynamoDB is the right store for time-windowed per-bot counters; it requires no orchestrator involvement and scales naturally.
-
-**Rejected:** Per-call DynamoDB writes (adds latency to every tool dispatch); routing through orchestrator (puts orchestrator in the hot path for every agent action).
+**Rejected:** Skills as code in `boabot-team/` repo (slower iteration, requires a full redeploy cycle); unrestricted subprocess execution (bot credentials and filesystem accessible to skill scripts).
 
 ---
 
-## ADR-016 — Agent Card discovery via SNS broadcast and local cache
+## ADR-015 — Budget caps in local JSON file with in-memory counters
 
-**Decision:** Each bot publishes a signed Agent Card to a well-known S3 path. At registration the orchestrator fetches the card and includes it in the registration acknowledgement broadcast to the SNS topic. All running bots receive and cache cards locally. On startup each bot requests a `team_snapshot` from the orchestrator to pre-populate its cache.
+**Decision:** Per-bot token spend (daily) and tool call counts (hourly) are enforced by the harness. Counters are maintained in memory and persisted to a local `budget.json` file on graceful shutdown. On startup the harness seeds from `budget.json` if present.
 
-**Rationale:** The registration broadcast already exists. Piggybacking Agent Cards on it adds no new infrastructure and keeps delegation lookup latency at zero (served from local cache). The `team_snapshot` request on startup closes the cold-start gap before the first incremental broadcast arrives.
+**Rationale:** In-memory counters keep enforcement off the hot path. Persisting to a local file on shutdown is sufficient for the local single-binary runtime — worst-case exposure after a crash is one session's worth of uninhibited calls within the cap windows. No external service or network call required.
 
-**Rejected:** Orchestrator REST API for card lookup (adds latency and orchestrator dependency per delegation); S3 direct read per delegation (per-delegation API call, no caching).
+**Rejected:** Per-call file writes (adds latency to every tool dispatch); DynamoDB (requires AWS account, adds network RTT to every flush); routing through orchestrator (puts orchestrator in the hot path for every agent action).
+
+---
+
+## ADR-016 — Agent Card discovery via in-process broadcast and local BotRegistry cache
+
+**Decision:** Each bot registers with the in-process `BotRegistry` on startup. The orchestrator fetches the card and broadcasts it via the in-process bus (`local/bus`). All running bots receive and cache cards locally. The `BotRegistry` provides instant local lookup for delegation.
+
+**Rationale:** In-process registration eliminates network latency. The `BotRegistry` serves delegation lookups at zero cost — no round-trip required. Broadcasting cards via the in-process bus reuses the existing broadcast channel at no infrastructure cost.
+
+**Rejected:** HTTP endpoint per bot for card lookup (adds latency and listener complexity); external discovery service (unnecessary for a single-process runtime).
 
 ---
 

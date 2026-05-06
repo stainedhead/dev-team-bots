@@ -77,6 +77,13 @@ type DLQItem struct {
 	LastReceived  time.Time `json:"last_received"`
 }
 
+// MemoryStatusResponse describes the current state of the memory backup.
+type MemoryStatusResponse struct {
+	LastBackupAt   time.Time `json:"last_backup_at"`
+	PendingChanges int       `json:"pending_changes"`
+	RemoteURL      string    `json:"remote_url"`
+}
+
 // Priority and start fields for board create.
 type CreateWorkItemRequestV2 struct {
 	Title       string  `json:"title"`

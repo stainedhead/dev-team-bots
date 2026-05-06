@@ -1,17 +1,17 @@
 # boabot-team — Team Definition
 
-Defines the BaoBot team: bot personalities, configurations, and per-bot AWS infrastructure.
+Defines the BaoBot team: bot personalities and per-bot runtime configurations.
 
 ## Documentation
 
 - [`docs/product-summary.md`](docs/product-summary.md) — team overview
 - [`docs/product-details.md`](docs/product-details.md) — bot roles and configurations
-- [`docs/technical-details.md`](docs/technical-details.md) — CDK stack and infrastructure
+- [`docs/technical-details.md`](docs/technical-details.md) — directory structure and runtime resources
 - [`docs/architectural-decision-record.md`](docs/architectural-decision-record.md) — decisions specific to this directory
 
 ## User Documentation
 
-- [`user-docs/adding-bots.md`](user-docs/adding-bots.md) — how to define and deploy a new bot
+- [`user-docs/adding-bots.md`](user-docs/adding-bots.md) — how to define a new bot
 
 ## Current Team
 
@@ -32,19 +32,10 @@ bots/
     AGENTS.md       # public interface description
     config.yaml     # runtime configuration
     mcp.json        # optional role-specific MCP tools
-team.yaml           # authoritative deployment manifest
-cdk/                # per-bot AWS infrastructure (CDK)
+team.yaml           # authoritative team manifest
 ```
 
-Each bot's CDK resources include a private S3 memory bucket (versioned, with S3 Vectors), an SQS inbound queue, an IAM role, and an ECS task definition and service. The shared stack (`boabot/cdk/`) must be deployed first — it provides the ECS cluster, ALB, SNS topic, team S3 bucket, DynamoDB budget table, and ECR repository.
-
-## Deploying the Team
-
-```bash
-cd cdk
-cdk diff    # review changes
-cdk deploy  # provision or update per-bot infrastructure
-```
+Bots run as goroutines inside the `boabot` binary — no cloud infrastructure is required. The `boabot` runtime reads `team.yaml` at startup and starts all enabled bots as in-process goroutines.
 
 ## Adding a Bot
 

@@ -1,72 +1,45 @@
 # Technical Details — boabot-team
 
-## CDK Stack Structure
+## Directory Structure
 
 ```
-cdk/
-  bin/
-    app.ts              # CDK app entry point
-  lib/
-    team-stack.ts       # main stack — reads team.yaml, iterates bots
-    bot-construct.ts    # reusable construct for a single bot's resources
-    config.ts           # team.yaml parser and type definitions
-  test/
-    team-stack.test.ts  # CDK assertion tests
-  package.json
-  tsconfig.json
-  cdk.json
+bots/
+  <type>/
+    SOUL.md         # system prompt — role, personality, boundaries
+    AGENTS.md       # public interface description
+    config.yaml     # runtime configuration
+    mcp.json        # optional role-specific MCP tools
+team.yaml           # authoritative team manifest
 ```
 
 ## team.yaml Parsing
 
-The CDK stack reads `../team.yaml` at synth time. Each enabled bot entry is passed to `BotConstruct`, which provisions all per-bot resources. Disabled entries are parsed but skipped.
+The `boabot` runtime (`TeamManager`) reads `team.yaml` at startup. Each enabled bot entry causes a goroutine to be started for that bot. Disabled entries are parsed but skipped.
 
-## BotConstruct Resources
+## Per-Bot Runtime Resources
 
-For each bot, `BotConstruct` creates:
+For each `enabled: true` entry in `team.yaml`, `TeamManager` provides:
 
 ```
-S3 Bucket (private memory)
-  └── S3 Vectors access enabled
-  └── S3 Files access enabled
-  └── Versioning enabled
-  └── agent-card/ prefix (Agent Card storage)
+in-process Queue (local/queue)
+  └── Dead-letter handling (configurable retries before dropping)
 
-SQS Queue (inbound)
-  └── Dead-letter queue (maxReceiveCount: 3)
-  └── Message retention: 14 days
+in-process BotRegistry entry
+  └── Agent Card stored locally
 
-IAM Role
-  └── ECS task execution trust policy
-  └── S3: own private bucket (r/w), team bucket (r)
-  └── S3: agent-card prefix in own bucket (r/w)
-  └── SQS: own queue (send, receive, delete)
-  └── SNS: broadcast topic (publish)
-  └── Bedrock: InvokeModel
-  └── Secrets Manager: own path prefix (read)
-  └── DynamoDB: shared budget table (read/write own items)
+local/fs memory directory
+  └── <memory.path>/<bot-name>/
 
-ECS Task Definition
-  └── Container: shared ECR image
-  └── Environment: CONFIG_PATH, QUEUE_URL, PRIVATE_BUCKET, TEAM_BUCKET,
-                   SNS_TOPIC_ARN, DYNAMODB_BUDGET_TABLE
-  └── Secrets: model provider keys from Secrets Manager
+local/budget tracker
+  └── budget.json persisted per bot
 
-ECS Service
-  └── Desired count: 1
-  └── Cluster: shared cluster (imported from boabot/cdk stack)
+local/vector store
+  └── cosine similarity index per bot
+
+optional GitHub backup
+  └── scheduled git push per config.backup settings
 ```
 
-## Cross-Stack References
+## No Cloud Infrastructure Required
 
-Shared stack outputs are imported via `Fn.importValue`:
-
-```typescript
-const clusterArn = Fn.importValue('BoabotClusterArn');
-const ecrUri = Fn.importValue('BoabotEcrUri');
-const snsTopicArn = Fn.importValue('BoabotSnsTopicArn');
-const teamBucketName = Fn.importValue('BoabotTeamBucketName');
-const dynamodbBudgetTable = Fn.importValue('BoabotDynamodbBudgetTable');
-```
-
-The shared stack must export these values and be deployed before the team stack.
+All bot resources are in-process or on the local filesystem. No AWS account, ECS cluster, S3 buckets, SQS queues, or DynamoDB tables are needed to run the team.

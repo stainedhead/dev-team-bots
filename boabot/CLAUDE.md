@@ -4,7 +4,7 @@ Agent runtime module. See root `CLAUDE.md` for repo-wide rules. This file adds b
 
 ## What This Module Does
 
-Long-running agent process. Main thread monitors SQS + Slack + Teams. Worker threads execute tasks using the model provider, MCP tools, and skills. Orchestrator mode adds control plane, Kanban board, REST API, and web UI.
+Local single-binary agent runtime. `TeamManager` runs all enabled bots as in-process goroutines, each polling its local queue (`local/queue`). Worker goroutines execute tasks using the model provider (Anthropic primary, Bedrock optional), MCP tools, and skills. Memory is stored on the local filesystem (`local/fs`) with optional GitHub git backup. Semantic search uses the local BM25 embedder + cosine similarity vector store (`local/vector`). Budget is tracked locally in `budget.json` (`local/budget`). A heap watchdog goroutine monitors memory and shuts down gracefully if the hard limit is exceeded. No AWS services are required to run. Orchestrator mode adds control plane, Kanban board, REST API, and web UI.
 
 ## Critical Rules
 

@@ -7,62 +7,54 @@ This document describes the system-level architecture. For module-specific techn
 | Concern | Technology |
 |---|---|
 | Language | Go 1.26 |
-| Container runtime | AWS ECS (Fargate) |
-| Container registry | Amazon ECR |
-| Messaging | Amazon SQS (per-bot), Amazon SNS (broadcast) |
-| Structured delegation | SQS with A2A-shaped envelope |
-| Agent Card storage | Amazon S3 (well-known path per bot) |
-| Memory — structured | Local git + S3 object sync (ETag-based) |
-| Memory — semantic | Amazon S3 Vectors |
-| Budget counters | Amazon DynamoDB |
-| Databases | Amazon RDS MariaDB (x2) |
-| Model inference | AWS Bedrock, OpenAI-compatible endpoints (incl. Ollama) |
+| Agent runtime | Local single-binary process |
+| Messaging | In-process queues (`local/queue`) per bot; in-process broadcaster (`local/bus`) for team-wide |
+| Structured delegation | In-process queue with A2A-shaped envelope |
+| Memory — structured | Local filesystem (`local/fs`); optional GitHub git backup |
+| Memory — semantic | Local BM25 embedder (`local/bm25`) + cosine similarity vector store (`local/vector`) |
+| Budget counters | Local JSON file (`local/budget`), persisted per bot |
+| Model inference | Anthropic API (primary), AWS Bedrock (optional), OpenAI-compatible endpoints (optional, incl. Ollama) |
 | Tool integration | MCP (Model Context Protocol) |
 | Tool gating | BM25 scoring (Tool Attention, 20-tool cap) |
-| Infrastructure as Code | AWS CDK |
 | CI/CD | GitHub Actions |
-| Load balancing | AWS ALB |
-| Secrets | AWS Secrets Manager |
-| Event scheduling | AWS EventBridge |
+| Credentials | `~/.boabot/credentials` INI file + environment variables |
 | Authentication | JWT (username/password, HS256) |
 | Observability | OpenTelemetry (traces, metrics, logs) |
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    AWS ECS Cluster                   │
-│                                                      │
-│  ┌─────────────┐  ┌──────────┐  ┌────────────────┐  │
-│  │Orchestrator │  │Architect │  │  Implementer   │  │
-│  │  + Control  │  │          │  │                │  │
-│  │    Plane    │  └──────────┘  └────────────────┘  │
-│  │  + Kanban   │                                     │
-│  └──────┬──────┘                                     │
-│         │                                            │
-└─────────┼────────────────────────────────────────────┘
-          │
-     ┌────▼─────┐     ┌──────────────┐
-     │   ALB    │     │  SNS Topic   │──► All bot SQS queues
-     └────┬─────┘     └──────────────┘
-          │
-    /api/* │ /*
-          │
-   ┌──────▼──────┐
-   │ baobotctl / │
-   │  Browser    │
-   └─────────────┘
+┌─────────────────────────────────────────┐
+│             boabot process              │
+│                                         │
+│  TeamManager                            │
+│    ├── Orchestrator goroutine           │
+│    │     └── RunAgentUseCase            │
+│    │           └── Worker goroutines    │
+│    ├── Architect goroutine              │
+│    │     └── RunAgentUseCase            │
+│    │           └── Worker goroutines    │
+│    ├── ... (other enabled bots)         │
+│    └── Watchdog goroutine (optional)    │
+│                                         │
+│  local/queue  (per-bot in-process)      │
+│  local/bus    (broadcast)               │
+│  local/fs     (memory per bot)          │
+│  local/vector (semantic search)         │
+│  local/budget (per-bot counters)        │
+└─────────────────────────────────────────┘
+       │
+  REST API / Web UI (orchestrator mode)
+       │
+  baobotctl / Browser
 ```
 
 ## Messaging Topology
 
 ```
-Bot A ──SQS──► Orchestrator queue     (registration, board updates, shared memory writes)
-Orchestrator ──SQS──► Bot A queue     (work assignments, notifications, team_snapshot reply)
-Any bot ──SNS──► All bot queues       (orchestrator startup, shutdown broadcast, Agent Card distribution)
-Bot A ──SQS──► Bot B queue            (structured delegation: A2A-shaped task envelope)
-Bot B ──SQS──► Bot A queue            (delegation status updates: working, completed, failed)
-EventBridge ──► Target bot SQS queue  (scheduled and reactive events)
+Bot A → local/queue (Bot B) → Bot B goroutine   (direct message, delegation)
+Bot A → local/bus → all bot queues              (broadcast: shutdown, Agent Card)
+Bot B → local/queue (Bot A) → Bot A goroutine   (delegation status: working, completed, failed)
 ```
 
 ## Clean Architecture Layers
@@ -70,44 +62,29 @@ EventBridge ──► Target bot SQS queue  (scheduled and reactive events)
 ```
 domain/         — interfaces, entities, value objects (no external imports)
 application/    — use cases orchestrating domain logic
-infrastructure/ — adapters: S3, SQS, SNS, RDS, Bedrock, Slack, Teams, HTTP, DynamoDB
+infrastructure/ — adapters: local queue/bus/fs/budget/vector, Anthropic, Bedrock, HTTP, auth
 cmd/            — wiring: instantiate infrastructure, inject into application
 ```
 
-## CDK Stack Dependency
-
-```
-boabot/cdk (shared stack)
-  └── boabot-team/cdk (per-bot stack, imports shared ARNs via cross-stack ref)
-```
-
-Shared stack must be deployed before the per-bot stack.
-
 ## Bot Lifecycle
 
-1. Start → load config, SOUL.md, mcp.json (shared + optional private), seed budget counters from DynamoDB
-2. Request `team_snapshot` from orchestrator → populate local Agent Card cache
-3. Publish own Agent Card to S3, send registration message to orchestrator SQS queue
-4. Receive registration acknowledgement + Agent Card broadcast via SNS
-5. Run → poll SQS queue on main thread; spawn worker threads for tasks
-6. Heartbeat → periodic liveness message to orchestrator
-7. Shutdown → checkpoint active worker state to memory, publish shutdown broadcast to SNS, flush budget counters to DynamoDB, drain workers, exit
+1. Start → `TeamManager` reads `team.yaml`, starts all enabled bots as goroutines
+2. Each bot goroutine registers with `BotRegistry`
+3. Each bot polls its in-process queue (`local/queue`), spawning worker goroutines for tasks
+4. Memory reads/writes go to the local filesystem (`local/fs`); semantic search via `local/vector`
+5. Budget enforced by `local/budget` before each tool dispatch; counters restored from `budget.json` on startup
+6. Shutdown → `TeamManager` broadcasts `ShutdownMessage` to all bots; waits for goroutines to exit
 
-## Orchestrator Startup Sequence
-
-1. Start → publish presence broadcast to SNS
-2. Conflict check → if another orchestrator responds, log error and exit
-3. Start control plane, Kanban board, HTTP server
-4. Receive re-registration messages from running bots (triggered by broadcast); fetch each bot's Agent Card from S3
-5. Respond to `team_snapshot` requests from newly started bots
-6. Begin normal operation
-
-## Worker Thread Context Lifecycle
+## Worker Goroutine Context Lifecycle
 
 ```
 Receive task
   └── Build initial context: SOUL.md + todo list + skill index (stubs) + task
   └── Execute (Tool Attention gates schema injection, BM25 scores tools)
-  └── On context threshold → checkpoint to memory → restart worker from checkpoint
+  └── On context threshold → checkpoint to local/fs memory → restart worker from checkpoint
   └── On completion → write result, update todo list, flush memory
 ```
+
+## Heap Watchdog
+
+The optional watchdog goroutine runs inside `TeamManager.Run()`. It polls `runtime.ReadMemStats` at a configurable interval. If heap allocations exceed `memory.heap_warn_mb`, a warning is logged. If they exceed `memory.heap_hard_mb`, the watchdog cancels the shared context, triggering orderly shutdown of all bot goroutines.

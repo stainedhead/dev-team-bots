@@ -6,38 +6,24 @@ Module-specific decisions. For system-level decisions see root [`docs/architectu
 
 ## ADR-T001 — team.yaml as the single deployment manifest
 
-**Decision:** `team.yaml` is the only mechanism for declaring which bots are deployed. No manual CDK stack modifications per bot.
+**Decision:** `team.yaml` is the only mechanism for declaring which bots are started. No manual per-bot configuration outside this file and the `bots/<type>/` directory.
 
-**Rationale:** Keeps the team definition in one place. Adding, removing, or disabling a bot is a one-line change in a single file, followed by a CDK deploy. Prevents configuration drift between what is defined and what is deployed.
-
----
-
-## ADR-T002 — BotConstruct as a reusable CDK construct
-
-**Decision:** All per-bot resources are encapsulated in a single `BotConstruct` TypeScript class. The team stack instantiates one per enabled bot.
-
-**Rationale:** Ensures every bot gets the same resource set with the same configuration pattern. New resource types are added to `BotConstruct` once and automatically applied to all bots.
+**Rationale:** Keeps the team definition in one place. Adding, removing, or disabling a bot is a one-line change in a single file. Prevents configuration drift between what is defined and what is started.
 
 ---
 
-## ADR-T003 — New bots default to enabled: false
+## ADR-T002 — New bots default to enabled: false
 
 **Decision:** New entries in `team.yaml` must start with `enabled: false`. They are flipped to `true` only after review of `SOUL.md`, `AGENTS.md`, and `config.yaml`.
 
-**Rationale:** Prevents accidental deployment of incomplete bot definitions. Provides an explicit review gate before a new bot joins the live cluster.
+**Rationale:** Prevents accidental start of incomplete bot definitions. Provides an explicit review gate before a new bot joins the live team.
 
 ---
 
-## ADR-T004 — DynamoDB budget table in shared stack, items per bot
+## ADR-T003 — CDK removed; local runtime only
 
-**Decision:** The DynamoDB table for budget counters is a single shared table provisioned in the shared CDK stack (`boabot/cdk/`). Each bot's IAM role grants read/write access to its own items only (using a condition on the partition key).
+**Decision:** The `cdk/` directory and all AWS CDK infrastructure have been removed. Bots run as goroutines inside the `boabot` process on the local filesystem, with no cloud infrastructure required.
 
-**Rationale:** A single table is simpler to operate than one table per bot. IAM conditions enforce item-level isolation without requiring separate tables or resource policies. The table ARN is exported from the shared stack and imported by each `BotConstruct`.
+**Rationale:** Zero-infrastructure developer experience. Anyone can run the full team on a laptop without an AWS account. The domain interface layer ensures cloud-backed adapters can be reintroduced in future without changes to bot personalities or application logic.
 
----
-
-## ADR-T005 — S3 versioning on all memory buckets
-
-**Decision:** S3 object versioning is enabled on all private and team memory buckets provisioned by the CDK stack.
-
-**Rationale:** Versioning provides a durable revision history for memory files without requiring git semantics at the remote. Recovery from accidental overwrites or corrupted writes does not require a separate backup mechanism.
+**Rejected:** Keeping CDK as optional (maintenance overhead, confusing to have infrastructure code for infrastructure that is not used; the interface layer already provides the upgrade path).

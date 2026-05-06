@@ -38,6 +38,7 @@ func newRootCmd() *cobra.Command {
 		commands.NewUserCmd(c, os.Stdout),
 		commands.NewProfileCmd(c, os.Stdout),
 		commands.NewDLQCmd(c, os.Stdout),
+		commands.NewMemoryCmd(c, os.Stdout),
 		commands.NewConfigCmd(),
 	)
 

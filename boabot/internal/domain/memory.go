@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type MemoryStore interface {
 	Write(ctx context.Context, key string, value []byte) error
@@ -22,4 +25,19 @@ type VectorResult struct {
 // Embedder converts text to a vector for storage and search.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
+// MemoryBackup backs up and restores the agent's memory directory to/from a
+// remote store (e.g. a GitHub repository).
+type MemoryBackup interface {
+	Backup(ctx context.Context) error
+	Restore(ctx context.Context) error
+	Status(ctx context.Context) (BackupStatus, error)
+}
+
+// BackupStatus describes the current state of the memory backup.
+type BackupStatus struct {
+	LastBackupAt   time.Time
+	PendingChanges int
+	RemoteURL      string
 }

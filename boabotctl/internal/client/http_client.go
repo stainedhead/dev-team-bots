@@ -343,3 +343,30 @@ func (c *HTTPClient) DLQDiscard(ctx context.Context, id string) error {
 	}
 	return checkResponse(resp)
 }
+
+// ── Memory backup ─────────────────────────────────────────────────────────────
+
+func (c *HTTPClient) MemoryBackup(ctx context.Context) error {
+	resp, err := c.do(ctx, http.MethodPost, "memory/backup", nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
+func (c *HTTPClient) MemoryRestore(ctx context.Context) error {
+	resp, err := c.do(ctx, http.MethodPost, "memory/restore", nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
+func (c *HTTPClient) MemoryStatus(ctx context.Context) (domain.MemoryStatusResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, "memory/status", nil)
+	if err != nil {
+		return domain.MemoryStatusResponse{}, err
+	}
+	var out domain.MemoryStatusResponse
+	return out, decodeJSON(resp, &out)
+}

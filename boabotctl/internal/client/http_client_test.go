@@ -539,3 +539,90 @@ func TestHTTPClient_NoTokenWhenEmpty(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// ── Memory backup ─────────────────────────────────────────────────────────────
+
+func TestHTTPClient_MemoryBackup_Success(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/memory/backup") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if err := c.MemoryBackup(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPClient_MemoryBackup_Error(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, "backup unavailable")
+	}))
+	if err := c.MemoryBackup(context.Background()); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestHTTPClient_MemoryRestore_Success(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/memory/restore") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if err := c.MemoryRestore(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPClient_MemoryRestore_Error(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, "restore unavailable")
+	}))
+	if err := c.MemoryRestore(context.Background()); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestHTTPClient_MemoryStatus_Success(t *testing.T) {
+	want := domain.MemoryStatusResponse{
+		LastBackupAt:   time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC),
+		PendingChanges: 2,
+		RemoteURL:      "https://github.com/owner/boabot-memory.git",
+	}
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/memory/status") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, want)
+	}))
+	got, err := c.MemoryStatus(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.PendingChanges != want.PendingChanges {
+		t.Errorf("PendingChanges: got %d want %d", got.PendingChanges, want.PendingChanges)
+	}
+	if got.RemoteURL != want.RemoteURL {
+		t.Errorf("RemoteURL: got %q want %q", got.RemoteURL, want.RemoteURL)
+	}
+}
+
+func TestHTTPClient_MemoryStatus_Error(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, "status unavailable")
+	}))
+	_, err := c.MemoryStatus(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

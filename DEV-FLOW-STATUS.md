@@ -1,28 +1,32 @@
 # Dev-Flow Implementation Status
 
-**PRD:** baobot-dev-team-PRD.md
-**Spec:** specs/260505-baobot-dev-team
-**Branch:** feat/baobot-dev-team
-**Review PRD:** baobot-dev-team-auto-review-PRD.md
-**Process Start:** 2026-05-05T00:00:00Z
-**Process End:** 2026-05-05T20:55:00-04:00
-**Total Runtime:** ~4h 56min wall-clock (git: 15:59–20:55 EDT)
+**PRD:** remove-aws-infra-PRD.md
+**Spec:** specs/archive/260506-remove-aws-infra/
+**Branch:** feat/remove-aws-infra
+**Review PRD:** remove-aws-infra-auto-review-PRD.md
+**Process Start:** 2026-05-06T02:09:49Z
+**Process End:** 2026-05-06T15:05:00Z
+**Total Runtime:** ~775 min (12h 55m)
 
 ## Step Summary
 
 | Step | Name | Status | Start | End | Runtime (min) |
 |------|------|--------|-------|-----|---------------|
-| 1  | Create Spec from PRD            | ✅ Complete | 2026-05-05T00:01:00Z | 2026-05-05T00:10:00Z | 9 |
-| 2  | Review Spec                     | ✅ Complete | 2026-05-05T00:10:00Z | 2026-05-05T00:25:00Z | 15 |
-| 3  | Implement Product               | ✅ Complete | 2026-05-05T00:25:00Z | 2026-05-05T03:00:00Z | 155 (M1✅ M2-AWS✅ M2-DB✅ M3✅ M4✅ M5✅ M6✅ M7✅ M8✅) |
-| 4  | Documentation and User Docs     | ✅ Complete | 2026-05-05T03:00:00Z | 2026-05-05T03:15:00Z | 15 |
-| 5  | Code and Design Review          | ✅ Complete | 2026-05-05T03:15:00Z | 2026-05-05T05:30:00Z | 135 |
-| 6  | Prepare Review PRD              | ✅ Complete | 2026-05-05T05:30:00Z | 2026-05-05T05:45:00Z | 15 |
-| 7  | Archive Original Spec           | ✅ Complete | 2026-05-05T05:45:00Z | 2026-05-05T05:50:00Z | 5 |
-| 8  | Spec Review Fixes               | ✅ Complete | 2026-05-05T05:50:00Z | 2026-05-05T06:00:00Z | 10 |
-| 9  | Implement Review Fixes          | ✅ Complete | 2026-05-05T06:00:00Z | 2026-05-05T08:30:00Z | 150 |
-| 10 | Archive Fixes Spec              | ✅ Complete | 2026-05-05T08:30:00Z | 2026-05-05T08:35:00Z | 5 |
-| 11 | Final Quality Pass              | ✅ Complete | 2026-05-05T08:35:00Z | 2026-05-05T09:00:00Z | 25 |
-| 12 | Process Analysis Report         | ✅ Complete | 2026-05-05T09:00:00Z | 2026-05-05T09:20:00Z | 20 |
-| 13 | Archive Spec                    | ✅ Complete | — | — | N/A — archived in Steps 7 and 10 |
-| 14 | Open Pull Request               | ✅ Complete | 2026-05-05T09:20:00Z | 2026-05-05T09:35:00Z | 15 |
+| 1  | Create Spec from PRD            | ✅ Complete    | 2026-05-06T02:09:49Z | 2026-05-06T02:17:00Z | 7 |
+| 2  | Review Spec                     | ✅ Complete    | 2026-05-06T02:17:00Z | 2026-05-06T02:28:00Z | 11 |
+| 3  | Implement Product               | ✅ Complete    | 2026-05-06T02:28:00Z | 2026-05-06T12:00:00Z | 572 |
+| 4  | Documentation and User Docs     | ✅ Complete    | 2026-05-06T12:00:00Z | 2026-05-06T12:15:00Z | 15 |
+| 5  | Code and Design Review          | ✅ Complete    | 2026-05-06T12:15:00Z | 2026-05-06T13:00:00Z | 45 |
+| 6  | Prepare Review PRD              | ✅ Complete    | 2026-05-06T13:00:00Z | 2026-05-06T13:10:00Z | 10 |
+| 7  | Archive Original Spec           | ✅ Complete    | 2026-05-06T13:10:00Z | 2026-05-06T13:15:00Z | 5 |
+| 8  | Spec Review Fixes               | ✅ Complete    | 2026-05-06T13:15:00Z | 2026-05-06T13:25:00Z | 10 |
+| 9  | Implement Review Fixes          | ✅ Complete    | 2026-05-06T13:25:00Z | 2026-05-06T14:10:00Z | 45 |
+| 10 | Archive Fixes Spec              | ✅ Complete    | 2026-05-06T14:10:00Z | 2026-05-06T14:15:00Z | 5 |
+| 11 | Final Quality Pass              | ✅ Complete    | 2026-05-06T14:15:00Z | 2026-05-06T14:45:00Z | 30 |
+| 12 | Process Analysis Report         | ✅ Complete    | 2026-05-06T14:45:00Z | 2026-05-06T15:00:00Z | 15 |
+| 13 | Archive Spec                    | ✅ Complete    | 2026-05-06T15:00:00Z | 2026-05-06T15:01:00Z | 1 |
+| 14 | Open Pull Request               | ✅ Complete    | 2026-05-06T15:01:00Z | 2026-05-06T15:05:00Z | 4 |
+
+## PR
+
+https://github.com/stainedhead/dev-team-bots/pull/2

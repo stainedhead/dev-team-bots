@@ -10,11 +10,47 @@ import (
 type Config struct {
 	Bot          BotConfig          `yaml:"bot"`
 	Orchestrator OrchestratorConfig `yaml:"orchestrator"`
-	AWS          AWSConfig          `yaml:"aws"`
 	Models       ModelsConfig       `yaml:"models"`
 	Tools        ToolsConfig        `yaml:"tools"`
 	Budget       BudgetConfig       `yaml:"budget"`
 	Context      ContextConfig      `yaml:"context"`
+	Team         TeamFileConfig     `yaml:"team"`
+	Memory       MemoryConfig       `yaml:"memory"`
+	Backup       BackupConfig       `yaml:"backup"`
+}
+
+// TeamFileConfig holds paths used by TeamManager to locate team.yaml and the
+// per-bot configuration directories.
+type TeamFileConfig struct {
+	FilePath string `yaml:"file_path"`
+	BotsDir  string `yaml:"bots_dir"`
+}
+
+// MemoryConfig is the full memory configuration.
+type MemoryConfig struct {
+	Path        string `yaml:"path"`         // default: <binary-dir>/memory
+	VectorIndex string `yaml:"vector_index"` // "cosine" (default) | "hnsw" (future)
+	Embedder    string `yaml:"embedder"`     // "bm25" (default) | provider name
+	HeapWarnMB  int    `yaml:"heap_warn_mb"` // 0 = disabled
+	HeapHardMB  int    `yaml:"heap_hard_mb"` // 0 = disabled
+}
+
+// BackupConfig controls the scheduled GitHub memory backup.
+type BackupConfig struct {
+	Enabled        bool             `yaml:"enabled"`
+	Schedule       string           `yaml:"schedule"` // cron; default "*/30 * * * *"
+	RestoreOnEmpty bool             `yaml:"restore_on_empty"`
+	GitHub         GitHubBackupConf `yaml:"github"`
+}
+
+// GitHubBackupConf holds GitHub-specific backup settings.
+// The token is read from BOABOT_BACKUP_TOKEN env var or credentials file —
+// never from config.yaml.
+type GitHubBackupConf struct {
+	Repo        string `yaml:"repo"`
+	Branch      string `yaml:"branch"` // default: "main"
+	AuthorName  string `yaml:"author_name"`
+	AuthorEmail string `yaml:"author_email"`
 }
 
 type BotConfig struct {
@@ -26,16 +62,6 @@ type OrchestratorConfig struct {
 	Enabled bool `yaml:"enabled"`
 	APIPort int  `yaml:"api_port"`
 	WebPort int  `yaml:"web_port"`
-}
-
-type AWSConfig struct {
-	Region               string `yaml:"region"`
-	SQSQueueURL          string `yaml:"sqs_queue_url"`
-	SNSTopicARN          string `yaml:"sns_topic_arn"`
-	PrivateBucket        string `yaml:"private_bucket"`
-	TeamBucket           string `yaml:"team_bucket"`
-	DynamoDBBudgetTable  string `yaml:"dynamodb_budget_table"`
-	OrchestratorQueueURL string `yaml:"orchestrator_queue_url"`
 }
 
 type ModelsConfig struct {
@@ -73,8 +99,10 @@ func Load(path string) (Config, error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(true)
 	var cfg Config
-	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+	if err := dec.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg, nil

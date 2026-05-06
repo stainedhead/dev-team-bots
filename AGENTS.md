@@ -21,7 +21,7 @@ Refer to `PRODUCT.md` at the root for the full product specification.
 - Toolchain requirements apply to all modules:
   - `go fmt` — all code must be formatted before commit.
   - `go vet` — must pass with zero warnings.
-  - `golangci-lint` — must pass with the project lint configuration.
+  - `golangci-lint` — must pass with the project lint configuration. Every Go module must contain a `.golangci.yml` using `version: "2"` syntax. Modules without a config file inherit CI's strict defaults, which differ from older local versions and will cause unexpected failures.
   - `go test ./...` — all tests must pass.
 
 ## Test-Driven Development
@@ -34,7 +34,9 @@ Refer to `PRODUCT.md` at the root for the full product specification.
 
 No production code is written without a failing test first. This applies to bug fixes as well as new features — the first step for any bug is a failing regression test.
 
-**Coverage target: 90% or above for all modules.** Coverage is measured and enforced in CI. Do not reduce coverage when adding code.
+When implementing review fixes (dev-flow Step 9), every finding in the review PRD must have a corresponding commit before the step is marked complete. P0 findings that remain open block the PR. Before closing Step 9, check each finding off explicitly against the commit log — do not rely on memory.
+
+**Coverage target: 90% or above on Domain and Application layers.** Coverage is measured on packages matching `internal/domain/...` and `internal/application/...`, excluding `mocks/` subdirectories. `cmd/`, `mocks/`, and `config/` packages are excluded from the threshold — they contain wiring or generated code with no meaningful unit-test surface. Do not reduce coverage when adding code.
 
 ## Clean Architecture
 

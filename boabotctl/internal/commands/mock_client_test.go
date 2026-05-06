@@ -42,20 +42,20 @@ type mockClient struct {
 	skillsRevokeErr  error
 
 	// User
-	userListResp    []domain.User
-	userListErr     error
-	userCreateResp  domain.User
-	userCreateErr   error
-	userRemoveErr   error
-	userDisableErr  error
-	userSetPwdErr   error
-	userSetRoleErr  error
+	userListResp   []domain.User
+	userListErr    error
+	userCreateResp domain.User
+	userCreateErr  error
+	userRemoveErr  error
+	userDisableErr error
+	userSetPwdErr  error
+	userSetRoleErr error
 
 	// Profile
-	profileGetResp     domain.User
-	profileGetErr      error
-	profileSetNameErr  error
-	profileSetPwdErr   error
+	profileGetResp    domain.User
+	profileGetErr     error
+	profileSetNameErr error
+	profileSetPwdErr  error
 
 	// DLQ
 	dlqListResp   []domain.DLQItem
@@ -64,15 +64,15 @@ type mockClient struct {
 	dlqDiscardErr error
 
 	// recorded calls
-	lastBoardCreateReq domain.CreateWorkItemRequest
-	lastBoardUpdateID  string
-	lastBoardUpdateReq domain.UpdateWorkItemRequest
-	lastBoardAssignID  string
-	lastBoardAssignBot string
-	lastBoardCloseID   string
-	lastTeamGetName    string
-	lastUserCreateReq  domain.CreateUserRequest
-	lastUserRemoveUser string
+	lastBoardCreateReq  domain.CreateWorkItemRequest
+	lastBoardUpdateID   string
+	lastBoardUpdateReq  domain.UpdateWorkItemRequest
+	lastBoardAssignID   string
+	lastBoardAssignBot  string
+	lastBoardCloseID    string
+	lastTeamGetName     string
+	lastUserCreateReq   domain.CreateUserRequest
+	lastUserRemoveUser  string
 	lastUserDisableUser string
 	lastUserSetPwdUser  string
 	lastUserSetPwdPw    string
@@ -190,7 +190,7 @@ func newErrClient(msg string) *errClient { return &errClient{err: fmt.Errorf("%s
 func (e *errClient) Login(_ context.Context, _, _ string) (domain.LoginResponse, error) {
 	return domain.LoginResponse{}, e.err
 }
-func (e *errClient) BoardList(_ context.Context) ([]domain.WorkItem, error)  { return nil, e.err }
+func (e *errClient) BoardList(_ context.Context) ([]domain.WorkItem, error) { return nil, e.err }
 func (e *errClient) BoardGet(_ context.Context, _ string) (domain.WorkItem, error) {
 	return domain.WorkItem{}, e.err
 }
@@ -203,8 +203,8 @@ func (e *errClient) BoardUpdate(_ context.Context, _ string, _ domain.UpdateWork
 func (e *errClient) BoardAssign(_ context.Context, _, _ string) (domain.WorkItem, error) {
 	return domain.WorkItem{}, e.err
 }
-func (e *errClient) BoardClose(_ context.Context, _ string) error             { return e.err }
-func (e *errClient) TeamList(_ context.Context) ([]domain.BotEntry, error)    { return nil, e.err }
+func (e *errClient) BoardClose(_ context.Context, _ string) error          { return e.err }
+func (e *errClient) TeamList(_ context.Context) ([]domain.BotEntry, error) { return nil, e.err }
 func (e *errClient) TeamGet(_ context.Context, _ string) (domain.BotEntry, error) {
 	return domain.BotEntry{}, e.err
 }
@@ -214,22 +214,22 @@ func (e *errClient) TeamHealth(_ context.Context) (domain.TeamHealth, error) {
 func (e *errClient) SkillsList(_ context.Context, _ string) ([]domain.Skill, error) {
 	return nil, e.err
 }
-func (e *errClient) SkillsApprove(_ context.Context, _ string) error { return e.err }
-func (e *errClient) SkillsReject(_ context.Context, _ string) error  { return e.err }
-func (e *errClient) SkillsRevoke(_ context.Context, _ string) error  { return e.err }
+func (e *errClient) SkillsApprove(_ context.Context, _ string) error   { return e.err }
+func (e *errClient) SkillsReject(_ context.Context, _ string) error    { return e.err }
+func (e *errClient) SkillsRevoke(_ context.Context, _ string) error    { return e.err }
 func (e *errClient) UserList(_ context.Context) ([]domain.User, error) { return nil, e.err }
 func (e *errClient) UserCreate(_ context.Context, _ domain.CreateUserRequest) (domain.User, error) {
 	return domain.User{}, e.err
 }
-func (e *errClient) UserRemove(_ context.Context, _ string) error   { return e.err }
-func (e *errClient) UserDisable(_ context.Context, _ string) error  { return e.err }
+func (e *errClient) UserRemove(_ context.Context, _ string) error         { return e.err }
+func (e *errClient) UserDisable(_ context.Context, _ string) error        { return e.err }
 func (e *errClient) UserSetPassword(_ context.Context, _, _ string) error { return e.err }
-func (e *errClient) UserSetRole(_ context.Context, _, _ string) error { return e.err }
+func (e *errClient) UserSetRole(_ context.Context, _, _ string) error     { return e.err }
 func (e *errClient) ProfileGet(_ context.Context) (domain.User, error) {
 	return domain.User{}, e.err
 }
 func (e *errClient) ProfileSetName(_ context.Context, _ string) error        { return e.err }
 func (e *errClient) ProfileSetPassword(_ context.Context, _, _ string) error { return e.err }
 func (e *errClient) DLQList(_ context.Context) ([]domain.DLQItem, error)     { return nil, e.err }
-func (e *errClient) DLQRetry(_ context.Context, _ string) error               { return e.err }
-func (e *errClient) DLQDiscard(_ context.Context, _ string) error             { return e.err }
+func (e *errClient) DLQRetry(_ context.Context, _ string) error              { return e.err }
+func (e *errClient) DLQDiscard(_ context.Context, _ string) error            { return e.err }

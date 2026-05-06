@@ -370,17 +370,34 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		return fmt.Errorf("create BudgetTracker for %q: %w", entry.Name, err)
 	}
 	// Use a derived context for the budget flusher so it is cancelled when
-	// startBot returns (whether cleanly or due to an error).
+	// startBot returns (whether cleanly or due to an error). Wait for the
+	// goroutine to exit before returning so no files are written after startBot
+	// returns (prevents t.TempDir() cleanup races in tests).
 	budgetCtx, budgetCancel := context.WithCancel(ctx)
-	defer budgetCancel()
-	// Run budget flusher in a goroutine for the lifetime of this bot.
-	go func() { _ = bt.Run(budgetCtx) }()
+	var budgetDone sync.WaitGroup
+	budgetDone.Add(1)
+	defer func() {
+		budgetCancel()
+		budgetDone.Wait()
+	}()
+	go func() {
+		defer budgetDone.Done()
+		_ = bt.Run(budgetCtx)
+	}()
 
 	// Run the scheduled backup loop if configured.
 	if backupUC != nil {
 		backupCtx, backupCancel := context.WithCancel(ctx)
-		defer backupCancel()
-		go func() { _ = backupUC.Run(backupCtx) }()
+		var backupDone sync.WaitGroup
+		backupDone.Add(1)
+		defer func() {
+			backupCancel()
+			backupDone.Wait()
+		}()
+		go func() {
+			defer backupDone.Done()
+			_ = backupUC.Run(backupCtx)
+		}()
 	}
 
 	// Wire domain.ModelProvider.

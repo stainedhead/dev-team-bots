@@ -260,6 +260,97 @@ func TestRouter_RegisterDuplicatePanics(t *testing.T) {
 	r.Register("alice", 10) // should panic
 }
 
+// TestRouter_QueueFor verifies that QueueFor returns a working Queue for an
+// already-registered bot.
+func TestRouter_QueueFor(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	r.Register("alice", 10)
+
+	q := r.QueueFor("alice")
+	msg := newMsg("qf-1", "bob", "alice")
+	if err := q.Send(context.Background(), "alice", msg); err != nil {
+		t.Fatalf("Send via QueueFor queue: %v", err)
+	}
+	msgs, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive via QueueFor queue: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Message.ID != "qf-1" {
+		t.Errorf("expected message qf-1, got %v", msgs)
+	}
+}
+
+// TestRouter_QueueForUnregisteredPanics verifies that QueueFor panics for an unknown bot.
+func TestRouter_QueueForUnregisteredPanics(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Error("expected panic from QueueFor on unknown bot, got none")
+		}
+	}()
+	r.QueueFor("nobody") // should panic
+}
+
+// TestRouter_SendTo verifies that Router.SendTo delivers a message directly.
+func TestRouter_SendTo(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	q := r.Register("alice", 10)
+
+	msg := domain.Message{
+		Type:      domain.MessageTypeTask,
+		From:      "manager",
+		To:        "alice",
+		Timestamp: time.Now(),
+		// ID left empty — SendTo should generate one.
+	}
+	if err := r.SendTo(context.Background(), "alice", msg); err != nil {
+		t.Fatalf("SendTo: unexpected error: %v", err)
+	}
+	msgs, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive after SendTo: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Message.ID == "" {
+		t.Error("SendTo should generate a message ID when msg.ID is empty")
+	}
+}
+
+// TestRouter_SendToUnknownBot_Direct verifies that Router.SendTo returns an
+// error for an unregistered bot name.
+func TestRouter_SendToUnknownBot_Direct(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+
+	msg := newMsg("x", "src", "nobody")
+	if err := r.SendTo(context.Background(), "nobody", msg); err == nil {
+		t.Fatal("expected error from SendTo for unknown bot, got nil")
+	}
+}
+
+// TestRouter_SendToFullBuffer verifies that Router.SendTo returns an error when
+// the target channel is full.
+func TestRouter_SendToFullBuffer(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	q := r.Register("alice", 1)
+
+	// Fill the channel via the Queue.
+	if err := q.Send(context.Background(), "alice", newMsg("fill", "bob", "alice")); err != nil {
+		t.Fatalf("pre-fill Send: %v", err)
+	}
+	// Now SendTo should fail immediately.
+	if err := r.SendTo(context.Background(), "alice", newMsg("overflow", "bob", "alice")); err == nil {
+		t.Fatal("expected error on full buffer, got nil")
+	}
+}
+
 // TestQueue_DefaultBufferSize verifies that Register with bufferSize 0 uses the default.
 func TestQueue_DefaultBufferSize(t *testing.T) {
 	t.Parallel()

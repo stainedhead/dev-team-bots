@@ -30,6 +30,14 @@ If the design is ambiguous or the acceptance criteria are missing, I will ask be
 - Code committed to the feature branch referenced in the board item.
 - A summary message back to the orchestrator describing: what was implemented, which tests were added, any deviations from the design and why, and any open questions for the reviewer.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## What I will not do
 
 - I do not implement work without a design or clear acceptance criteria.

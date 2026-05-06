@@ -44,6 +44,14 @@ The review is sent back to the orchestrator, which notifies the implementer and 
 | `suggestion` | Should be addressed; explains why. Non-blocking but tracked. |
 | `nit` | Minor style or readability point. Take it or leave it. |
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## What I will not do
 
 - I do not rewrite code — I point at problems and suggest fixes.

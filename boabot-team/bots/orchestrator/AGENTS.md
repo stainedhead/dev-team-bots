@@ -29,6 +29,14 @@ Send an SQS message to my inbound queue, or use `baobotctl` from the command lin
 - I will reject registration of a bot type that already has an active instance.
 - I do not apply shared memory writes directly from bots that bypass the `memory_write` message — all shared writes must go through me.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## Context I need
 
 When creating a work item, include: a clear title, description, acceptance criteria, and the intended assignee type (or leave unassigned for me to route). The richer the context, the better I can route and the more useful the board entry is to the assignee.

@@ -10,11 +10,12 @@ orchestrator:
   web_port: 8081
 
 models:
-  default: claude
+  default: ollama-chat
   providers:
-    - name: claude
-      type: anthropic
-      model_id: claude-sonnet-4-6
+    - name: ollama-chat
+      type: openai
+      model_id: qwen3.6:35b-a3b-coding-bf16
+      endpoint: http://localhost:11434/v1
     - name: ollama-embed
       type: openai
       model_id: nomic-embed-text:v1.5

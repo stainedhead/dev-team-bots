@@ -27,17 +27,31 @@ func TestLocalProviderFactory_Bedrock(t *testing.T) {
 	}
 }
 
-func TestLocalProviderFactory_OpenAI(t *testing.T) {
+func TestLocalProviderFactory_OpenAI_MissingEndpoint(t *testing.T) {
 	t.Parallel()
 	cfgs := []config.ProviderConfig{
 		{Name: "oai", Type: "openai", ModelID: "gpt-4o"},
 	}
 	_, err := buildTestFactory(cfgs).Get("oai")
 	if err == nil {
-		t.Fatal("expected error for openai provider, got nil")
+		t.Fatal("expected error for openai provider with no endpoint, got nil")
 	}
-	if !strings.Contains(err.Error(), "openai provider not yet implemented") {
+	if !strings.Contains(err.Error(), "endpoint is required") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestLocalProviderFactory_OpenAI_Success(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "oai", Type: "openai", ModelID: "gpt-4o", Endpoint: "http://localhost:11434/v1"},
+	}
+	p, err := buildTestFactory(cfgs).Get("oai")
+	if err != nil {
+		t.Fatalf("expected no error for valid openai config, got: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
 	}
 }
 

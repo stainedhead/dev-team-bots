@@ -7,6 +7,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/anthropic"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+	openaiinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
 )
 
 // localProviderFactory implements domain.ProviderFactory for local single-binary
@@ -63,7 +64,11 @@ func buildProvider(pc config.ProviderConfig) (domain.ModelProvider, error) {
 		)
 
 	case "openai":
-		return nil, errors.New("team: openai provider not yet implemented")
+		p, err := openaiinfra.NewProvider(pc.Endpoint, pc.ModelID)
+		if err != nil {
+			return nil, fmt.Errorf("team: build openai provider %q: %w", pc.Name, err)
+		}
+		return p, nil
 
 	default:
 		return nil, fmt.Errorf("team: unsupported provider type %q", pc.Type)

@@ -1,7 +1,7 @@
 # Dev-Flow Implementation Status
 
 **PRD:** remove-aws-infra-PRD.md
-**Spec:** specs/260506-remove-aws-infra/
+**Spec:** specs/archive/260506-remove-aws-infra/
 **Branch:** feat/remove-aws-infra
 **Review PRD:** remove-aws-infra-auto-review-PRD.md
 **Process Start:** 2026-05-06T02:09:49Z
@@ -23,6 +23,6 @@
 | 9  | Implement Review Fixes          | ✅ Complete    | 2026-05-06T13:25:00Z | 2026-05-06T14:10:00Z | 45 |
 | 10 | Archive Fixes Spec              | ✅ Complete    | 2026-05-06T14:10:00Z | 2026-05-06T14:15:00Z | 5 |
 | 11 | Final Quality Pass              | ✅ Complete    | 2026-05-06T14:15:00Z | 2026-05-06T14:45:00Z | 30 |
-| 12 | Process Analysis Report         | 🔄 In Progress | 2026-05-06T14:45:00Z | — | — |
-| 13 | Archive Spec                    | ⬜ Pending     | — | — | — |
-| 14 | Open Pull Request               | ⬜ Pending     | — | — | — |
+| 12 | Process Analysis Report         | ✅ Complete    | 2026-05-06T14:45:00Z | 2026-05-06T15:00:00Z | 15 |
+| 13 | Archive Spec                    | ✅ Complete    | 2026-05-06T15:00:00Z | 2026-05-06T15:01:00Z | 1 |
+| 14 | Open Pull Request               | 🔄 In Progress | 2026-05-06T15:01:00Z | — | — |

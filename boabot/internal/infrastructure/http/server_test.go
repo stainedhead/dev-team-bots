@@ -306,15 +306,45 @@ func TestLogin_InvalidCredentials_Returns401(t *testing.T) {
 	}
 }
 
+// TestProtectedRoute_NoToken_Returns401 verifies that write endpoints (POST /board)
+// still require authentication. GET /board is intentionally public.
 func TestProtectedRoute_NoToken_Returns401(t *testing.T) {
 	srv := newTestServer(&fakeAuth{})
 	defer srv.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/board", nil)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/board", strings.NewReader(`{"title":"t"}`))
+	req.Header.Set("Content-Type", "application/json")
 	resp, _ := http.DefaultClient.Do(req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", resp.StatusCode)
+		t.Fatalf("expected 401 for POST /board without token, got %d", resp.StatusCode)
+	}
+}
+
+// TestBoardGet_Public verifies that GET /api/v1/board does NOT require a token.
+func TestBoardGet_Public(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/board", nil)
+	// Deliberately no Authorization header.
+	resp, _ := http.DefaultClient.Do(req)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for public GET /board, got %d", resp.StatusCode)
+	}
+}
+
+// TestTeamHealth_Public verifies that GET /api/v1/team/health does NOT require a token.
+func TestTeamHealth_Public(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/team/health", nil)
+	resp, _ := http.DefaultClient.Do(req)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for public GET /team/health, got %d", resp.StatusCode)
 	}
 }
 
@@ -325,8 +355,10 @@ func TestProtectedRoute_InvalidToken_Returns401(t *testing.T) {
 	srv := newTestServer(auth)
 	defer srv.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/board", nil)
+	// POST /board is still protected; verify bad token returns 401.
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/board", strings.NewReader(`{"title":"t"}`))
 	req.Header.Set("Authorization", "Bearer bad-token")
+	req.Header.Set("Content-Type", "application/json")
 	resp, _ := http.DefaultClient.Do(req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -702,7 +734,9 @@ func TestDLQ_Discard(t *testing.T) {
 
 // ── Web UI ────────────────────────────────────────────────────────────────────
 
-func TestKanbanUI_HasSRIHash(t *testing.T) {
+// TestKanbanUI_HasVanillaJS verifies that the Kanban UI uses vanilla JS (no
+// external CDN dependencies) and contains the expected data-fetching calls.
+func TestKanbanUI_HasVanillaJS(t *testing.T) {
 	srv := newTestServer(&fakeAuth{})
 	defer srv.Close()
 
@@ -716,11 +750,21 @@ func TestKanbanUI_HasSRIHash(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 	body := buf.String()
-	if !strings.Contains(body, `integrity="sha384-`) {
-		t.Error("kanban HTML missing integrity= SRI attribute on HTMX script tag")
+	// Must NOT load htmx from an external CDN.
+	if strings.Contains(body, "unpkg.com/htmx") {
+		t.Error("kanban UI must not load htmx from external CDN")
 	}
-	if !strings.Contains(body, `crossorigin="anonymous"`) {
-		t.Error("kanban HTML missing crossorigin=anonymous on HTMX script tag")
+	// Must use fetch() for board data.
+	if !strings.Contains(body, "fetch('/api/v1/board") {
+		t.Error("kanban UI must fetch board data via /api/v1/board")
+	}
+	// Must use setInterval for auto-refresh.
+	if !strings.Contains(body, "setInterval(") {
+		t.Error("kanban UI must use setInterval for periodic refresh")
+	}
+	// Must fetch team health.
+	if !strings.Contains(body, "/api/v1/team/health") {
+		t.Error("kanban UI must fetch /api/v1/team/health")
 	}
 }
 
@@ -1409,6 +1453,8 @@ func TestKanbanUI_404_OnUnknownPath(t *testing.T) {
 	}
 }
 
+// TestProtectedRoute_ExpiredToken_Returns401 verifies that a write endpoint
+// (POST /board) returns 401 when an expired token is presented.
 func TestProtectedRoute_ExpiredToken_Returns401(t *testing.T) {
 	auth := &fakeAuth{validateTokenFn: func(_ string) (domainauth.Claims, error) {
 		return domainauth.Claims{}, domainauth.ErrTokenExpired
@@ -1416,12 +1462,13 @@ func TestProtectedRoute_ExpiredToken_Returns401(t *testing.T) {
 	srv := newTestServer(auth)
 	defer srv.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/board", nil)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/board", strings.NewReader(`{"title":"t"}`))
 	req.Header.Set("Authorization", "Bearer expired-token")
+	req.Header.Set("Content-Type", "application/json")
 	resp, _ := http.DefaultClient.Do(req)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 for expired token, got %d", resp.StatusCode)
+		t.Fatalf("expected 401 for expired token on POST /board, got %d", resp.StatusCode)
 	}
 }
 

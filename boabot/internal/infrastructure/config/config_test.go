@@ -275,3 +275,26 @@ func TestLoad_UnknownFieldRejected(t *testing.T) {
 		t.Fatal("expected error for unknown field, got nil")
 	}
 }
+
+// TestLoad_OrchestratorJWTAndAdminPassword verifies that the new jwt_secret and
+// admin_password fields in OrchestratorConfig round-trip through YAML.
+func TestLoad_OrchestratorJWTAndAdminPassword(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `orchestrator:
+  enabled: true
+  api_port: 9090
+  jwt_secret: mysecret
+  admin_password: mypassword
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Orchestrator.JWTSecret != "mysecret" {
+		t.Errorf("JWTSecret: got %q, want mysecret", cfg.Orchestrator.JWTSecret)
+	}
+	if cfg.Orchestrator.AdminPassword != "mypassword" {
+		t.Errorf("AdminPassword: got %q, want mypassword", cfg.Orchestrator.AdminPassword)
+	}
+}

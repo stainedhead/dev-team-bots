@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,10 +18,12 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
+	httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/budget"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
+	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
@@ -400,11 +403,76 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		}()
 	}
 
+	// Wire orchestrator HTTP server before provider validation so the dashboard
+	// is reachable even when ANTHROPIC_API_KEY is not yet configured.
+	if botCfg.Orchestrator.Enabled && botCfg.Orchestrator.APIPort > 0 {
+		adminPassword := botCfg.Orchestrator.AdminPassword
+		if adminPassword == "" {
+			adminPassword = "admin"
+		}
+		oAuth, oAuthErr := orchestratorlocal.NewInMemoryAuthProvider(adminPassword, botCfg.Orchestrator.JWTSecret)
+		if oAuthErr != nil {
+			return fmt.Errorf("create orchestrator auth for %q: %w", entry.Name, oAuthErr)
+		}
+		board := orchestratorlocal.NewInMemoryBoardStore()
+		cp := orchestratorlocal.NewInMemoryControlPlane()
+
+		if regErr := cp.Register(ctx, domain.BotEntry{
+			Name:    entry.Name,
+			BotType: entry.Type,
+		}); regErr != nil {
+			return fmt.Errorf("register bot with control plane for %q: %w", entry.Name, regErr)
+		}
+
+		srv := httpserver.New(httpserver.Config{
+			Auth:   oAuth,
+			Board:  board,
+			Team:   cp,
+			Users:  oAuth,
+			Skills: orchestratorlocal.NoopSkillRegistry{},
+			DLQ:    orchestratorlocal.NoopDLQStore{},
+		})
+
+		httpSrv := &http.Server{
+			Addr:    fmt.Sprintf(":%d", botCfg.Orchestrator.APIPort),
+			Handler: srv.Handler(),
+		}
+
+		httpCtx, httpCancel := context.WithCancel(ctx)
+		var httpDone sync.WaitGroup
+		httpDone.Add(1)
+		defer func() {
+			httpCancel()
+			httpDone.Wait()
+		}()
+		go func() {
+			defer httpDone.Done()
+			if listenErr := httpSrv.ListenAndServe(); listenErr != nil && listenErr != http.ErrServerClosed {
+				slog.Error("orchestrator HTTP server error", "bot", entry.Name, "err", listenErr)
+			}
+		}()
+		go func() {
+			<-httpCtx.Done()
+			if shutdownErr := httpSrv.Shutdown(context.Background()); shutdownErr != nil {
+				slog.Warn("orchestrator HTTP server shutdown error", "bot", entry.Name, "err", shutdownErr)
+			}
+		}()
+
+		slog.Info("orchestrator dashboard started", "url", fmt.Sprintf("http://localhost:%d/", botCfg.Orchestrator.APIPort))
+	}
+
 	// Wire domain.ModelProvider.
 	pf := newLocalProviderFactory(botCfg.Models.Providers)
 	providerName := botCfg.Models.Default
 	provider, err := pf.Get(providerName)
 	if err != nil {
+		if botCfg.Orchestrator.Enabled {
+			// Dashboard is up; bot loop inactive until a provider is configured.
+			slog.Warn("model provider unavailable; dashboard running but bot loop is inactive",
+				"bot", entry.Name, "provider", providerName, "err", err)
+			<-ctx.Done()
+			return nil
+		}
 		return fmt.Errorf("get provider %q for %q: %w", providerName, entry.Name, err)
 	}
 

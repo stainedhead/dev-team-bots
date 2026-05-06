@@ -10,20 +10,11 @@ orchestrator:
   web_port: 8081
 
 models:
-  default: bedrock-claude
+  default: claude
   providers:
-    - name: bedrock-claude
-      type: bedrock
-      model_id: anthropic.claude-sonnet-4-6
-      region: us-east-1
-
-aws:
-  region: us-east-1
-  sqs_queue_url: ""           # injected by CDK at deploy time
-  sns_topic_arn: ""           # injected by CDK at deploy time
-  private_bucket: ""          # injected by CDK at deploy time
-  team_bucket: ""             # injected by CDK at deploy time
-  dynamodb_budget_table: ""   # injected by CDK at deploy time
+    - name: claude
+      type: anthropic
+      model_id: claude-sonnet-4-6
 
 tools:
   allowed_tools:
@@ -35,7 +26,7 @@ tools:
     - todo_write
     - todo_read
     - get_metrics
-  receive_from:             # all team members may send action-triggering messages
+  receive_from:
     - architect
     - implementer
     - reviewer
@@ -47,3 +38,7 @@ budget:
 
 context:
   threshold_tokens: 150000
+
+memory:
+  heap_warn_mb: 512
+  heap_hard_mb: 1024

@@ -51,18 +51,18 @@ func (s *Server) Handler() http.Handler {
 	// Public
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 
-	// Board
-	mux.HandleFunc("GET /api/v1/board", s.auth(s.handleBoardList))
-	mux.HandleFunc("GET /api/v1/board/{id}", s.auth(s.handleBoardGet))
+	// Board — read endpoints are public; write endpoints require auth
+	mux.HandleFunc("GET /api/v1/board", s.handleBoardList)
+	mux.HandleFunc("GET /api/v1/board/{id}", s.handleBoardGet)
 	mux.HandleFunc("POST /api/v1/board", s.auth(s.handleBoardCreate))
 	mux.HandleFunc("PATCH /api/v1/board/{id}", s.auth(s.handleBoardUpdate))
 	mux.HandleFunc("POST /api/v1/board/{id}/assign", s.auth(s.handleBoardAssign))
 	mux.HandleFunc("POST /api/v1/board/{id}/close", s.auth(s.handleBoardClose))
 
-	// Team — exact /health before wildcard /{name}
-	mux.HandleFunc("GET /api/v1/team", s.auth(s.handleTeamList))
-	mux.HandleFunc("GET /api/v1/team/health", s.auth(s.handleTeamHealth))
-	mux.HandleFunc("GET /api/v1/team/{name}", s.auth(s.handleTeamGet))
+	// Team — read endpoints are public; exact /health before wildcard /{name}
+	mux.HandleFunc("GET /api/v1/team", s.handleTeamList)
+	mux.HandleFunc("GET /api/v1/team/health", s.handleTeamHealth)
+	mux.HandleFunc("GET /api/v1/team/{name}", s.handleTeamGet)
 
 	// Skills
 	mux.HandleFunc("GET /api/v1/skills", s.auth(s.handleSkillsList))
@@ -609,12 +609,13 @@ const kanbanHTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BaoBot Kanban</title>
-  <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
     header { padding: 1rem 2rem; background: #1e293b; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 1rem; }
     header h1 { font-size: 1.25rem; font-weight: 600; }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 1rem; font-size: 0.75rem; color: #64748b; }
+    .health-badge { padding: 0.25rem 0.75rem; border-radius: 9999px; background: #166534; color: #86efac; font-size: 0.75rem; }
     .board { display: flex; gap: 1.5rem; padding: 2rem; overflow-x: auto; }
     .column { background: #1e293b; border-radius: 0.5rem; min-width: 280px; padding: 1rem; }
     .column-header { font-weight: 600; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 1rem; }
@@ -622,62 +623,155 @@ const kanbanHTML = `<!DOCTYPE html>
     .card:hover { border-color: #64748b; }
     .card-title { font-size: 0.875rem; font-weight: 500; }
     .card-meta { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+    .empty { text-align: center; color: #475569; padding: 1.5rem; font-size: 0.875rem; font-style: italic; }
+    .loading { text-align: center; color: #64748b; padding: 2rem; }
     .badge { display: inline-block; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; }
     .badge-active { background: #166534; color: #86efac; }
-    .badge-backlog { background: #1e3a5f; color: #93c5fd; }
-    .loading { text-align: center; color: #64748b; padding: 2rem; }
+    .btn-login { padding: 0.375rem 0.75rem; border-radius: 0.375rem; background: #334155; color: #e2e8f0; border: 1px solid #475569; cursor: pointer; font-size: 0.75rem; }
+    .btn-login:hover { background: #475569; }
+    dialog { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; min-width: 320px; }
+    dialog::backdrop { background: rgba(0,0,0,0.6); }
+    dialog h2 { margin-bottom: 1rem; font-size: 1rem; }
+    dialog label { display: block; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.25rem; margin-top: 0.75rem; }
+    dialog input { width: 100%; padding: 0.5rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.375rem; color: #e2e8f0; font-size: 0.875rem; }
+    dialog .actions { margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .btn-primary { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; }
+    .btn-secondary { padding: 0.5rem 1rem; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; }
+    .error-msg { color: #f87171; font-size: 0.75rem; margin-top: 0.5rem; }
   </style>
 </head>
 <body>
   <header>
-    <h1>🤖 BaoBot Kanban</h1>
-    <span style="margin-left:auto;font-size:0.75rem;color:#64748b">
-      Refreshing every 30s &nbsp;
-      <span hx-get="/api/v1/team/health" hx-trigger="load, every 30s" hx-target="this" hx-swap="innerHTML">…</span>
-    </span>
+    <h1>BaoBot Kanban</h1>
+    <div class="header-right">
+      <span id="health-display">Loading health...</span>
+      <span>Refreshing every 30s</span>
+      <button class="btn-login" onclick="document.getElementById('login-dialog').showModal()">Login</button>
+    </div>
   </header>
+
+  <dialog id="login-dialog">
+    <h2>Login</h2>
+    <label for="login-username">Username</label>
+    <input id="login-username" type="text" autocomplete="username" />
+    <label for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password" />
+    <div id="login-error" class="error-msg" style="display:none"></div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="document.getElementById('login-dialog').close()">Cancel</button>
+      <button class="btn-primary" onclick="doLogin()">Sign in</button>
+    </div>
+  </dialog>
+
   <div class="board">
     <div class="column">
       <div class="column-header">Backlog</div>
-      <div id="col-backlog"
-           hx-get="/api/v1/board?status=backlog"
-           hx-trigger="load, every 30s"
-           hx-target="this"
-           hx-swap="innerHTML">
-        <div class="loading">Loading…</div>
-      </div>
+      <div id="col-backlog"><div class="loading">Loading...</div></div>
     </div>
     <div class="column">
       <div class="column-header">In Progress</div>
-      <div id="col-inprogress"
-           hx-get="/api/v1/board?status=in-progress"
-           hx-trigger="load, every 30s"
-           hx-target="this"
-           hx-swap="innerHTML">
-        <div class="loading">Loading…</div>
-      </div>
+      <div id="col-inprogress"><div class="loading">Loading...</div></div>
     </div>
     <div class="column">
       <div class="column-header">Blocked</div>
-      <div id="col-blocked"
-           hx-get="/api/v1/board?status=blocked"
-           hx-trigger="load, every 30s"
-           hx-target="this"
-           hx-swap="innerHTML">
-        <div class="loading">Loading…</div>
-      </div>
+      <div id="col-blocked"><div class="loading">Loading...</div></div>
     </div>
     <div class="column">
       <div class="column-header">Done</div>
-      <div id="col-done"
-           hx-get="/api/v1/board?status=done"
-           hx-trigger="load, every 30s"
-           hx-target="this"
-           hx-swap="innerHTML">
-        <div class="loading">Loading…</div>
-      </div>
+      <div id="col-done"><div class="loading">Loading...</div></div>
     </div>
   </div>
+
+  <script>
+    var token = null;
+
+    function renderCard(item) {
+      var el = document.createElement('div');
+      el.className = 'card';
+      el.innerHTML =
+        '<div class="card-title">' + esc(item.title) + '</div>' +
+        '<div class="card-meta">' +
+          (item.assigned_to ? 'Assigned: ' + esc(item.assigned_to) + ' &bull; ' : '') +
+          'By: ' + esc(item.created_by || 'unknown') +
+        '</div>' +
+        (item.description ? '<div class="card-meta" style="margin-top:0.375rem">' + esc(item.description) + '</div>' : '');
+      return el;
+    }
+
+    function esc(s) {
+      if (!s) return '';
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function loadColumn(colId, status) {
+      fetch('/api/v1/board?status=' + status)
+        .then(function(r) { return r.json(); })
+        .then(function(items) {
+          var col = document.getElementById(colId);
+          col.innerHTML = '';
+          if (!items || items.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'empty';
+            empty.textContent = 'No items';
+            col.appendChild(empty);
+          } else {
+            items.forEach(function(item) { col.appendChild(renderCard(item)); });
+          }
+        })
+        .catch(function() {
+          var col = document.getElementById(colId);
+          col.innerHTML = '<div class="empty">Error loading</div>';
+        });
+    }
+
+    function loadHealth() {
+      fetch('/api/v1/team/health')
+        .then(function(r) { return r.json(); })
+        .then(function(h) {
+          var el = document.getElementById('health-display');
+          el.innerHTML = '<span class="health-badge">' + h.active + ' active / ' + h.total + ' total</span>';
+        })
+        .catch(function() {
+          document.getElementById('health-display').textContent = 'health unavailable';
+        });
+    }
+
+    function refreshAll() {
+      loadColumn('col-backlog', 'backlog');
+      loadColumn('col-inprogress', 'in-progress');
+      loadColumn('col-blocked', 'blocked');
+      loadColumn('col-done', 'done');
+      loadHealth();
+    }
+
+    function doLogin() {
+      var username = document.getElementById('login-username').value;
+      var password = document.getElementById('login-password').value;
+      var errEl = document.getElementById('login-error');
+      errEl.style.display = 'none';
+      fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: username, password: password})
+      })
+        .then(function(r) {
+          if (!r.ok) { return r.json().then(function(e) { throw new Error(e.error || 'Login failed'); }); }
+          return r.json();
+        })
+        .then(function(data) {
+          token = data.token;
+          document.getElementById('login-dialog').close();
+          document.getElementById('login-password').value = '';
+        })
+        .catch(function(e) {
+          errEl.textContent = e.message || 'Login failed';
+          errEl.style.display = 'block';
+        });
+    }
+
+    refreshAll();
+    setInterval(refreshAll, 30000);
+  </script>
 </body>
 </html>`
 

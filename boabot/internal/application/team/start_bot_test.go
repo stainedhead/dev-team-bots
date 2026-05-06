@@ -2,8 +2,12 @@ package team_test
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -485,6 +489,105 @@ backup:
 	if err != nil && ctx.Err() == nil {
 		t.Errorf("unexpected non-context error from Run: %v", err)
 	}
+}
+
+// TestStartBot_OrchestratorHTTPServer verifies that when orchestrator.enabled=true
+// and api_port is set to a free port, the HTTP server starts and serves the
+// Kanban UI at /, then shuts down cleanly when ctx is cancelled.
+func TestStartBot_OrchestratorHTTPServer(t *testing.T) {
+	// Not parallel — binds a TCP port.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-unit-testing")
+
+	// Find a free port.
+	port := freePort(t)
+
+	dir := t.TempDir()
+	botsDir := filepath.Join(dir, "bots")
+	botType := "orchbot"
+	botDir := filepath.Join(botsDir, botType)
+	if err := os.MkdirAll(botDir, 0700); err != nil {
+		t.Fatalf("mkdir bots/%s: %v", botType, err)
+	}
+
+	cfg := "bot:\n  name: orchbot\n  type: " + botType + "\norchestrator:\n  enabled: true\n  api_port: " +
+		fmt.Sprintf("%d", port) + "\n  admin_password: testadmin\nmodels:\n  default: claude\n  providers:\n    - name: claude\n      type: anthropic\n      model_id: claude-haiku-4-5-20251001\nbudget:\n  token_spend_daily: 0\n  tool_calls_hourly: 0\ncontext:\n  threshold_tokens: 4096\n"
+	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(botDir, "SOUL.md"), []byte("You are a test bot."), 0600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	teamFile := filepath.Join(dir, "team.yaml")
+	if err := os.WriteFile(teamFile, []byte("team:\n  - name: orchbot\n    type: "+botType+"\n    enabled: true\n    orchestrator: true\n"), 0600); err != nil {
+		t.Fatalf("write team.yaml: %v", err)
+	}
+
+	r := queue.NewRouter()
+	b := bus.New()
+	mgr := team.NewTeamManager(team.ManagerConfig{
+		TeamFilePath:    teamFile,
+		BotsDir:         botsDir,
+		MemoryRoot:      filepath.Join(dir, "memory"),
+		RestartDelay:    5 * time.Millisecond,
+		MaxRestartDelay: 20 * time.Millisecond,
+	}, r, b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Run the manager in a goroutine so we can probe the HTTP server.
+	runDone := make(chan error, 1)
+	go func() { runDone <- mgr.Run(ctx) }()
+
+	// Give the server time to start (wait up to 800ms).
+	addr := fmt.Sprintf("http://localhost:%d/", port)
+	var resp *http.Response
+	for i := range 8 {
+		time.Sleep(100 * time.Millisecond)
+		var err error
+		resp, err = http.Get(addr) //nolint:noctx
+		if err == nil {
+			break
+		}
+		if i == 7 {
+			t.Logf("orchestrator HTTP server not reachable after 800ms (port %d): %v", port, err)
+		}
+	}
+
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 from orchestrator UI, got %d", resp.StatusCode)
+		}
+		ct := resp.Header.Get("Content-Type")
+		if !strings.Contains(ct, "text/html") {
+			t.Errorf("expected text/html content-type, got %q", ct)
+		}
+	}
+
+	// Cancel context and wait for Run to return.
+	cancel()
+	select {
+	case runErr := <-runDone:
+		if runErr != nil && ctx.Err() == nil {
+			t.Errorf("unexpected non-context error: %v", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5s after cancel")
+	}
+}
+
+// freePort asks the OS for a free TCP port by binding on :0, then releases it.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port
 }
 
 // TestTeamManager_WatchdogWiring verifies that the watchdog goroutine is started

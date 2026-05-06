@@ -15,7 +15,7 @@
 | 2 | Data Modeling | Not Started |
 | 3 | Architecture | Not Started |
 | 4 | Implementation — M1: Local Adapters | Complete |
-| 5 | Implementation — M2: Anthropic Provider | Not Started |
+| 5 | Implementation — M2: Anthropic Provider | Complete |
 | 6 | Implementation — M3: Vector Store + Embedder | Not Started |
 | 7 | Implementation — M4: TeamManager + Wiring | Not Started |
 | 8 | Implementation — M5: GitHub Backup | Not Started |
@@ -51,6 +51,20 @@
 
 ---
 
+## Phase 5 Tasks (M2: Anthropic Provider)
+
+- [x] `go get github.com/anthropics/anthropic-sdk-go@v1.40.0` added as direct dependency
+- [x] `internal/infrastructure/anthropic/provider.go` — Provider implementing domain.ModelProvider
+- [x] `internal/infrastructure/anthropic/mocks/messages_client.go` — injectable MessagesClient mock
+- [x] `internal/infrastructure/anthropic/provider_test.go` — 14 unit tests (100% statement coverage on provider.go)
+- [x] `internal/infrastructure/anthropic/provider_integration_test.go` — integration test with `//go:build integration` tag
+- [x] `NewFromEnv` reads `ANTHROPIC_API_KEY` exclusively; returns clear error if unset
+- [x] Rate-limit mapping: HTTP 429 and 503 → `RateLimitError` with `ErrRateLimit` sentinel
+- [x] `go fmt`, `go vet`, `golangci-lint` all pass with 0 issues
+- [x] Coverage: 100% on implementation package (90.7% total including mocks)
+
+---
+
 ## Blockers
 
 None.
@@ -61,3 +75,4 @@ None.
 
 - 2026-05-06 — Spec directory created from remove-aws-infra-PRD.md
 - 2026-05-06 — M1 complete: four local adapters implemented with TDD, all ≥90% coverage
+- 2026-05-06 — M2 complete: Anthropic SDK provider implemented with TDD, 100% coverage on implementation; anthropic-sdk-go v1.40.0 added

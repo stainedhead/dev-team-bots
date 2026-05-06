@@ -21,6 +21,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 )
 
 // TeamConfig is the parsed team.yaml structure.
@@ -48,6 +49,8 @@ type ManagerConfig struct {
 	RestartDelay time.Duration
 	// MaxRestartDelay is the maximum back-off. Defaults to 5 minutes.
 	MaxRestartDelay time.Duration
+	// WatchdogCfg configures the heap memory watchdog. Zero means disabled.
+	WatchdogCfg watchdog.Config
 }
 
 func (c *ManagerConfig) applyDefaults() {
@@ -164,6 +167,16 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 		return fmt.Errorf("team: no enabled bots found in %s", tm.cfg.TeamFilePath)
 	}
 
+	// Start the heap watchdog if either threshold is configured.
+	if tm.cfg.WatchdogCfg.WarnMB > 0 || tm.cfg.WatchdogCfg.HardMB > 0 {
+		wd := watchdog.New(tm.cfg.WatchdogCfg, cancel)
+		tm.wg.Add(1)
+		go func() {
+			defer tm.wg.Done()
+			wd.Run(runCtx)
+		}()
+	}
+
 	slog.Info("team started", "bots", started, "orchestrator", orchestratorName)
 
 	<-runCtx.Done()
@@ -261,6 +274,25 @@ func (tm *TeamManager) runBot(
 	return false
 }
 
+// validateEmbedderProvider checks that the provider named in botCfg.Memory.Embedder
+// exists in botCfg.Models.Providers and that its type supports embeddings.
+// Currently only "openai" supports the /v1/embeddings endpoint.
+func validateEmbedderProvider(botCfg config.Config) error {
+	embedderName := botCfg.Memory.Embedder
+	for _, pc := range botCfg.Models.Providers {
+		if pc.Name == embedderName {
+			if pc.Type != "openai" {
+				return fmt.Errorf(
+					"provider %q (type %q) does not support embeddings; only openai does",
+					pc.Name, pc.Type,
+				)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("embedder provider %q not found in providers list", embedderName)
+}
+
 // startBot wires adapters and runs the RunAgentUseCase for a single bot.
 func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestratorName string) error {
 	// Load per-bot config from <botsDir>/<type>/config.yaml.
@@ -268,6 +300,13 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	botCfg, err := config.Load(botCfgPath)
 	if err != nil {
 		return fmt.Errorf("load bot config for %q: %w", entry.Name, err)
+	}
+
+	// Validate embedder provider if a non-bm25 embedder is configured.
+	if botCfg.Memory.Embedder != "" && botCfg.Memory.Embedder != "bm25" {
+		if err := validateEmbedderProvider(botCfg); err != nil {
+			return fmt.Errorf("embedder validation for %q: %w", entry.Name, err)
+		}
 	}
 
 	// Read SOUL.md from <botsDir>/<type>/SOUL.md.
@@ -298,8 +337,12 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	if err != nil {
 		return fmt.Errorf("create BudgetTracker for %q: %w", entry.Name, err)
 	}
+	// Use a derived context for the budget flusher so it is cancelled when
+	// startBot returns (whether cleanly or due to an error).
+	budgetCtx, budgetCancel := context.WithCancel(ctx)
+	defer budgetCancel()
 	// Run budget flusher in a goroutine for the lifetime of this bot.
-	go func() { _ = bt.Run(ctx) }()
+	go func() { _ = bt.Run(budgetCtx) }()
 
 	// Wire domain.ModelProvider.
 	pf := newLocalProviderFactory(botCfg.Models.Providers)

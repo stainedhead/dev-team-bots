@@ -17,20 +17,41 @@ type Config struct {
 	Context      ContextConfig      `yaml:"context"`
 	Team         TeamFileConfig     `yaml:"team"`
 	Memory       MemoryConfig       `yaml:"memory"`
+	Backup       BackupConfig       `yaml:"backup"`
 }
 
 // TeamFileConfig holds paths used by TeamManager to locate team.yaml and the
-// per-bot configuration directories.  Fields are additive — M6 will populate
-// them fully; for now they default to paths relative to the binary.
+// per-bot configuration directories.
 type TeamFileConfig struct {
 	FilePath string `yaml:"file_path"`
 	BotsDir  string `yaml:"bots_dir"`
 }
 
-// MemoryConfig holds the base path for per-bot memory and vector files.
-// M6 will expand this with retention and quota settings.
+// MemoryConfig is the full memory configuration.
 type MemoryConfig struct {
-	Path string `yaml:"path"`
+	Path        string `yaml:"path"`         // default: <binary-dir>/memory
+	VectorIndex string `yaml:"vector_index"` // "cosine" (default) | "hnsw" (future)
+	Embedder    string `yaml:"embedder"`     // "bm25" (default) | provider name
+	HeapWarnMB  int    `yaml:"heap_warn_mb"` // 0 = disabled
+	HeapHardMB  int    `yaml:"heap_hard_mb"` // 0 = disabled
+}
+
+// BackupConfig controls the scheduled GitHub memory backup.
+type BackupConfig struct {
+	Enabled        bool             `yaml:"enabled"`
+	Schedule       string           `yaml:"schedule"` // cron; default "*/30 * * * *"
+	RestoreOnEmpty bool             `yaml:"restore_on_empty"`
+	GitHub         GitHubBackupConf `yaml:"github"`
+}
+
+// GitHubBackupConf holds GitHub-specific backup settings.
+// The token is read from BOABOT_BACKUP_TOKEN env var or credentials file —
+// never from config.yaml.
+type GitHubBackupConf struct {
+	Repo        string `yaml:"repo"`
+	Branch      string `yaml:"branch"` // default: "main"
+	AuthorName  string `yaml:"author_name"`
+	AuthorEmail string `yaml:"author_email"`
 }
 
 type BotConfig struct {

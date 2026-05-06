@@ -19,7 +19,7 @@
 | 6 | Implementation — M3: Vector Store + Embedder | Complete |
 | 7 | Implementation — M4: TeamManager + Wiring | Complete |
 | 8 | Implementation — M5: GitHub Backup | Complete |
-| 9 | Implementation — M6: Config + Credentials + Watchdog | Not Started |
+| 9 | Implementation — M6: Config + Credentials + Watchdog | Complete |
 | 10 | Implementation — M7: Remove AWS + CDK + Docs | Not Started |
 | 11 | Tests & Quality | Not Started |
 
@@ -111,6 +111,25 @@
 
 ---
 
+---
+
+## Phase 9 Tasks (M6: Config + Credentials + Watchdog)
+
+- [x] `internal/infrastructure/config/config.go` — Expanded MemoryConfig (VectorIndex, Embedder, HeapWarnMB, HeapHardMB) + added BackupConfig + GitHubBackupConf; AWSConfig retained for M7 removal (coverage: 100%)
+- [x] `internal/infrastructure/config/config_test.go` — 8 tests covering all new fields, AWS block still parses, round-trips, missing file, invalid YAML (coverage: 100%)
+- [x] `internal/infrastructure/credentials/credentials.go` — Minimal INI parser; Load/DefaultPath/Get; world-readable file → error; missing file → empty map; BOABOT_PROFILE env var selects profile (coverage: 90.4%)
+- [x] `internal/infrastructure/credentials/credentials_test.go` — 12 tests covering all profiles, world-readable, non-existent, Get fallback logic, DefaultPath (coverage: 90.4%)
+- [x] `internal/infrastructure/local/watchdog/watchdog.go` — Heap watchdog; injectable readMem; WarnMB → log; HardMB → shutdown + return; clean ctx cancel (coverage: 100%)
+- [x] `internal/infrastructure/local/watchdog/export_test.go` — SetReadMem seam for test injection
+- [x] `internal/infrastructure/local/watchdog/watchdog_test.go` — 7 tests: no-breach, warn, hard, exact boundary, ctx cancel, default interval, both disabled (coverage: 100%)
+- [x] `internal/application/team/team_manager.go` — WatchdogCfg added to ManagerConfig; watchdog goroutine wired into Run; validateEmbedderProvider (openai only); embedder validation in startBot; budget goroutine uses derived context to avoid temp-dir cleanup race (coverage: 95.6%)
+- [x] `cmd/boabot/main.go` — credentials.Load at startup; applyCredential for ANTHROPIC_API_KEY + BOABOT_BACKUP_TOKEN; WatchdogCfg wired from cfg.Memory.HeapWarnMB/HeapHardMB
+- [x] All packages pass `go test -race`, `go fmt`, `go vet`, `golangci-lint` with 0 issues
+- [x] Binary builds: `go build ./cmd/boabot`
+- [x] No new external dependencies (credentials package uses stdlib only)
+
+---
+
 ## Blockers
 
 None.
@@ -125,3 +144,4 @@ None.
 - 2026-05-06 — M3 complete: local VectorStore (cosine similarity, 92.4% coverage) + BM25 embedder (feature hashing, 100% coverage); 40ms/search at 100k×512-dim
 - 2026-05-06 — M4 complete: TeamManager + BotRegistry + localProviderFactory + main.go rewired to TeamManager; 94.5% coverage on team package; binary builds and starts without AWS
 - 2026-05-06 — M5 complete: GitHub memory backup adapter (90.1% cov) + ScheduledBackupUseCase (100% cov) + boabotctl memory subcommands (100% cov); go-git v5.18.0 added
+- 2026-05-06 — M6 complete: config schema expanded, INI credentials parser, heap watchdog, embedder validation; all packages ≥90% coverage; binary builds

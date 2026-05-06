@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/credentials"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 )
 
 var version = "dev"
@@ -49,6 +52,21 @@ func defaultConfigPath() string {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
+	// Load credentials file and apply to environment.
+	credsPath, err := credentials.DefaultPath()
+	if err != nil {
+		slog.Warn("could not determine credentials file path", "err", err)
+	} else {
+		creds, err := credentials.Load(credsPath)
+		if err != nil {
+			return fmt.Errorf("credentials: %w", err) // world-readable file → fatal
+		}
+		// Override ANTHROPIC_API_KEY and BOABOT_BACKUP_TOKEN from credentials file
+		// only if the env var is not already set.
+		applyCredential(creds, "anthropic_api_key", "ANTHROPIC_API_KEY")
+		applyCredential(creds, "boabot_backup_token", "BOABOT_BACKUP_TOKEN")
+	}
+
 	router := queue.NewRouter()
 	b := bus.New()
 
@@ -58,10 +76,14 @@ func run(ctx context.Context, cfg config.Config) error {
 		MemoryRoot:      cfg.Memory.Path,
 		RestartDelay:    time.Second,
 		MaxRestartDelay: 5 * time.Minute,
+		WatchdogCfg: watchdog.Config{
+			SampleInterval: 30 * time.Second,
+			WarnMB:         cfg.Memory.HeapWarnMB,
+			HardMB:         cfg.Memory.HeapHardMB,
+		},
 	}
 
-	// Apply sensible binary-relative defaults for fields not yet in the config
-	// file.  M6 will wire these from config.yaml fully.
+	// Apply sensible binary-relative defaults for path fields.
 	exe, _ := os.Executable()
 	binDir := filepath.Dir(exe)
 
@@ -77,4 +99,14 @@ func run(ctx context.Context, cfg config.Config) error {
 
 	mgr := team.NewTeamManager(managerCfg, router, b)
 	return mgr.Run(ctx)
+}
+
+// applyCredential sets envKey from the credentials map if the env var is not
+// already set.
+func applyCredential(creds map[string]string, credKey, envKey string) {
+	if os.Getenv(envKey) == "" {
+		if v := credentials.Get(creds, credKey, ""); v != "" {
+			os.Setenv(envKey, v) //nolint:errcheck
+		}
+	}
 }

@@ -93,3 +93,81 @@ func TestLocalProviderFactory_AnthropicWithFakeKey(t *testing.T) {
 		t.Error("expected non-nil provider with fake key")
 	}
 }
+
+// --- validateEmbedderProvider tests ------------------------------------------
+
+// TestValidateEmbedderProvider_OpenAI verifies that openai type is accepted.
+func TestValidateEmbedderProvider_OpenAI(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		Memory: config.MemoryConfig{Embedder: "my-embedder"},
+		Models: config.ModelsConfig{
+			Providers: []config.ProviderConfig{
+				{Name: "my-embedder", Type: "openai", ModelID: "text-embedding-3-small"},
+			},
+		},
+	}
+	if err := team.ValidateEmbedderProvider(cfg); err != nil {
+		t.Errorf("expected nil error for openai embedder, got %v", err)
+	}
+}
+
+// TestValidateEmbedderProvider_AnthropicFails verifies that anthropic type is rejected.
+func TestValidateEmbedderProvider_AnthropicFails(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		Memory: config.MemoryConfig{Embedder: "my-embedder"},
+		Models: config.ModelsConfig{
+			Providers: []config.ProviderConfig{
+				{Name: "my-embedder", Type: "anthropic", ModelID: "claude-haiku-4-5-20251001"},
+			},
+		},
+	}
+	err := team.ValidateEmbedderProvider(cfg)
+	if err == nil {
+		t.Fatal("expected error for anthropic embedder, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support embeddings") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestValidateEmbedderProvider_BedrockFails verifies that bedrock type is rejected.
+func TestValidateEmbedderProvider_BedrockFails(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		Memory: config.MemoryConfig{Embedder: "my-embedder"},
+		Models: config.ModelsConfig{
+			Providers: []config.ProviderConfig{
+				{Name: "my-embedder", Type: "bedrock", ModelID: "amazon.titan-embed-text-v1"},
+			},
+		},
+	}
+	err := team.ValidateEmbedderProvider(cfg)
+	if err == nil {
+		t.Fatal("expected error for bedrock embedder, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support embeddings") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestValidateEmbedderProvider_NotFound verifies that a missing provider name returns an error.
+func TestValidateEmbedderProvider_NotFound(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		Memory: config.MemoryConfig{Embedder: "nonexistent-embedder"},
+		Models: config.ModelsConfig{
+			Providers: []config.ProviderConfig{
+				{Name: "other", Type: "openai", ModelID: "text-embedding-3-small"},
+			},
+		},
+	}
+	err := team.ValidateEmbedderProvider(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing embedder provider, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}

@@ -8,9 +8,9 @@ A system of cooperative, always-on AI agents that function as a software develop
 
 | Module | Description |
 |---|---|
-| [`boabot/`](boabot/) | Agent runtime — the shared binary deployed to AWS ECS |
+| [`boabot/`](boabot/) | Agent runtime — local single-binary process, no cloud account required |
 | [`boabotctl/`](boabotctl/) | Operator CLI — communicates with the orchestrator via REST API |
-| [`boabot-team/`](boabot-team/) | Bot personalities, configurations, and per-bot infrastructure |
+| [`boabot-team/`](boabot-team/) | Bot personalities and configurations |
 
 ## Documentation
 
@@ -22,7 +22,10 @@ A system of cooperative, always-on AI agents that function as a software develop
 
 ## User Documentation
 
-- [`user-docs/getting-started.md`](user-docs/getting-started.md) — set up and connect to a running BaoBot team
+- [`user-docs/getting-started.md`](user-docs/getting-started.md) — connect to a running BaoBot team as an operator
+- [`boabot/user-docs/getting-started.md`](boabot/user-docs/getting-started.md) — self-host a local BaoBot team from source
+- [`boabot/user-docs/configuration.md`](boabot/user-docs/configuration.md) — boabot configuration reference
+- [`boabot/user-docs/orchestrator.md`](boabot/user-docs/orchestrator.md) — orchestrator mode guide
 - [`boabotctl/user-docs/baobotctl.md`](boabotctl/user-docs/baobotctl.md) — operator CLI reference
 
 ## Development
@@ -32,8 +35,8 @@ See [`AGENTS.md`](AGENTS.md) for coding standards and [`CLAUDE.md`](CLAUDE.md) f
 ### Prerequisites
 
 - Go 1.26+
-- AWS CLI configured
-- `golangci-lint` installed
+- `golangci-lint` installed (`brew install golangci-lint` on macOS)
+- An Anthropic API key (`ANTHROPIC_API_KEY`) for the default model provider
 
 ### Build
 
@@ -55,10 +58,6 @@ cd boabotctl && go test -race -coverprofile=coverage.out ./...
 cd boabot && golangci-lint run
 cd boabotctl && golangci-lint run
 ```
-
-## Infrastructure
-
-Infrastructure is managed with AWS CDK. See [`boabot/cdk/`](boabot/cdk/) for shared infrastructure and [`boabot-team/cdk/`](boabot-team/cdk/) for per-bot infrastructure.
 
 ## Full Specification
 

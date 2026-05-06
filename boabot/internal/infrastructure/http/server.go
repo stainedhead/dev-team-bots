@@ -1215,8 +1215,8 @@ const kanbanHTML = `<!DOCTYPE html>
   function openNewItem(){
     var sel=ge('ni-bot');
     sel.innerHTML='<option value="">Unassigned</option>';
-    allBots.filter(function(b){return b.status==='active'}).forEach(function(b){
-      var o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.appendChild(o);
+    allBots.forEach(function(b){
+      var o=document.createElement('option');o.value=b.name;o.textContent=b.name+(b.status==='active'?'':' (offline)');sel.appendChild(o);
     });
     ge('ni-err').style.display='none';
     dlg('ni-dlg');
@@ -1366,12 +1366,18 @@ const kanbanHTML = `<!DOCTYPE html>
   function loadChat(){
     var el=ge('chat-hist');
     if(!token){el.innerHTML='<div class="nil">Sign in to chat</div>';return}
-    // Populate bot selector from active bots.
+    // Populate bot selector from all known bots; default to orchestrator.
     var sel=ge('chat-bot-sel');
-    sel.innerHTML='<option value="">— select bot —</option>';
-    allBots.filter(function(b){return b.status==='active'}).forEach(function(b){
-      var o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.appendChild(o);
+    var prev=sel.value;
+    sel.innerHTML='';
+    var defaultVal='';
+    allBots.forEach(function(b){
+      var o=document.createElement('option');o.value=b.name;o.textContent=b.name+(b.status==='active'?'':' (offline)');
+      if(!defaultVal||b.bot_type==='orchestrator')defaultVal=b.name;
+      sel.appendChild(o);
     });
+    // Restore previous selection or default to orchestrator.
+    sel.value=(prev&&allBots.some(function(b){return b.name===prev}))?prev:defaultVal;
     api('GET','/api/v1/chat',null)
       .then(function(msgs){
         el.innerHTML='';

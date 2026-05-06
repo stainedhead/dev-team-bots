@@ -92,6 +92,10 @@ type TeamManager struct {
 	// Replaced in tests via export_test.go to avoid real file I/O and network calls.
 	botRunner func(ctx context.Context, entry BotEntry, orchestratorName string) error
 
+	// teamEntries holds all enabled bot entries, set by Run before any bots start.
+	// Used by startBot to pre-register the full team in the orchestrator control plane.
+	teamEntries []BotEntry
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
@@ -142,12 +146,14 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	}
 
 	// Pre-register all enabled bots with the Router so channels exist before
-	// any bot tries to send to another.
+	// any bot tries to send to another. Also snapshot the list so startBot can
+	// seed the orchestrator control plane with every team member.
 	for _, e := range teamCfg.Team {
 		if !e.Enabled {
 			continue
 		}
 		tm.router.Register(e.Name, 0)
+		tm.teamEntries = append(tm.teamEntries, e)
 	}
 
 	// Start each enabled bot in its own goroutine.
@@ -422,11 +428,15 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		board := orchestratorlocal.NewInMemoryBoardStore()
 		cp := orchestratorlocal.NewInMemoryControlPlane()
 
-		if regErr := cp.Register(ctx, domain.BotEntry{
-			Name:    entry.Name,
-			BotType: entry.Type,
-		}); regErr != nil {
-			return fmt.Errorf("register bot with control plane for %q: %w", entry.Name, regErr)
+		// Pre-register every enabled team member so the dashboard shows the
+		// full roster immediately, even before individual bots send heartbeats.
+		for _, te := range tm.teamEntries {
+			if regErr := cp.Register(ctx, domain.BotEntry{
+				Name:    te.Name,
+				BotType: te.Type,
+			}); regErr != nil {
+				return fmt.Errorf("register bot with control plane for %q: %w", te.Name, regErr)
+			}
 		}
 
 		// Wire direct-task store and dispatcher. The orchestrator's own queue

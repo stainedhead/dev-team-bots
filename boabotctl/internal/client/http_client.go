@@ -70,7 +70,7 @@ func checkResponse(resp *http.Response) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 		var errBody struct {
 			Error string `json:"error"`
@@ -91,7 +91,7 @@ func decodeJSON(resp *http.Response, v any) error {
 	if err := checkResponse(resp); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}

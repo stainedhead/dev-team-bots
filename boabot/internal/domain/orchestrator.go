@@ -16,13 +16,13 @@ type ControlPlane interface {
 }
 
 type BotEntry struct {
-	Name          string
-	BotType       string
-	QueueURL      string
-	AgentCardURL  string // S3 URL of the bot's published Agent Card
-	Status        BotStatus
-	LastHeartbeat time.Time
-	RegisteredAt  time.Time
+	Name          string    `json:"name"`
+	BotType       string    `json:"bot_type"`
+	QueueURL      string    `json:"queue_url,omitempty"`
+	AgentCardURL  string    `json:"agent_card_url,omitempty"`
+	Status        BotStatus `json:"status"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	RegisteredAt  time.Time `json:"registered_at"`
 }
 
 type BotStatus string

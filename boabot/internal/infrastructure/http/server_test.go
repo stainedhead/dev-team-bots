@@ -754,17 +754,17 @@ func TestKanbanUI_HasVanillaJS(t *testing.T) {
 	if strings.Contains(body, "unpkg.com/htmx") {
 		t.Error("kanban UI must not load htmx from external CDN")
 	}
-	// Must use fetch() for board data.
-	if !strings.Contains(body, "fetch('/api/v1/board") {
-		t.Error("kanban UI must fetch board data via /api/v1/board")
+	// Must reference the board API endpoint.
+	if !strings.Contains(body, "/api/v1/board") {
+		t.Error("kanban UI must reference /api/v1/board")
 	}
 	// Must use setInterval for auto-refresh.
 	if !strings.Contains(body, "setInterval(") {
 		t.Error("kanban UI must use setInterval for periodic refresh")
 	}
-	// Must fetch team health.
-	if !strings.Contains(body, "/api/v1/team/health") {
-		t.Error("kanban UI must fetch /api/v1/team/health")
+	// Must fetch team data.
+	if !strings.Contains(body, "/api/v1/team") {
+		t.Error("kanban UI must reference /api/v1/team")
 	}
 }
 

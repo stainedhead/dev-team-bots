@@ -608,170 +608,540 @@ const kanbanHTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BaoBot Kanban</title>
+  <title>BaoBot Control</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
-    header { padding: 1rem 2rem; background: #1e293b; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 1rem; }
-    header h1 { font-size: 1.25rem; font-weight: 600; }
-    .header-right { margin-left: auto; display: flex; align-items: center; gap: 1rem; font-size: 0.75rem; color: #64748b; }
-    .health-badge { padding: 0.25rem 0.75rem; border-radius: 9999px; background: #166534; color: #86efac; font-size: 0.75rem; }
-    .board { display: flex; gap: 1.5rem; padding: 2rem; overflow-x: auto; }
-    .column { background: #1e293b; border-radius: 0.5rem; min-width: 280px; padding: 1rem; }
-    .column-header { font-weight: 600; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 1rem; }
-    .card { background: #0f172a; border: 1px solid #334155; border-radius: 0.375rem; padding: 0.75rem; margin-bottom: 0.5rem; cursor: pointer; }
-    .card:hover { border-color: #64748b; }
-    .card-title { font-size: 0.875rem; font-weight: 500; }
-    .card-meta { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
-    .empty { text-align: center; color: #475569; padding: 1.5rem; font-size: 0.875rem; font-style: italic; }
-    .loading { text-align: center; color: #64748b; padding: 2rem; }
-    .badge { display: inline-block; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; }
-    .badge-active { background: #166534; color: #86efac; }
-    .btn-login { padding: 0.375rem 0.75rem; border-radius: 0.375rem; background: #334155; color: #e2e8f0; border: 1px solid #475569; cursor: pointer; font-size: 0.75rem; }
-    .btn-login:hover { background: #475569; }
-    dialog { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; min-width: 320px; }
-    dialog::backdrop { background: rgba(0,0,0,0.6); }
-    dialog h2 { margin-bottom: 1rem; font-size: 1rem; }
-    dialog label { display: block; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.25rem; margin-top: 0.75rem; }
-    dialog input { width: 100%; padding: 0.5rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.375rem; color: #e2e8f0; font-size: 0.875rem; }
-    dialog .actions { margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end; }
-    .btn-primary { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; }
-    .btn-secondary { padding: 0.5rem 1rem; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; }
-    .error-msg { color: #f87171; font-size: 0.75rem; margin-top: 0.5rem; }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#080e1a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+    /* ── Header ── */
+    header{padding:.6rem 1.25rem;background:#0d1424;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.75rem;flex-shrink:0;z-index:10}
+    .logo{font-size:1rem;font-weight:700;color:#60a5fa;letter-spacing:-.02em;white-space:nowrap}
+    .logo span{color:#475569;font-weight:400}
+    .hdr-mid{flex:1;display:flex;align-items:center;gap:.75rem}
+    .hpill{padding:.15rem .6rem;border-radius:9999px;font-size:.7rem;font-weight:600}
+    .hpill-ok{background:#14532d;color:#86efac}
+    .hpill-warn{background:#78350f;color:#fde68a}
+    .hdr-right{display:flex;align-items:center;gap:.5rem}
+    .tick{font-size:.65rem;color:#334155}
+
+    /* ── Buttons ── */
+    .btn{padding:.3rem .7rem;border-radius:.35rem;cursor:pointer;font-size:.75rem;font-weight:500;border:none;line-height:1.4;transition:filter .15s}
+    .btn:hover{filter:brightness(1.15)}
+    .btn-primary{background:#2563eb;color:#fff}
+    .btn-secondary{background:#1e293b;color:#cbd5e1;border:1px solid #2d3e5a}
+    .btn-ghost{background:transparent;color:#64748b;border:1px solid #1a2744}
+    .btn-ghost:hover{color:#e2e8f0;border-color:#334155}
+    .btn-danger{background:#7f1d1d;color:#fca5a5}
+    .btn-success{background:#14532d;color:#86efac}
+    .btn-warn{background:#78350f;color:#fde68a}
+    .btn-sm{padding:.15rem .45rem;font-size:.68rem}
+
+    /* ── App shell ── */
+    .shell{display:flex;flex:1;overflow:hidden}
+
+    /* ── Sidebar ── */
+    aside{width:210px;flex-shrink:0;background:#0a1020;border-right:1px solid #1a2744;display:flex;flex-direction:column;overflow:hidden}
+    .sb-hdr{padding:.5rem .75rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#334155;border-bottom:1px solid #1a2744;flex-shrink:0}
+    .bot-list{flex:1;overflow-y:auto;padding:.375rem}
+    .bcard{padding:.5rem .625rem;border-radius:.35rem;margin-bottom:.3rem;background:#0f1829;border:1px solid #1a2744;cursor:default}
+    .bcard:hover{border-color:#2d3e5a}
+    .brow{display:flex;align-items:center;gap:.4rem}
+    .bdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+    .bdot-on{background:#22c55e;box-shadow:0 0 5px #22c55e88}
+    .bdot-off{background:#334155}
+    .bname{font-size:.72rem;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .bbadge{padding:.1rem .35rem;border-radius:9999px;font-size:.62rem;font-weight:700;background:#1e3a5f;color:#60a5fa;flex-shrink:0}
+    .bmeta{margin-top:.25rem;font-size:.62rem;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .bbar{height:2px;background:#111827;border-radius:1px;margin-top:.3rem;overflow:hidden}
+    .bfill{height:100%;border-radius:1px;transition:width .4s}
+    .bfill-none{width:0}
+    .bfill-lo{background:#22c55e}
+    .bfill-md{background:#f59e0b}
+    .bfill-hi{background:#ef4444}
+
+    /* ── Main ── */
+    main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+
+    /* ── Tab bar ── */
+    .tabbar{display:flex;align-items:stretch;background:#0a1020;border-bottom:1px solid #1a2744;flex-shrink:0;padding:0 1rem}
+    .tab{padding:.55rem .85rem;font-size:.75rem;font-weight:500;color:#475569;cursor:pointer;border:none;background:transparent;border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s,border-color .15s}
+    .tab:hover{color:#94a3b8}
+    .tab.on{color:#60a5fa;border-bottom-color:#3b82f6}
+
+    /* ── Panes ── */
+    .pane{display:none;flex:1;overflow:auto;padding:1.25rem}
+    .pane.on{display:flex;flex-direction:column}
+
+    /* ── Board ── */
+    .board{display:flex;gap:.875rem;flex:1;align-items:flex-start;min-height:0}
+    .col{background:#0f1829;border:1px solid #1a2744;border-radius:.5rem;flex:1;min-width:200px;display:flex;flex-direction:column;max-height:100%}
+    .col.over{border-color:#3b82f6;background:#0d1d35}
+    .col-hdr{padding:.6rem .75rem;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.4rem;flex-shrink:0}
+    .col-cnt{padding:.05rem .35rem;border-radius:9999px;background:#1a2744;color:#475569;font-size:.6rem;font-weight:600}
+    .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
+    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.55rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
+    .card:hover{border-color:#2d3e5a}
+    .card.dragging{opacity:.35;cursor:grabbing}
+    .card-title{font-size:.78rem;font-weight:500;line-height:1.35}
+    .card-desc{font-size:.68rem;color:#475569;margin-top:.2rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .card-foot{display:flex;align-items:center;gap:.3rem;margin-top:.4rem}
+    .card-who{font-size:.62rem;color:#60a5fa;background:#1e3a5f22;padding:.08rem .35rem;border-radius:9999px;border:1px solid #1e3a5f44}
+    .card-age{font-size:.62rem;color:#334155;margin-left:auto}
+    .nil{text-align:center;color:#1e2d4a;padding:1.5rem .5rem;font-size:.75rem;font-style:italic}
+
+    /* ── Tables ── */
+    .sec-hdr{display:flex;align-items:center;gap:.75rem;margin-bottom:.875rem;flex-shrink:0}
+    .sec-title{font-size:.875rem;font-weight:600}
+    .sec-acts{margin-left:auto;display:flex;gap:.375rem}
+    table{width:100%;border-collapse:collapse;font-size:.78rem}
+    th{text-align:left;padding:.4rem .65rem;font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#334155;border-bottom:1px solid #1a2744;white-space:nowrap}
+    td{padding:.55rem .65rem;border-bottom:1px solid #0f1829;vertical-align:middle}
+    tr:hover td{background:#0d1424}
+    .pill{display:inline-block;padding:.1rem .45rem;border-radius:9999px;font-size:.62rem;font-weight:600;white-space:nowrap}
+    .pill-ok{background:#14532d;color:#86efac}
+    .pill-warn{background:#78350f;color:#fde68a}
+    .pill-off{background:#1e293b;color:#475569}
+    .pill-admin{background:#312e81;color:#a5b4fc}
+    .pill-user{background:#1e293b;color:#64748b}
+    .acts{display:flex;gap:.3rem;align-items:center}
+    .empty-state{text-align:center;padding:3rem;color:#1e2d4a;font-style:italic;font-size:.8rem}
+
+    /* ── Dialogs ── */
+    dialog{background:#0f1829;color:#e2e8f0;border:1px solid #1a2744;border-radius:.625rem;padding:1.375rem;min-width:330px;box-shadow:0 20px 60px #000a}
+    dialog::backdrop{background:#000b}
+    dialog h2{font-size:.95rem;font-weight:600;margin-bottom:1rem}
+    .fg{margin-bottom:.75rem}
+    .fl{display:block;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:.3rem}
+    .fi{width:100%;padding:.45rem .6rem;background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem}
+    .fi:focus{outline:none;border-color:#3b82f6}
+    textarea.fi{resize:vertical;min-height:72px}
+    select.fi{cursor:pointer}
+    .da{margin-top:1rem;display:flex;gap:.4rem;justify-content:flex-end}
+    .errmsg{color:#f87171;font-size:.7rem;margin-top:.4rem}
+
+    /* ── Scrollbars ── */
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:#1a2744;border-radius:2px}
+    ::-webkit-scrollbar-thumb:hover{background:#2d3e5a}
   </style>
 </head>
 <body>
-  <header>
-    <h1>BaoBot Kanban</h1>
-    <div class="header-right">
-      <span id="health-display">Loading health...</span>
-      <span>Refreshing every 30s</span>
-      <button class="btn-login" onclick="document.getElementById('login-dialog').showModal()">Login</button>
-    </div>
-  </header>
-
-  <dialog id="login-dialog">
-    <h2>Login</h2>
-    <label for="login-username">Username</label>
-    <input id="login-username" type="text" autocomplete="username" />
-    <label for="login-password">Password</label>
-    <input id="login-password" type="password" autocomplete="current-password" />
-    <div id="login-error" class="error-msg" style="display:none"></div>
-    <div class="actions">
-      <button class="btn-secondary" onclick="document.getElementById('login-dialog').close()">Cancel</button>
-      <button class="btn-primary" onclick="doLogin()">Sign in</button>
-    </div>
-  </dialog>
-
-  <div class="board">
-    <div class="column">
-      <div class="column-header">Backlog</div>
-      <div id="col-backlog"><div class="loading">Loading...</div></div>
-    </div>
-    <div class="column">
-      <div class="column-header">In Progress</div>
-      <div id="col-inprogress"><div class="loading">Loading...</div></div>
-    </div>
-    <div class="column">
-      <div class="column-header">Blocked</div>
-      <div id="col-blocked"><div class="loading">Loading...</div></div>
-    </div>
-    <div class="column">
-      <div class="column-header">Done</div>
-      <div id="col-done"><div class="loading">Loading...</div></div>
-    </div>
+<header>
+  <div class="logo">BaoBot <span>Control</span></div>
+  <div class="hdr-mid">
+    <span id="hpill" class="hpill hpill-warn">loading…</span>
+    <span class="tick" id="tick">–</span>
   </div>
+  <div class="hdr-right">
+    <button id="btn-new" class="btn btn-primary" style="display:none" onclick="openNewItem()">+ New Item</button>
+    <span id="uinfo" style="display:none;align-items:center;gap:.5rem">
+      <span id="ulabel" style="font-size:.72rem;color:#64748b"></span>
+      <button class="btn btn-ghost btn-sm" onclick="openChgPw()">Password</button>
+      <button class="btn btn-ghost btn-sm" onclick="doLogout()">Logout</button>
+    </span>
+    <button id="btn-login" class="btn btn-secondary" onclick="dlg('login-dlg')">Login</button>
+  </div>
+</header>
 
-  <script>
-    var token = null;
+<div class="shell">
+  <aside>
+    <div class="sb-hdr">Team Roster</div>
+    <div class="bot-list" id="roster"><div class="nil" style="padding:1rem">Loading…</div></div>
+  </aside>
 
-    function renderCard(item) {
-      var el = document.createElement('div');
-      el.className = 'card';
-      el.innerHTML =
-        '<div class="card-title">' + esc(item.title) + '</div>' +
-        '<div class="card-meta">' +
-          (item.assigned_to ? 'Assigned: ' + esc(item.assigned_to) + ' &bull; ' : '') +
-          'By: ' + esc(item.created_by || 'unknown') +
-        '</div>' +
-        (item.description ? '<div class="card-meta" style="margin-top:0.375rem">' + esc(item.description) + '</div>' : '');
-      return el;
-    }
+  <main>
+    <div class="tabbar">
+      <button class="tab on" onclick="tab('board')">Board</button>
+      <button class="tab" onclick="tab('skills')" id="t-skills">Skills</button>
+      <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
+      <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>
+    </div>
 
-    function esc(s) {
-      if (!s) return '';
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
+    <!-- Board -->
+    <div class="pane on" id="pane-board">
+      <div class="board">
+        <div class="col" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
+          <div class="col-body" id="b-backlog"><div class="nil">No items</div></div>
+        </div>
+        <div class="col" id="col-inprogress" data-status="in-progress" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">In Progress <span class="col-cnt" id="n-inprogress">0</span></div>
+          <div class="col-body" id="b-inprogress"><div class="nil">No items</div></div>
+        </div>
+        <div class="col" id="col-blocked" data-status="blocked" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">Blocked <span class="col-cnt" id="n-blocked">0</span></div>
+          <div class="col-body" id="b-blocked"><div class="nil">No items</div></div>
+        </div>
+        <div class="col" id="col-done" data-status="done" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">Done <span class="col-cnt" id="n-done">0</span></div>
+          <div class="col-body" id="b-done"><div class="nil">No items</div></div>
+        </div>
+      </div>
+    </div>
 
-    function loadColumn(colId, status) {
-      fetch('/api/v1/board?status=' + status)
-        .then(function(r) { return r.json(); })
-        .then(function(items) {
-          var col = document.getElementById(colId);
-          col.innerHTML = '';
-          if (!items || items.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'empty';
-            empty.textContent = 'No items';
-            col.appendChild(empty);
-          } else {
-            items.forEach(function(item) { col.appendChild(renderCard(item)); });
-          }
-        })
-        .catch(function() {
-          var col = document.getElementById(colId);
-          col.innerHTML = '<div class="empty">Error loading</div>';
-        });
-    }
+    <!-- Skills -->
+    <div class="pane" id="pane-skills">
+      <div class="sec-hdr"><div class="sec-title">Skills</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button></div></div>
+      <div id="skills-body"><div class="empty-state">Loading…</div></div>
+    </div>
 
-    function loadHealth() {
-      fetch('/api/v1/team/health')
-        .then(function(r) { return r.json(); })
-        .then(function(h) {
-          var el = document.getElementById('health-display');
-          el.innerHTML = '<span class="health-badge">' + h.active + ' active / ' + h.total + ' total</span>';
-        })
-        .catch(function() {
-          document.getElementById('health-display').textContent = 'health unavailable';
-        });
-    }
+    <!-- DLQ -->
+    <div class="pane" id="pane-dlq">
+      <div class="sec-hdr"><div class="sec-title">Dead Letter Queue</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadDLQ()">Refresh</button></div></div>
+      <div id="dlq-body"><div class="empty-state">Loading…</div></div>
+    </div>
 
-    function refreshAll() {
-      loadColumn('col-backlog', 'backlog');
-      loadColumn('col-inprogress', 'in-progress');
-      loadColumn('col-blocked', 'blocked');
-      loadColumn('col-done', 'done');
-      loadHealth();
-    }
+    <!-- Users (admin) -->
+    <div class="pane" id="pane-users">
+      <div class="sec-hdr">
+        <div class="sec-title">Users</div>
+        <div class="sec-acts"><button class="btn btn-primary btn-sm" onclick="dlg('cu-dlg')">+ Add User</button></div>
+      </div>
+      <div id="users-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </main>
+</div>
 
-    function doLogin() {
-      var username = document.getElementById('login-username').value;
-      var password = document.getElementById('login-password').value;
-      var errEl = document.getElementById('login-error');
-      errEl.style.display = 'none';
-      fetch('/api/v1/auth/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username: username, password: password})
+<!-- Login -->
+<dialog id="login-dlg">
+  <h2>Sign In</h2>
+  <div class="fg"><label class="fl">Username</label><input class="fi" id="login-u" type="text" autocomplete="username"/></div>
+  <div class="fg"><label class="fl">Password</label><input class="fi" id="login-p" type="password" autocomplete="current-password"/></div>
+  <div class="errmsg" id="login-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('login-dlg')">Cancel</button><button class="btn btn-primary" onclick="doLogin()">Sign in</button></div>
+</dialog>
+
+<!-- New Item -->
+<dialog id="ni-dlg">
+  <h2>New Work Item</h2>
+  <div class="fg"><label class="fl">Title</label><input class="fi" id="ni-title" type="text" placeholder="What needs to be done?"/></div>
+  <div class="fg"><label class="fl">Description</label><textarea class="fi" id="ni-desc" placeholder="Optional details…"></textarea></div>
+  <div class="fg"><label class="fl">Assign to bot</label><select class="fi" id="ni-bot"><option value="">Unassigned</option></select></div>
+  <div class="errmsg" id="ni-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('ni-dlg')">Cancel</button><button class="btn btn-primary" onclick="doCreateItem()">Create</button></div>
+</dialog>
+
+<!-- Create User (admin) -->
+<dialog id="cu-dlg">
+  <h2>Add User</h2>
+  <div class="fg"><label class="fl">Username</label><input class="fi" id="cu-u" type="text" autocomplete="off"/></div>
+  <div class="fg"><label class="fl">Role</label><select class="fi" id="cu-r"><option value="user">user</option><option value="admin">admin</option></select></div>
+  <div class="errmsg" id="cu-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('cu-dlg')">Cancel</button><button class="btn btn-primary" onclick="doCreateUser()">Create</button></div>
+</dialog>
+
+<!-- Set Password (admin) -->
+<dialog id="sp-dlg">
+  <h2>Set Password</h2>
+  <div class="fg"><label class="fl">Username</label><div id="sp-who" style="font-size:.82rem;color:#64748b;padding:.25rem 0"></div></div>
+  <div class="fg"><label class="fl">New Password</label><input class="fi" id="sp-pw" type="password" autocomplete="new-password"/></div>
+  <div class="errmsg" id="sp-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('sp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doSetPw()">Update</button></div>
+</dialog>
+
+<!-- Change Own Password -->
+<dialog id="cp-dlg">
+  <h2>Change Password</h2>
+  <div class="fg"><label class="fl">Current Password</label><input class="fi" id="cp-old" type="password"/></div>
+  <div class="fg"><label class="fl">New Password</label><input class="fi" id="cp-new" type="password" autocomplete="new-password"/></div>
+  <div class="errmsg" id="cp-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('cp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doChangePw()">Update</button></div>
+</dialog>
+
+<script>
+  // ── State ───────────────────────────────────────────────────────────────────
+  var token=null, me=null, myRole=null;
+  var allItems=[], allBots=[];
+  var dragId=null, setPwTarget=null;
+  var activeTab='board', countdown=30, tickTimer=null;
+
+  // ── Util ────────────────────────────────────────────────────────────────────
+  function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function dlg(id){document.getElementById(id).showModal()}
+  function cls(id){document.getElementById(id).close()}
+  function ge(id){return document.getElementById(id)}
+  function ago(iso){
+    var d=new Date(iso),diff=Math.floor((Date.now()-d)/1000);
+    if(diff<0||isNaN(diff))return'?';
+    if(diff<60)return diff+'s ago';
+    if(diff<3600)return Math.floor(diff/60)+'m ago';
+    if(diff<86400)return Math.floor(diff/3600)+'h ago';
+    return Math.floor(diff/86400)+'d ago';
+  }
+
+  // ── API ─────────────────────────────────────────────────────────────────────
+  function api(method,url,body){
+    var opts={method:method,headers:{}};
+    if(body!==null&&body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
+    if(token)opts.headers['Authorization']='Bearer '+token;
+    return fetch(url,opts).then(function(r){
+      if(r.status===204)return null;
+      return r.json().then(function(d){if(!r.ok)throw new Error(d.error||r.statusText);return d});
+    });
+  }
+
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  function doLogin(){
+    var u=ge('login-u').value,p=ge('login-p').value,e=ge('login-err');
+    e.style.display='none';
+    api('POST','/api/v1/auth/login',{username:u,password:p})
+      .then(function(d){
+        token=d.token; me=u;
+        try{var pl=JSON.parse(atob(token.split('.')[1]));myRole=pl.role||'user'}catch(_){myRole='user'}
+        cls('login-dlg'); ge('login-p').value='';
+        updateAuthUI(); refreshAll();
       })
-        .then(function(r) {
-          if (!r.ok) { return r.json().then(function(e) { throw new Error(e.error || 'Login failed'); }); }
-          return r.json();
-        })
-        .then(function(data) {
-          token = data.token;
-          document.getElementById('login-dialog').close();
-          document.getElementById('login-password').value = '';
-        })
-        .catch(function(e) {
-          errEl.textContent = e.message || 'Login failed';
-          errEl.style.display = 'block';
-        });
-    }
+      .catch(function(err){e.textContent=err.message||'Login failed';e.style.display='block'});
+  }
 
-    refreshAll();
-    setInterval(refreshAll, 30000);
-  </script>
+  function doLogout(){token=null;me=null;myRole=null;updateAuthUI();refreshAll()}
+
+  function updateAuthUI(){
+    var on=!!token,admin=myRole==='admin';
+    ge('btn-login').style.display=on?'none':'inline-block';
+    ge('uinfo').style.display=on?'inline-flex':'none';
+    ge('btn-new').style.display=on?'inline-block':'none';
+    if(on)ge('ulabel').textContent=me+(admin?' (admin)':'');
+    ge('t-users').style.display=admin?'inline-block':'none';
+    // re-render so card draggability updates
+    renderBoard();
+    renderRoster();
+  }
+
+  // ── Tab ─────────────────────────────────────────────────────────────────────
+  function tab(name){
+    activeTab=name;
+    document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.getAttribute('onclick').indexOf("'"+name+"'")>-1)});
+    document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='pane-'+name)});
+    if(name==='skills')loadSkills();
+    if(name==='dlq')loadDLQ();
+    if(name==='users')loadUsers();
+  }
+
+  // ── Drag & Drop ─────────────────────────────────────────────────────────────
+  function ov(ev){if(!token)return;ev.preventDefault();ev.currentTarget.classList.add('over')}
+  function ol(ev){ev.currentTarget.classList.remove('over')}
+  function dp(ev){
+    ev.preventDefault();
+    var col=ev.currentTarget;col.classList.remove('over');
+    if(!token||!dragId)return;
+    var status=col.dataset.status;
+    api('PATCH','/api/v1/board/'+dragId,{status:status})
+      .then(function(){dragId=null;loadBoard()})
+      .catch(function(e){alert('Move failed: '+e.message)});
+  }
+
+  // ── Board ────────────────────────────────────────────────────────────────────
+  var colCfg=[
+    {status:'backlog',   hdr:'b-backlog',   cnt:'n-backlog'},
+    {status:'in-progress',hdr:'b-inprogress',cnt:'n-inprogress'},
+    {status:'blocked',   hdr:'b-blocked',   cnt:'n-blocked'},
+    {status:'done',      hdr:'b-done',      cnt:'n-done'},
+  ];
+
+  function makeCard(it){
+    var d=document.createElement('div');
+    d.className='card';
+    d.draggable=!!token;
+    d.style.cursor=token?'grab':'default';
+    d.innerHTML=
+      '<div class="card-title">'+esc(it.title)+'</div>'+
+      (it.description?'<div class="card-desc">'+esc(it.description)+'</div>':'')+
+      '<div class="card-foot">'+
+        (it.assigned_to?'<span class="card-who">'+esc(it.assigned_to)+'</span>':'')+
+        '<span class="card-age">'+ago(it.updated_at)+'</span>'+
+      '</div>';
+    d.addEventListener('dragstart',function(ev){dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
+    d.addEventListener('dragend',function(){d.classList.remove('dragging')});
+    return d;
+  }
+
+  function renderBoard(){
+    var buckets={backlog:[],blocked:[],done:[],'in-progress':[]};
+    allItems.forEach(function(it){(buckets[it.status]||(buckets[it.status]=[])).push(it)});
+    colCfg.forEach(function(c){
+      var body=ge(c.hdr),cnt=ge(c.cnt),list=buckets[c.status]||[];
+      cnt.textContent=list.length;
+      body.innerHTML='';
+      if(!list.length){body.innerHTML='<div class="nil">No items</div>';return}
+      list.forEach(function(it){body.appendChild(makeCard(it))});
+    });
+  }
+
+  function loadBoard(){
+    api('GET','/api/v1/board',null)
+      .then(function(items){allItems=items||[];renderBoard();renderRoster()})
+      .catch(function(){});
+  }
+
+  // ── Roster ───────────────────────────────────────────────────────────────────
+  function renderRoster(){
+    var el=ge('roster');
+    if(!allBots.length){el.innerHTML='<div class="nil" style="padding:1rem;font-size:.7rem">No bots registered</div>';return}
+    var active={};
+    allItems.forEach(function(it){if(it.status!=='done'&&it.assigned_to)active[it.assigned_to]=(active[it.assigned_to]||0)+1});
+    el.innerHTML='';
+    allBots.forEach(function(b){
+      var on=b.status==='active',n=active[b.name]||0;
+      var pct=Math.min(n/6*100,100);
+      var fc=n===0?'bfill-none':n<=2?'bfill-lo':n<=5?'bfill-md':'bfill-hi';
+      var c=document.createElement('div');c.className='bcard';
+      c.innerHTML=
+        '<div class="brow">'+
+          '<div class="bdot '+(on?'bdot-on':'bdot-off')+'"></div>'+
+          '<div class="bname">'+esc(b.name)+'</div>'+
+          (n?'<div class="bbadge">'+n+'</div>':'')+
+        '</div>'+
+        '<div class="bmeta">'+esc(b.bot_type||'')+(on?' &bull; '+ago(b.last_heartbeat):' &bull; inactive')+'</div>'+
+        (on?'<div class="bbar"><div class="bfill '+fc+'" style="width:'+pct+'%"></div></div>':'');
+      el.appendChild(c);
+    });
+  }
+
+  function loadTeam(){
+    api('GET','/api/v1/team',null)
+      .then(function(bots){
+        allBots=bots||[];
+        renderRoster();
+        var act=allBots.filter(function(b){return b.status==='active'}).length;
+        var pill=ge('hpill');
+        pill.textContent=act+' / '+allBots.length+' active';
+        pill.className='hpill '+(act===allBots.length&&allBots.length?'hpill-ok':'hpill-warn');
+      })
+      .catch(function(){});
+  }
+
+  // ── New Item ─────────────────────────────────────────────────────────────────
+  function openNewItem(){
+    var sel=ge('ni-bot');
+    sel.innerHTML='<option value="">Unassigned</option>';
+    allBots.filter(function(b){return b.status==='active'}).forEach(function(b){
+      var o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.appendChild(o);
+    });
+    ge('ni-err').style.display='none';
+    dlg('ni-dlg');
+  }
+
+  function doCreateItem(){
+    var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,e=ge('ni-err');
+    e.style.display='none';
+    if(!title){e.textContent='Title is required';e.style.display='block';return}
+    api('POST','/api/v1/board',{title:title,description:desc,assigned_to:bot})
+      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';loadBoard()})
+      .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
+  // ── Skills ───────────────────────────────────────────────────────────────────
+  function loadSkills(){
+    var el=ge('skills-body');
+    if(!token){el.innerHTML='<div class="empty-state">Sign in to manage skills</div>';return}
+    api('GET','/api/v1/skills')
+      .then(function(skills){
+        if(!skills||!skills.length){el.innerHTML='<div class="empty-state">No skills registered</div>';return}
+        var rows=skills.map(function(s){
+          var acts='';
+          if(s.status==='staged')acts='<div class="acts"><button class="btn btn-success btn-sm" onclick="approveSkill(\''+esc(s.id)+'\')">Approve</button><button class="btn btn-danger btn-sm" onclick="rejectSkill(\''+esc(s.id)+'\')">Reject</button></div>';
+          else if(s.status==='active')acts='<button class="btn btn-warn btn-sm" onclick="revokeSkill(\''+esc(s.id)+'\')">Revoke</button>';
+          return'<tr><td>'+esc(s.name||s.id)+'</td><td>'+esc(s.bot_type)+'</td><td><span class="pill '+(s.status==='active'?'pill-ok':'pill-warn')+'">'+esc(s.status)+'</span></td><td>'+ago(s.uploaded_at)+'</td><td>'+acts+'</td></tr>';
+        }).join('');
+        el.innerHTML='<table><thead><tr><th>Name</th><th>Bot Type</th><th>Status</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      })
+      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load skills</div>'});
+  }
+  function approveSkill(id){api('POST','/api/v1/skills/'+id+'/approve',{}).then(loadSkills).catch(function(e){alert(e.message)})}
+  function rejectSkill(id){api('POST','/api/v1/skills/'+id+'/reject',{}).then(loadSkills).catch(function(e){alert(e.message)})}
+  function revokeSkill(id){if(!confirm('Revoke this skill?'))return;api('DELETE','/api/v1/skills/'+id).then(loadSkills).catch(function(e){alert(e.message)})}
+
+  // ── DLQ ──────────────────────────────────────────────────────────────────────
+  function loadDLQ(){
+    var el=ge('dlq-body');
+    if(!token){el.innerHTML='<div class="empty-state">Sign in to view the dead letter queue</div>';return}
+    api('GET','/api/v1/dlq')
+      .then(function(items){
+        if(!items||!items.length){el.innerHTML='<div class="empty-state">Dead letter queue is empty</div>';return}
+        var rows=items.map(function(it){
+          var body=esc((it.body||'').substring(0,90));
+          return'<tr><td style="font-family:monospace;font-size:.68rem">'+esc(it.id)+'</td><td>'+esc(it.queue_name)+'</td><td>'+it.received_count+'</td><td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+body+'</td><td>'+ago(it.last_received)+'</td><td><div class="acts"><button class="btn btn-success btn-sm" onclick="retryDLQ(\''+esc(it.id)+'\')">Retry</button><button class="btn btn-danger btn-sm" onclick="discardDLQ(\''+esc(it.id)+'\')">Discard</button></div></td></tr>';
+        }).join('');
+        el.innerHTML='<table><thead><tr><th>ID</th><th>Queue</th><th>Attempts</th><th>Body</th><th>Last Seen</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      })
+      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load DLQ</div>'});
+  }
+  function retryDLQ(id){api('POST','/api/v1/dlq/'+id+'/retry',{}).then(loadDLQ).catch(function(e){alert(e.message)})}
+  function discardDLQ(id){if(!confirm('Permanently discard this message?'))return;api('DELETE','/api/v1/dlq/'+id).then(loadDLQ).catch(function(e){alert(e.message)})}
+
+  // ── Users ─────────────────────────────────────────────────────────────────────
+  function loadUsers(){
+    var el=ge('users-body');
+    if(myRole!=='admin'){el.innerHTML='<div class="empty-state">Admin access required</div>';return}
+    api('GET','/api/v1/users')
+      .then(function(users){
+        if(!users||!users.length){el.innerHTML='<div class="empty-state">No users</div>';return}
+        var rows=users.map(function(u){
+          var acts='<div class="acts">';
+          if(u.username!==me){
+            acts+='<button class="btn btn-secondary btn-sm" onclick="openSetPw(\''+esc(u.username)+'\')">Set PW</button>';
+            acts+=u.enabled?'<button class="btn btn-danger btn-sm" onclick="disableUser(\''+esc(u.username)+'\')">Disable</button>':'<span class="pill pill-off">Disabled</span>';
+          }else{
+            acts+='<span class="pill pill-ok">You</span>';
+          }
+          acts+='</div>';
+          return'<tr><td>'+esc(u.username)+'</td><td>'+esc(u.display_name||'—')+'</td><td><span class="pill '+(u.role==='admin'?'pill-admin':'pill-user')+'">'+esc(u.role)+'</span></td><td>'+(u.enabled?'<span class="pill pill-ok">Active</span>':'<span class="pill pill-off">Disabled</span>')+'</td><td>'+ago(u.created_at)+'</td><td>'+acts+'</td></tr>';
+        }).join('');
+        el.innerHTML='<table><thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      })
+      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load users</div>'});
+  }
+  function doCreateUser(){
+    var u=ge('cu-u').value.trim(),r=ge('cu-r').value,e=ge('cu-err');
+    e.style.display='none';
+    if(!u){e.textContent='Username required';e.style.display='block';return}
+    api('POST','/api/v1/users',{username:u,role:r})
+      .then(function(){cls('cu-dlg');ge('cu-u').value='';loadUsers()})
+      .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+  function disableUser(u){if(!confirm('Disable '+u+'?'))return;api('POST','/api/v1/users/'+u+'/disable',{}).then(loadUsers).catch(function(e){alert(e.message)})}
+  function openSetPw(u){setPwTarget=u;ge('sp-who').textContent=u;ge('sp-pw').value='';ge('sp-err').style.display='none';dlg('sp-dlg')}
+  function doSetPw(){
+    var pw=ge('sp-pw').value,e=ge('sp-err');e.style.display='none';
+    if(!pw){e.textContent='Password required';e.style.display='block';return}
+    api('POST','/api/v1/users/'+setPwTarget+'/password',{password:pw})
+      .then(function(){cls('sp-dlg')})
+      .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
+  // ── Change own password ───────────────────────────────────────────────────────
+  function openChgPw(){ge('cp-old').value='';ge('cp-new').value='';ge('cp-err').style.display='none';dlg('cp-dlg')}
+  function doChangePw(){
+    var o=ge('cp-old').value,n=ge('cp-new').value,e=ge('cp-err');e.style.display='none';
+    if(!o||!n){e.textContent='Both fields required';e.style.display='block';return}
+    api('POST','/api/v1/profile/password',{old_password:o,new_password:n})
+      .then(function(){cls('cp-dlg')})
+      .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
+  // ── Refresh loop ──────────────────────────────────────────────────────────────
+  function refreshAll(){
+    loadBoard(); loadTeam();
+    if(activeTab==='skills')loadSkills();
+    if(activeTab==='dlq')loadDLQ();
+    if(activeTab==='users')loadUsers();
+  }
+
+  function startTick(){
+    clearInterval(tickTimer); countdown=30;
+    ge('tick').textContent='refresh in 30s';
+    tickTimer=setInterval(function(){
+      countdown--;
+      ge('tick').textContent=countdown<=0?'refreshing…':'refresh in '+countdown+'s';
+      if(countdown<=0){refreshAll();countdown=30}
+    },1000);
+  }
+
+  refreshAll();
+  startTick();
+</script>
 </body>
 </html>`
 

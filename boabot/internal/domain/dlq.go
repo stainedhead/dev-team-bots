@@ -8,28 +8,13 @@ import (
 // DLQItem is a message that has been moved to the dead-letter queue after
 // exhausting delivery retries.
 type DLQItem struct {
-	// ID is the provider-level message ID (e.g. SQS MessageId).
-	ID string
-
-	// ReceiptHandle is an opaque handle used to delete or change visibility on
-	// the message.  It is not transmitted to API clients.
-	ReceiptHandle string
-
-	// QueueName is the human-readable name of the DLQ this item belongs to.
-	QueueName string
-
-	// Body is the raw message payload.
-	Body string
-
-	// ReceivedCount is how many times this message has been received (and
-	// failed to process) before landing in the DLQ.
-	ReceivedCount int
-
-	// FirstReceived is when the message was first received.
-	FirstReceived time.Time
-
-	// LastReceived is when the message most recently became visible.
-	LastReceived time.Time
+	ID            string    `json:"id"`
+	ReceiptHandle string    `json:"-"`
+	QueueName     string    `json:"queue_name"`
+	Body          string    `json:"body"`
+	ReceivedCount int       `json:"received_count"`
+	FirstReceived time.Time `json:"first_received"`
+	LastReceived  time.Time `json:"last_received"`
 }
 
 // DLQStore provides read and disposition operations on the dead-letter queue.

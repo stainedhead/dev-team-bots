@@ -7,13 +7,13 @@ import (
 
 // Skill is a modular capability package (SKILL.md + optional scripts) stored in S3.
 type Skill struct {
-	ID         string
-	Name       string
-	Summary    string
-	BotType    string
-	Status     SkillStatus
-	UploadedAt time.Time
-	ApprovedAt time.Time
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Summary    string      `json:"summary,omitempty"`
+	BotType    string      `json:"bot_type"`
+	Status     SkillStatus `json:"status"`
+	UploadedAt time.Time   `json:"uploaded_at"`
+	ApprovedAt time.Time   `json:"approved_at,omitempty"`
 }
 
 type SkillStatus string

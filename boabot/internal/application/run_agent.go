@@ -153,6 +153,17 @@ func (u *RunAgentUseCase) handleTask(ctx context.Context, rm domain.ReceivedMess
 	}
 
 	slog.Info("task completed", "task_id", result.TaskID, "success", result.Success)
+
+	// Notify the result handler directly — worker bots would send a task.result
+	// message back over the queue, but when the bot executes its own task there
+	// is no return message, so we call the handler inline here.
+	if u.taskResultHandler != nil {
+		u.taskResultHandler(ctx, domain.TaskResultPayload{
+			TaskID:  result.TaskID,
+			Output:  result.Output,
+			Success: result.Success,
+		})
+	}
 }
 
 // handleTaskResult processes an incoming task.result message. If a handler is

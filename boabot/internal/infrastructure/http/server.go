@@ -26,12 +26,14 @@ type AuthProvider interface {
 
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
-	Auth   AuthProvider
-	Board  domain.BoardStore
-	Team   domain.ControlPlane
-	Users  domain.UserStore
-	Skills domain.SkillRegistry
-	DLQ    domain.DLQStore
+	Auth       AuthProvider
+	Board      domain.BoardStore
+	Team       domain.ControlPlane
+	Users      domain.UserStore
+	Skills     domain.SkillRegistry
+	DLQ        domain.DLQStore
+	Tasks      domain.DirectTaskStore
+	Dispatcher domain.TaskDispatcher
 }
 
 // Server is the orchestrator HTTP server.
@@ -87,6 +89,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/dlq", s.auth(s.adminOnly(s.handleDLQList)))
 	mux.HandleFunc("POST /api/v1/dlq/{id}/retry", s.auth(s.adminOnly(s.handleDLQRetry)))
 	mux.HandleFunc("DELETE /api/v1/dlq/{id}", s.auth(s.adminOnly(s.handleDLQDiscard)))
+
+	// Direct tasks — require auth
+	mux.HandleFunc("GET /api/v1/tasks", s.auth(s.handleTaskList))
+	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
+	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)
@@ -582,6 +589,61 @@ func (s *Server) handleDLQDiscard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── direct task handlers ──────────────────────────────────────────────────────
+
+func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Tasks == nil {
+		writeError(w, http.StatusServiceUnavailable, "task dispatch not available")
+		return
+	}
+	tasks, err := s.cfg.Tasks.ListAll(r.Context())
+	if err != nil {
+		writeInternalError(w, "task list all", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "task dispatch not available")
+		return
+	}
+	name := r.PathValue("name")
+	var req struct {
+		Instruction string     `json:"instruction"`
+		ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Instruction == "" {
+		writeError(w, http.StatusBadRequest, "instruction must not be empty")
+		return
+	}
+	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt)
+	if err != nil {
+		writeInternalError(w, "bot task create", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (s *Server) handleBotTaskList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Tasks == nil {
+		writeError(w, http.StatusServiceUnavailable, "task dispatch not available")
+		return
+	}
+	name := r.PathValue("name")
+	tasks, err := s.cfg.Tasks.List(r.Context(), name)
+	if err != nil {
+		writeInternalError(w, "bot task list", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
 // ── enum validation helpers ────────────────────────────────────────────────────
 
 func isValidRole(role string) bool {
@@ -753,6 +815,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <main>
     <div class="tabbar">
       <button class="tab on" onclick="tab('board')">Board</button>
+      <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
       <button class="tab" onclick="tab('skills')" id="t-skills">Skills</button>
       <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
       <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>
@@ -778,6 +841,12 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="col-body" id="b-done"><div class="nil">No items</div></div>
         </div>
       </div>
+    </div>
+
+    <!-- Tasks -->
+    <div class="pane" id="pane-tasks">
+      <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
+      <div id="tasks-body"><div class="empty-state">Loading…</div></div>
     </div>
 
     <!-- Skills -->
@@ -838,6 +907,21 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg"><label class="fl">New Password</label><input class="fi" id="sp-pw" type="password" autocomplete="new-password"/></div>
   <div class="errmsg" id="sp-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('sp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doSetPw()">Update</button></div>
+</dialog>
+
+<!-- Assign Task -->
+<dialog id="at-dlg">
+  <h2>Assign Task</h2>
+  <div class="fg"><label class="fl">Bot</label><div id="at-bot" style="font-size:.82rem;color:#64748b;padding:.25rem 0"></div></div>
+  <div class="fg"><label class="fl">Instruction</label><textarea class="fi" id="at-instr" placeholder="Describe the task…" required></textarea></div>
+  <div class="fg">
+    <label class="fl">Timing</label>
+    <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem;margin-right:.75rem"><input type="radio" name="at-timing" id="at-now" checked onchange="ge('at-sched-wrap').style.display='none'"> Now</label>
+    <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem"><input type="radio" name="at-timing" id="at-later" onchange="ge('at-sched-wrap').style.display='block'"> Schedule</label>
+  </div>
+  <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Schedule At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
+  <div class="errmsg" id="at-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-primary" onclick="doDispatchTask()">Dispatch</button></div>
 </dialog>
 
 <!-- Change Own Password -->
@@ -914,6 +998,7 @@ const kanbanHTML = `<!DOCTYPE html>
     activeTab=name;
     document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.getAttribute('onclick').indexOf("'"+name+"'")>-1)});
     document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='pane-'+name)});
+    if(name==='tasks')loadTasks();
     if(name==='skills')loadSkills();
     if(name==='dlq')loadDLQ();
     if(name==='users')loadUsers();
@@ -992,6 +1077,7 @@ const kanbanHTML = `<!DOCTYPE html>
           '<div class="bdot '+(on?'bdot-on':'bdot-off')+'"></div>'+
           '<div class="bname">'+esc(b.name)+'</div>'+
           (n?'<div class="bbadge">'+n+'</div>':'')+
+          (on&&token?'<button class="btn btn-ghost btn-sm" onclick="openAssignTask(\''+esc(b.name)+'\')">&#x26A1; Task</button>':'')+
         '</div>'+
         '<div class="bmeta">'+esc(b.bot_type||'')+(on?' &bull; '+ago(b.last_heartbeat):' &bull; inactive')+'</div>'+
         (on?'<div class="bbar"><div class="bfill '+fc+'" style="width:'+pct+'%"></div></div>':'');
@@ -1121,9 +1207,52 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
+  // ── Tasks ─────────────────────────────────────────────────────────────────────
+  function loadTasks(){
+    var el=ge('tasks-body');
+    if(!token){el.innerHTML='<div class="empty-state">Sign in to view tasks</div>';return}
+    api('GET','/api/v1/tasks')
+      .then(function(tasks){
+        if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">No direct tasks</div>';return}
+        var rows=tasks.map(function(t){
+          var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':'pill-off';
+          var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'…':'');
+          return'<tr><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'—')+'</td><td>'+(t.dispatched_at?ago(t.dispatched_at):'—')+'</td><td>'+ago(t.created_at)+'</td></tr>';
+        }).join('');
+        el.innerHTML='<table><thead><tr><th>Bot</th><th>Instruction</th><th>Status</th><th>Scheduled At</th><th>Dispatched At</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      })
+      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load tasks</div>'});
+  }
+
+  function openAssignTask(botName){
+    ge('at-bot').textContent=botName;
+    ge('at-instr').value='';
+    ge('at-now').checked=true;
+    ge('at-sched-wrap').style.display='none';
+    ge('at-sched').value='';
+    ge('at-err').style.display='none';
+    dlg('at-dlg');
+  }
+
+  function doDispatchTask(){
+    var botName=ge('at-bot').textContent;
+    var instruction=ge('at-instr').value.trim();
+    var isNow=ge('at-now').checked;
+    var schedVal=ge('at-sched').value;
+    var e=ge('at-err');
+    e.style.display='none';
+    if(!instruction){e.textContent='Instruction is required';e.style.display='block';return}
+    var body={instruction:instruction};
+    if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
+    api('POST','/api/v1/bots/'+botName+'/tasks',body)
+      .then(function(){cls('at-dlg');tab('tasks');loadTasks()})
+      .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function refreshAll(){
     loadBoard(); loadTeam();
+    if(activeTab==='tasks')loadTasks();
     if(activeTab==='skills')loadSkills();
     if(activeTab==='dlq')loadDLQ();
     if(activeTab==='users')loadUsers();

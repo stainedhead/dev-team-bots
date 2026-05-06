@@ -25,9 +25,9 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
-	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
 )
 
 // TeamConfig is the parsed team.yaml structure.
@@ -425,13 +425,21 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			return fmt.Errorf("register bot with control plane for %q: %w", entry.Name, regErr)
 		}
 
+		// Wire direct-task store and dispatcher. The orchestrator's own queue
+		// can route to any bot because queueURL == bot name in local mode.
+		taskStore := orchestratorlocal.NewInMemoryDirectTaskStore()
+		routerQueue := tm.router.QueueFor(entry.Name)
+		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(taskStore, routerQueue, entry.Name)
+
 		srv := httpserver.New(httpserver.Config{
-			Auth:   oAuth,
-			Board:  board,
-			Team:   cp,
-			Users:  oAuth,
-			Skills: orchestratorlocal.NoopSkillRegistry{},
-			DLQ:    orchestratorlocal.NoopDLQStore{},
+			Auth:       oAuth,
+			Board:      board,
+			Team:       cp,
+			Users:      oAuth,
+			Skills:     orchestratorlocal.NoopSkillRegistry{},
+			DLQ:        orchestratorlocal.NoopDLQStore{},
+			Tasks:      taskStore,
+			Dispatcher: dispatcher,
 		})
 
 		httpSrv := &http.Server{

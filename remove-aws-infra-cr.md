@@ -2,7 +2,7 @@
 
 **CR ID:** remove-aws-infra-cr  
 **Date:** 2026-05-06  
-**Status:** Draft — Analysis  
+**Status:** Decisions Resolved — Ready for PRD  
 
 ---
 
@@ -114,12 +114,19 @@ Provider selection remains per-bot via `models.providers` in `config.yaml`. A bo
 - Flush writes to `<memory.path>/<bot-name>/budget.json`; startup loads from this file.
 - No external dependency.
 
+**`infrastructure/local/watchdog`**
+- Process-wide heap monitor run by `TeamManager`.
+- Samples `runtime.MemStats.HeapInuse` every 30s (configurable).
+- Soft threshold (`memory.heap_warn_mb`): logs warning + emits internal metric.
+- Hard threshold (`memory.heap_hard_mb`): calls `TeamManager.Shutdown()` for orderly teardown.
+- Both thresholds default to 0 (disabled); operators opt in via config.
+
 **`infrastructure/anthropic`**
 - Implements `domain.ModelProvider` using `github.com/anthropics/anthropic-sdk-go`.
 - Supports model selection via `model_id` in provider config (e.g. `claude-sonnet-4-6`).
 - Maps `InvokeRequest` → Anthropic Messages API → `InvokeResponse`.
 - Streams by default; exposes `StopReason` and `TokenUsage` from the API response.
-- API key read from `ANTHROPIC_API_KEY` env var or `anthropic_api_key` in the credentials file.
+- API key read from `ANTHROPIC_API_KEY` env var, or `anthropic_api_key` under the active profile in `~/.boabot/credentials` (INI format).
 
 ### 3.3 Modified — Bot Lifecycle (New Application Layer)
 
@@ -150,6 +157,9 @@ A new `application/team` package handles multi-bot orchestration within the sing
 memory:
   path: ./memory          # default: <binary-dir>/memory; supports ~ expansion
   vector_index: cosine    # cosine (default) | hnsw (future)
+  embedder: bm25          # bm25 (default) | <provider-name> for semantic search
+  heap_warn_mb: 0         # 0 = disabled; process-wide heap warning threshold
+  heap_hard_mb: 0         # 0 = disabled; triggers orderly shutdown if crossed
 
 # MODIFIED — models section gains anthropic provider type
 models:
@@ -217,12 +227,13 @@ type BackupStatus struct {
 backup:
   enabled: false                        # opt-in
   schedule: "*/30 * * * *"             # cron; default every 30 min
+  restore_on_empty: false               # opt-in auto-restore on first startup
   github:
     repo: "https://github.com/owner/boabot-memory.git"
     branch: main                        # default: main
     author_name: "BaoBot"
     author_email: "boabot@example.com"
-    # token read from BOABOT_BACKUP_TOKEN env var
+    # token read from BOABOT_BACKUP_TOKEN env var or ~/.boabot/credentials
 ```
 
 **`boabotctl` additions:**
@@ -263,7 +274,7 @@ The `domain.Embedder` interface already exists. In local mode:
 | Area | Effort |
 |---|---|
 | Remove 7 AWS packages (`sqs`, `sns`, `s3`, `s3vectors`, `dynamodb`, `secretsmanager`, `secrets`) | Medium — delete + update wiring |
-| Add `local/queue`, `local/bus`, `local/fs`, `local/budget` | Medium — straightforward Go; existing interfaces |
+| Add `local/queue`, `local/bus`, `local/fs`, `local/budget`, `local/watchdog` | Medium — straightforward Go; existing interfaces |
 | Add `local/vector` (cosine search + file persistence) | Medium-High — custom but bounded scope |
 | Add `infrastructure/anthropic` provider | Low — SDK wrapper, pattern already exists for Bedrock |
 | Add `application/team` (TeamManager, BotRegistry) | High — new orchestration logic; significant test surface |
@@ -277,27 +288,55 @@ The `domain.Embedder` interface already exists. In local mode:
 
 ---
 
-## 6. Open Questions
+## 6. Decisions
 
-1. **Embedding strategy:** Should the system require at least one embedding-capable provider at startup, or is BM25 fallback always acceptable? If semantic search is a core feature, the CR should make embedding a hard requirement.
+### 6.1 Resolved
 
-2. **Vector index scale:** Cosine brute-force is fine for small memory stores (<100k vectors). At what scale does a team actually operate? If memory stores grow large, an HNSW index (e.g. `hnswgo`) should be planned from the start rather than retrofitted.
+**Q1 — Embedding strategy → Option C: configurable; BM25 default, semantic opt-in**
 
-3. **Bot isolation:** Goroutines share heap. A memory-leaking or runaway bot can starve others. Should each bot have a memory cap enforced at the runtime level (e.g. via a token-budget goroutine), or is the existing `BudgetTracker` sufficient?
+Memory search uses BM25 keyword vectors by default — no embedding provider required at startup. Semantic search is opt-in via `memory.embedder: <provider-name>` in config. When an embedder is configured, `TeamManager` validates the provider supports embeddings at startup and fails with a clear error if it does not. This avoids silent capability downgrade while keeping zero-friction startup for basic use.
 
-4. **Credentials file format:** Should `~/.boabot/credentials` follow the AWS credentials file format (ini sections per profile) or a simpler YAML/env format? Consistency with `boabotctl`'s credential storage matters here.
+**Q3 — Bot isolation → Option C: process-wide watchdog with soft and hard heap limits**
 
-5. **Bedrock removal completeness:** Is `infrastructure/aws/bedrock` to be deleted, or retained as an optional provider that simply isn't the default? The CR currently retains it. If the intent is zero AWS imports in the default binary, Bedrock must be moved behind a build tag.
+`TeamManager` runs a watchdog goroutine that samples `runtime.MemStats.HeapInuse` on a configurable interval (default 30s). Two thresholds in config:
+- `memory.heap_warn_mb` — logs a warning and emits a metric (default: no limit).
+- `memory.heap_hard_mb` — triggers an orderly `TeamManager.Shutdown()` (default: no limit).
 
-6. **Plugin architecture for providers:** "Plugin support for Claude SDK" could mean (a) a built-in adapter compiled into the binary, or (b) a Go plugin (`plugin.Open`) loaded at runtime. Option (a) is simpler and testable; option (b) enables third-party providers without recompilation. Which is intended?
+Per-goroutine memory accounting is not feasible in Go; the watchdog operates at the process level. Operators are alerted and can act; bots are not killed autonomously unless the hard limit is crossed.
 
-7. **`boabot-team/cdk/` fate:** The CDK stacks deploy shared infra (VPC, ECS cluster) and per-bot task definitions. Removing them is clean for local mode, but teams using AWS for hosting (even without the messaging layer) may want a stripped-down CDK stack. Should a minimal "compute-only" CDK stack be retained?
+**Q4 — Credentials file format → Option A: INI with named profiles**
 
-8. **Backup repo visibility:** Should the GitHub backup repo be private by default, or is that the user's responsibility? Should `boabotctl memory init` offer to create and configure the repo automatically via the GitHub API?
+`~/.boabot/credentials` follows the AWS credentials file convention:
+```ini
+[default]
+anthropic_api_key = sk-ant-...
+openai_api_key    = sk-...
+boabot_backup_token = ghp_...
 
-9. **Backup scope granularity:** The current design backs up the full `memory.path` tree in one commit per tick. For large teams with high write rates, this could produce noisy git history. Should per-bot subdirectory repos be an option, or is a single team repo always sufficient?
+[work]
+anthropic_api_key = sk-ant-...
+```
+Active profile is selected via `BOABOT_PROFILE` env var (default: `default`). Environment variables override file values for CI and container deployments. File must be mode 0600; boabot refuses to start if it is world-readable. Format is familiar to developers who already use AWS CLI credentials.
 
-10. **Auto-restore on startup:** Automatically pulling from the backup remote on first startup is convenient but risky if the remote has stale or corrupted data. Should this be opt-in (`backup.restore_on_empty: true`) rather than the default behaviour?
+**Q5 — Bedrock removal completeness → Option A: retain Bedrock as a compiled-in provider**
+
+`infrastructure/aws/bedrock` is retained as a first-class compiled-in provider alongside `anthropic` and `openai`. It is not the default but remains fully functional. Consistent with the provider architecture decision (Q6). Binary always includes the AWS SDK; this is acceptable — binary size is not a primary concern.
+
+**Q6 — Plugin architecture for providers → Option A: compiled-in adapters**
+
+All providers (`bedrock`, `openai`, `anthropic`) are normal Go packages imported at compile time. No `plugin.Open`, no `.so` files. New providers require a fork and a new `infrastructure/<provider>/` package. This is consistent with Go idiom, fully testable, and works on all platforms. The `ProviderFactory` registry pattern (existing) is sufficient for compile-time provider selection.
+
+### 6.2 Deferred — Safe Defaults Locked In
+
+**Q2 — Vector index scale:** Start with cosine brute-force over in-memory/on-disk float32 vectors. Acceptable up to ~100k vectors. HNSW index is additive behind the same `VectorStore` interface and will be considered if real workload data shows query latency degradation.
+
+**Q7 — `boabot-team/cdk/` fate:** Delete entirely. No minimal compute-only stack is retained. Teams who need AWS hosting can use the archived `dev-team-bots-aws` repo.
+
+**Q8 — Backup repo visibility:** User's responsibility. `boabotctl memory init` prints setup instructions but does not call the GitHub API to create the repo. Keeps the backup feature free of GitHub OAuth scope requirements.
+
+**Q9 — Backup scope granularity:** Single team repo as default. All bots' memory namespaces commit into one repo under `memory/<bot-name>/` subdirectories. Per-bot repos are not supported in this iteration.
+
+**Q10 — Auto-restore on startup:** Opt-in. Default is `backup.restore_on_empty: false`. When enabled, boabot attempts `Restore()` on startup if `memory.path` is absent or empty, then proceeds normally. A failed restore is a fatal startup error when this flag is set.
 
 ---
 

@@ -84,6 +84,16 @@ GitHub Actions workflows live exclusively at `.github/workflows/` in the reposit
 
 Containerise and deploy steps run on merge to `main` only. PRs run test, lint, build, and CDK diff.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
+This applies to every PR opened in this repo, with no exceptions.
+
 ## Build and Configuration
 
 - Builds output to `bin/` in each module directory. This directory is gitignored.

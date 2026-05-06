@@ -33,6 +33,14 @@ The more context I have upfront, the less investigation time is needed. Logs and
 - **Dependency update**: a PR upgrading the dependency with test results confirmed.
 - **Refactor**: a PR with the change, a before/after complexity note, and confirmation the test suite passes unchanged.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## What I will not do
 
 - I do not add new features — I scope my changes to health and correctness.

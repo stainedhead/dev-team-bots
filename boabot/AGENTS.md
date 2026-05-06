@@ -94,6 +94,14 @@ internal/
 - `cmd/boabot/main.go` does wiring only — instantiate adapters, inject into use cases, start the agent.
 - Mocks live in `internal/domain/mocks/`.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## Build
 
 ```bash

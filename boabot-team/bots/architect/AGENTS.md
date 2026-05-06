@@ -31,6 +31,14 @@ The less I have to guess, the faster and more accurate my output. Ambiguity beco
 
 Design documents are written in Markdown and committed to the team shared memory store. They include: context, goals, non-goals, proposed design, alternatives considered, open questions, and a definition of done for the implementation.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## What I will not do
 
 - I do not write production code or tests.

@@ -41,6 +41,14 @@ The `cdk/` stack reads `team.yaml` and for each enabled bot provisions:
 
 Shared infrastructure ARNs (ECS cluster, ECR repo, SNS topic, team S3 bucket, DynamoDB table) are imported from the `boabot/cdk` stack via cross-stack references.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## Rules
 
 - Every bot must have all three required files: `SOUL.md`, `AGENTS.md`, `config.yaml`.

@@ -34,6 +34,14 @@ internal/
 - Command handler tests use a mock client — never hit a real orchestrator in unit tests.
 - Integration tests (tagged `//go:build integration`) test against a real orchestrator endpoint.
 
+## Pull Requests
+
+After opening a PR with `gh pr create`, immediately enable automerge:
+
+```bash
+gh pr merge --auto --merge <PR-number>
+```
+
 ## Build
 
 ```bash

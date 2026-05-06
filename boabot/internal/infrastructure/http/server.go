@@ -246,6 +246,10 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		existing.Description = *req.Description
 	}
 	if req.Status != nil {
+		if !isValidWorkItemStatus(*req.Status) {
+			writeError(w, http.StatusBadRequest, "invalid status")
+			return
+		}
 		existing.Status = domain.WorkItemStatus(*req.Status)
 	}
 	if req.AssignedTo != nil {
@@ -396,10 +400,13 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Role     string `json:"role"`
-		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !isValidRole(req.Role) {
+		writeError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
 	now := time.Now().UTC()
@@ -407,7 +414,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		Username:           req.Username,
 		Role:               domain.UserRole(req.Role),
 		Enabled:            true,
-		MustChangePassword: req.Password == "",
+		MustChangePassword: true,
 		CreatedAt:          now,
 	})
 	if err != nil {
@@ -473,6 +480,10 @@ func (s *Server) handleUserSetRole(w http.ResponseWriter, r *http.Request) {
 	user, err := s.cfg.Users.Get(r.Context(), username)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if !isValidRole(req.Role) {
+		writeError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
 	user.Role = domain.UserRole(req.Role)
@@ -569,6 +580,25 @@ func (s *Server) handleDLQDiscard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── enum validation helpers ────────────────────────────────────────────────────
+
+func isValidRole(role string) bool {
+	switch domain.UserRole(role) {
+	case domain.UserRoleAdmin, domain.UserRoleUser:
+		return true
+	}
+	return false
+}
+
+func isValidWorkItemStatus(status string) bool {
+	switch domain.WorkItemStatus(status) {
+	case domain.WorkItemStatusBacklog, domain.WorkItemStatusInProgress,
+		domain.WorkItemStatusBlocked, domain.WorkItemStatusDone:
+		return true
+	}
+	return false
 }
 
 // ── Kanban web UI ─────────────────────────────────────────────────────────────

@@ -41,15 +41,15 @@ type BoardStore interface {
 }
 
 type WorkItem struct {
-	ID             string
-	IdempotencyKey string // client-supplied UUID; mutations with a seen key are no-ops
-	Title          string
-	Description    string
-	Status         WorkItemStatus
-	AssignedTo     string
-	CreatedBy      string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID             string         `json:"id"`
+	IdempotencyKey string         `json:"idempotency_key"` // client-supplied UUID; mutations with a seen key are no-ops
+	Title          string         `json:"title"`
+	Description    string         `json:"description"`
+	Status         WorkItemStatus `json:"status"`
+	AssignedTo     string         `json:"assigned_to"`
+	CreatedBy      string         `json:"created_by"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 type WorkItemStatus string
@@ -76,13 +76,13 @@ type UserStore interface {
 }
 
 type User struct {
-	Username           string
-	DisplayName        string
-	PasswordHash       string
-	Role               UserRole
-	Enabled            bool
-	MustChangePassword bool
-	CreatedAt          time.Time
+	Username           string    `json:"username"`
+	DisplayName        string    `json:"display_name"`
+	PasswordHash       string    `json:"-"`
+	Role               UserRole  `json:"role"`
+	Enabled            bool      `json:"enabled"`
+	MustChangePassword bool      `json:"must_change_password"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type UserRole string

@@ -1427,6 +1427,85 @@ func TestProtectedRoute_ExpiredToken_Returns401(t *testing.T) {
 
 // ── Board filter ──────────────────────────────────────────────────────────────
 
+// ── Review-findings tests (must fail before fixes are applied) ────────────────
+
+func TestUsers_Create_IgnoresProvidedPassword_MustChangePwdAlwaysTrue(t *testing.T) {
+	var created domain.User
+	users := &fakeUserStore{createFn: func(_ context.Context, u domain.User) (domain.User, error) {
+		created = u
+		return u, nil
+	}}
+	s := httpserver.New(httpserver.Config{
+		Auth: &fakeAuth{}, Board: &fakeBoardStore{}, Team: &fakeControlPlane{},
+		Users: users, Skills: &fakeSkillRegistry{}, DLQ: &fakeDLQStore{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// Sending a "password" field must have no effect — MustChangePassword must always be true.
+	resp := doJSON(t, srv, http.MethodPost, "users",
+		`{"username":"bob","role":"user","password":"should-be-ignored"}`)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	if !created.MustChangePassword {
+		t.Fatal("MustChangePassword must be true for all newly created users")
+	}
+}
+
+func TestUsers_Create_InvalidRole_Returns400(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "users",
+		`{"username":"bob","role":"superadmin"}`)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid role, got %d", resp.StatusCode)
+	}
+}
+
+func TestUsers_SetRole_InvalidRole_Returns400(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "users/bob/role",
+		`{"role":"superadmin"}`)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid role, got %d", resp.StatusCode)
+	}
+}
+
+func TestBoard_Update_InvalidStatus_Returns400(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPatch, "board/abc-123",
+		`{"status":"wontfix"}`)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid status, got %d", resp.StatusCode)
+	}
+}
+
+func TestUserResponse_DoesNotContainPasswordHash(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodGet, "users", "")
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	body := buf.String()
+	if strings.Contains(body, "PasswordHash") || strings.Contains(body, "password_hash") {
+		t.Errorf("user list response must not expose PasswordHash field, got: %s", body)
+	}
+}
+
 func TestBoard_List_FilterByStatus(t *testing.T) {
 	var capturedFilter domain.WorkItemFilter
 	board := &fakeBoardStore{

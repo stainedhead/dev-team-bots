@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -700,6 +701,28 @@ func TestDLQ_Discard(t *testing.T) {
 }
 
 // ── Web UI ────────────────────────────────────────────────────────────────────
+
+func TestKanbanUI_HasSRIHash(t *testing.T) {
+	srv := newTestServer(&fakeAuth{})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	body := buf.String()
+	if !strings.Contains(body, `integrity="sha384-`) {
+		t.Error("kanban HTML missing integrity= SRI attribute on HTMX script tag")
+	}
+	if !strings.Contains(body, `crossorigin="anonymous"`) {
+		t.Error("kanban HTML missing crossorigin=anonymous on HTMX script tag")
+	}
+}
 
 func TestKanbanUI_ServesHTML(t *testing.T) {
 	srv := newTestServer(&fakeAuth{})

@@ -16,9 +16,9 @@
 | 2  | Review Spec                     | ✅ Complete    | 2026-05-06T02:17:00Z | 2026-05-06T02:28:00Z | 11 |
 | 3  | Implement Product               | ✅ Complete    | 2026-05-06T02:28:00Z | 2026-05-06T12:00:00Z | 572 |
 | 4  | Documentation and User Docs     | ✅ Complete    | 2026-05-06T12:00:00Z | 2026-05-06T12:15:00Z | 15 |
-| 5  | Code and Design Review          | 🔄 In Progress | 2026-05-06T12:15:00Z | — | — |
-| 6  | Prepare Review PRD              | ⬜ Pending | — | — | — |
-| 7  | Archive Original Spec           | ⬜ Pending | — | — | — |
+| 5  | Code and Design Review          | ✅ Complete    | 2026-05-06T12:15:00Z | 2026-05-06T13:00:00Z | 45 |
+| 6  | Prepare Review PRD              | ✅ Complete    | 2026-05-06T13:00:00Z | 2026-05-06T13:10:00Z | 10 |
+| 7  | Archive Original Spec           | 🔄 In Progress | 2026-05-06T13:10:00Z | — | — |
 | 8  | Spec Review Fixes               | ⬜ Pending | — | — | — |
 | 9  | Implement Review Fixes          | ⬜ Pending | — | — | — |
 | 10 | Archive Fixes Spec              | ⬜ Pending | — | — | — |

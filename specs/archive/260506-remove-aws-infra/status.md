@@ -10,10 +10,10 @@
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Spec Creation | In Progress |
-| 1 | Research | Not Started |
-| 2 | Data Modeling | Not Started |
-| 3 | Architecture | Not Started |
+| 0 | Spec Creation | Complete |
+| 1 | Research | Complete |
+| 2 | Data Modeling | Complete |
+| 3 | Architecture | Complete |
 | 4 | Implementation — M1: Local Adapters | Complete |
 | 5 | Implementation — M2: Anthropic Provider | Complete |
 | 6 | Implementation — M3: Vector Store + Embedder | Complete |
@@ -21,7 +21,7 @@
 | 8 | Implementation — M5: GitHub Backup | Complete |
 | 9 | Implementation — M6: Config + Credentials + Watchdog | Complete |
 | 10 | Implementation — M7: Remove AWS + CDK + Docs | Complete |
-| 11 | Tests & Quality | Not Started |
+| 11 | Tests & Quality | Complete |
 
 ---
 
@@ -35,7 +35,7 @@
 - [x] Edge cases documented in spec.md
 - [x] Open questions documented in spec.md (OQ-1, OQ-2, OQ-3)
 - [x] Acceptance criteria expanded to cover all 22 FRs
-- [ ] architecture.md draft reviewed
+- [x] architecture.md draft reviewed
 
 ---
 
@@ -146,3 +146,5 @@ None.
 - 2026-05-06 — M5 complete: GitHub memory backup adapter (90.1% cov) + ScheduledBackupUseCase (100% cov) + boabotctl memory subcommands (100% cov); go-git v5.18.0 added
 - 2026-05-06 — M6 complete: config schema expanded, INI credentials parser, heap watchdog, embedder validation; all packages ≥90% coverage; binary builds
 - 2026-05-06 — M7 complete: deleted AWS packages (sqs/sns/dynamodb/secretsmanager/s3/s3vectors/secrets), CDK, AWSConfig; rewired go.mod; updated all docs
+- 2026-05-06 — Code review complete: three Must Fix issues found and resolved (KnownFields strict parsing, backup wiring, embedder warning); stray binary removed
+- 2026-05-06 — All phases complete; spec archived

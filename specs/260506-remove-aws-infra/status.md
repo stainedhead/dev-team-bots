@@ -31,7 +31,10 @@
 - [x] PRD moved into spec directory
 - [x] spec.md populated from PRD
 - [x] All phase files initialized
-- [ ] Research questions identified and recorded in research.md
+- [x] Research questions identified and recorded in research.md (5 RQs)
+- [x] Edge cases documented in spec.md
+- [x] Open questions documented in spec.md (OQ-1, OQ-2, OQ-3)
+- [x] Acceptance criteria expanded to cover all 22 FRs
 - [ ] architecture.md draft reviewed
 
 ---

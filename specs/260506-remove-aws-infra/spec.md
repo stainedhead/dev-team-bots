@@ -238,6 +238,13 @@ The `aws` section is removed from `config.yaml`. Any existing config file with a
 - [ ] Crashed bot is restarted with exponential back-off without bringing down the process.
 - [ ] Budget counters survive a clean restart (loaded from `budget.json` on startup).
 - [ ] `go fmt`, `go vet`, `golangci-lint` pass; test coverage ≥ 90% across all modules.
+- [ ] Cosine similarity search over 100k stored vectors completes in < 100ms (verified by benchmark test).
+- [ ] `local/watchdog`: at `heap_warn_mb` threshold a warning log is emitted; at `heap_hard_mb` `TeamManager.Shutdown()` is called and the process exits cleanly.
+- [ ] When `memory.embedder` is set to a provider name that has no embedding endpoint, `boabot` exits at startup with a human-readable error (not a panic).
+- [ ] When `backup.restore_on_empty: true` and `Restore()` fails, `boabot` exits at startup with a non-zero code and a clear error message.
+- [ ] A `config.yaml` containing an `aws:` block is rejected at parse time with a clear error message.
+- [ ] `boabot` starts successfully when `~/.boabot/credentials` does not exist, provided required credentials are supplied via env vars.
+- [ ] `boabot` refuses to start if `~/.boabot/credentials` exists and is world-readable (mode not 0600).
 
 ---
 
@@ -267,6 +274,33 @@ The `aws` section is removed from `config.yaml`. Any existing config file with a
 | M5 | GitHub backup — `infrastructure/github/backup`, `application/backup`, `boabotctl memory` subcommands |
 | M6 | Config schema migration + credentials file + `local/watchdog` |
 | M7 | Remove AWS packages + CDK; docs update; final quality pass |
+
+---
+
+## Edge Cases
+
+| Component | Edge Case | Required Behaviour |
+|---|---|---|
+| `local/queue` | Buffered channel full (slow consumer) | `Send` returns an error immediately — never blocks caller goroutine |
+| `local/bus` | Subscriber goroutine panics during fan-out | Broadcaster recovers the panic, logs it, and continues delivering to remaining subscribers |
+| `application/team` | Bot `config.yaml` or `SOUL.md` missing/malformed at startup | `TeamManager` logs the error and skips that bot; remaining bots start normally. Zero enabled bots is a fatal startup error. |
+| `infrastructure/local/fs` | `memory.path` directory cannot be created (permission denied) | Fatal startup error with clear message — not deferred to first write |
+| `infrastructure/github/backup` | `Backup()` called when memory path is empty | Skip commit and push; log "nothing to back up"; return nil |
+| `infrastructure/github/backup` | Remote has diverged at push time | Pull with rebase (local always wins on conflict); retry push once; fail with error if still diverged |
+| `~/.boabot/credentials` | File does not exist | Boot normally if required values present in env vars |
+| `~/.boabot/credentials` | File exists but is world-readable | Fatal startup error: refuse to start |
+| `local/vector` | `.vec` file is corrupt or truncated on read | Skip the corrupted entry, log a warning, continue search over valid entries |
+| `local/budget` | Flush to `budget.json` fails (disk full) | Log error; continue in-memory; retry on next flush interval |
+
+---
+
+## Open Questions
+
+| # | Question | Blocks | Target |
+|---|---|---|---|
+| OQ-1 | `.vec` binary encoding: raw float32 little-endian or length-prefixed with dimension count? | M3 (local/vector) | Resolve in research phase |
+| OQ-2 | BM25 implementation: use `github.com/blugelabs/bluge` / `github.com/blevesearch/bleve`, or hand-roll a minimal sparse-vector BM25? | M3 (BM25Embedder) | Resolve in research phase |
+| OQ-3 | INI credentials parser: use `github.com/go-ini/ini` or write a minimal parser? Preference is minimal if the library adds significant transitive dependencies. | M6 (credentials) | Resolve in research phase |
 
 ---
 

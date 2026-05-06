@@ -99,8 +99,10 @@ func Load(path string) (Config, error) {
 	}
 	defer func() { _ = f.Close() }()
 
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(true)
 	var cfg Config
-	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+	if err := dec.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg, nil

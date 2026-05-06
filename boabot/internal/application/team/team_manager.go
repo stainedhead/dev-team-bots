@@ -13,8 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
+	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/budget"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
@@ -320,6 +322,36 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	// Per-bot memory directory.
 	memPath := filepath.Join(tm.cfg.MemoryRoot, entry.Name)
 
+	// Wire optional GitHub memory backup. Restore runs before adapters initialise
+	// so that restored files (including budget.json) are visible on first load.
+	var backupUC *appbackup.ScheduledBackupUseCase
+	if botCfg.Backup.Enabled {
+		token := os.Getenv("BOABOT_BACKUP_TOKEN")
+		gb, err := githubbackup.New(githubbackup.Config{
+			RepoURL:     botCfg.Backup.GitHub.Repo,
+			Branch:      botCfg.Backup.GitHub.Branch,
+			AuthorName:  botCfg.Backup.GitHub.AuthorName,
+			AuthorEmail: botCfg.Backup.GitHub.AuthorEmail,
+			MemoryPath:  memPath,
+			Token:       token,
+		})
+		if err != nil {
+			return fmt.Errorf("create github backup for %q: %w", entry.Name, err)
+		}
+		if botCfg.Backup.RestoreOnEmpty {
+			empty, err := isDirEmpty(memPath)
+			if err != nil {
+				return fmt.Errorf("check memory dir for %q: %w", entry.Name, err)
+			}
+			if empty {
+				if err := gb.Restore(ctx); err != nil {
+					return fmt.Errorf("restore on empty for %q: %w", entry.Name, err)
+				}
+			}
+		}
+		backupUC = appbackup.New(gb, botCfg.Backup.Schedule)
+	}
+
 	// Wire domain.MemoryStore.
 	memStore, err := fs.New(memPath)
 	if err != nil {
@@ -344,6 +376,13 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	// Run budget flusher in a goroutine for the lifetime of this bot.
 	go func() { _ = bt.Run(budgetCtx) }()
 
+	// Run the scheduled backup loop if configured.
+	if backupUC != nil {
+		backupCtx, backupCancel := context.WithCancel(ctx)
+		defer backupCancel()
+		go func() { _ = backupUC.Run(backupCtx) }()
+	}
+
 	// Wire domain.ModelProvider.
 	pf := newLocalProviderFactory(botCfg.Models.Providers)
 	providerName := botCfg.Models.Default
@@ -353,7 +392,14 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	}
 
 	// Wire domain.Embedder.
+	// BM25 is the only wired embedder. When a named provider is configured,
+	// validation above has confirmed it supports embeddings; we log a warning
+	// and fall back to BM25 until an OpenAI embedder adapter is implemented.
 	embedder := bm25.DefaultEmbedder()
+	if botCfg.Memory.Embedder != "" && botCfg.Memory.Embedder != "bm25" {
+		slog.Warn("embedder provider configured but OpenAI embedder not yet implemented; using BM25",
+			"bot", entry.Name, "embedder", botCfg.Memory.Embedder)
+	}
 
 	// Wire no-op MCP client.
 	mcpClient := &noopMCPClient{}
@@ -395,6 +441,18 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 }
 
 // --- helpers -----------------------------------------------------------------
+
+// isDirEmpty returns true if path does not exist or is an empty directory.
+func isDirEmpty(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
 
 func loadTeamConfig(path string) (TeamConfig, error) {
 	data, err := os.ReadFile(path)

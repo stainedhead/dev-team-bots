@@ -200,6 +200,81 @@ context:
 	}
 }
 
+// TestStartBot_RestoreOnEmptyFails verifies that when backup.enabled=true and
+// restore_on_empty=true, startBot calls Restore() for an empty memory directory
+// and returns an error when Restore fails (e.g. unreachable repo URL).
+// The TeamManager restarts the bot; the process must not crash.
+func TestStartBot_RestoreOnEmptyFails(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-unit-testing")
+
+	dir := t.TempDir()
+	botsDir := filepath.Join(dir, "bots")
+	botType := "restorebot"
+	botDir := filepath.Join(botsDir, botType)
+	if err := os.MkdirAll(botDir, 0700); err != nil {
+		t.Fatalf("mkdir bots/%s: %v", botType, err)
+	}
+	cfg := `bot:
+  name: restorebot
+  type: ` + botType + `
+models:
+  default: claude
+  providers:
+    - name: claude
+      type: anthropic
+      model_id: claude-haiku-4-5-20251001
+budget:
+  token_spend_daily: 0
+  tool_calls_hourly: 0
+context:
+  threshold_tokens: 4096
+backup:
+  enabled: true
+  restore_on_empty: true
+  github:
+    repo: https://localhost:1/nonexistent/repo.git
+    branch: main
+    author_name: Test
+    author_email: test@test.com
+`
+	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(botDir, "SOUL.md"), []byte("You are a test bot."), 0600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	teamFile := filepath.Join(dir, "team.yaml")
+	if err := os.WriteFile(teamFile, []byte(`team:
+  - name: restorebot
+    type: `+botType+`
+    enabled: true
+    orchestrator: true
+`), 0600); err != nil {
+		t.Fatalf("write team.yaml: %v", err)
+	}
+
+	r := queue.NewRouter()
+	b := bus.New()
+	mgr := team.NewTeamManager(team.ManagerConfig{
+		TeamFilePath:    teamFile,
+		BotsDir:         botsDir,
+		MemoryRoot:      filepath.Join(dir, "memory"),
+		RestartDelay:    5 * time.Millisecond,
+		MaxRestartDelay: 20 * time.Millisecond,
+	}, r, b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	// The bot should repeatedly fail Restore() (connection refused to localhost:1)
+	// and be restarted with back-off. The manager must not crash.
+	err := mgr.Run(ctx)
+	if err != nil && ctx.Err() == nil {
+		t.Errorf("unexpected non-context error from Run: %v", err)
+	}
+}
+
 // TestTeamManager_WatchdogWiring verifies that the watchdog goroutine is started
 // and can trigger the cancel function (simulated via very low HardMB and a
 // fake watchdog config; the watchdog fires against real heap, so we use a

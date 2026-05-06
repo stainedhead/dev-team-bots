@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
@@ -242,5 +243,35 @@ func TestLoad_ProviderConfig(t *testing.T) {
 	}
 	if cfg.Models.Providers[1].ModelID != "llama3" {
 		t.Errorf("provider[1].model_id: got %q", cfg.Models.Providers[1].ModelID)
+	}
+}
+
+// TestLoad_AWSBlockRejected verifies that a config file containing an aws: block
+// is rejected at parse time with a clear error (AC-15).
+func TestLoad_AWSBlockRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `aws:
+  region: us-east-1
+  sqs_queue_url: https://sqs.us-east-1.amazonaws.com/123/queue
+`)
+	_, err := config.Load(p)
+	if err == nil {
+		t.Fatal("expected error for config with aws: block, got nil")
+	}
+	if !strings.Contains(err.Error(), "aws") {
+		t.Errorf("expected error message to mention 'aws', got: %v", err)
+	}
+}
+
+// TestLoad_UnknownFieldRejected verifies that any unknown top-level field is
+// rejected (not silently ignored), ensuring strict schema enforcement.
+func TestLoad_UnknownFieldRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `unknown_field: should-fail`)
+	_, err := config.Load(p)
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
 	}
 }

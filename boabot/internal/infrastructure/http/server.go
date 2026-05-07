@@ -1475,6 +1475,7 @@ const kanbanHTML = `<!DOCTYPE html>
     /* ── Pre-login locked state ── */
     body.locked .tab{opacity:.3;pointer-events:none;cursor:not-allowed}
     body.locked .btn:not(#btn-login){opacity:.3;pointer-events:none;cursor:not-allowed}
+    body.locked #login-dlg .btn{opacity:1!important;pointer-events:auto!important;cursor:pointer!important}
     body.locked #btn-login{background:#16a34a!important;color:#fff!important;border-color:#15803d!important}
     body.locked #btn-login:hover{filter:brightness(1.12)}
 
@@ -1598,7 +1599,9 @@ const kanbanHTML = `<!DOCTYPE html>
     .card-working{font-size:.65rem;color:#fbbf24;margin-top:.2rem;animation:blink 1.5s infinite}
 
     /* ── Context panel ── */
-    .ctx-panel{background:#070d1a;border-top:2px solid #1a2744;overflow:hidden;transition:height .2s;display:flex;flex-direction:column}
+    .ctx-panel{background:#070d1a;border-top:2px solid #1a2744;overflow:hidden;display:flex;flex-direction:column;flex-shrink:0}
+    .ctx-resize-handle{height:6px;cursor:ns-resize;background:transparent;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+    .ctx-resize-handle::after{content:'';width:32px;height:2px;border-radius:1px;background:#1a2744}
     .ctx-hdr{display:flex;align-items:center;gap:.75rem;padding:.5rem 1rem;border-bottom:1px solid #1a2744;flex-shrink:0}
     .ctx-title{font-size:.82rem;color:#e2e8f0;font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .ctx-tabs{display:flex;gap:.25rem}
@@ -1696,6 +1699,7 @@ const kanbanHTML = `<!DOCTYPE html>
         </div>
       </div>
       <div class="ctx-panel" id="board-ctx" style="display:none">
+        <div class="ctx-resize-handle" id="bctx-resize"></div>
         <div class="ctx-hdr">
           <span class="ctx-title" id="board-ctx-title">Select an item</span>
           <div class="ctx-tabs">
@@ -2023,7 +2027,7 @@ const kanbanHTML = `<!DOCTYPE html>
       '</div>';
     d.addEventListener('dragstart',function(ev){dragging=true;dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
     d.addEventListener('dragend',function(){dragging=false;d.classList.remove('dragging')});
-    d.onclick=(function(item){return function(){if(!dragging)openBoardCtx(item)}})(it);
+    d.onclick=(function(item,el){return function(){if(!dragging&&token)openBoardCtx(item,el)}})(it,d);
     return d;
   }
 
@@ -2713,16 +2717,47 @@ const kanbanHTML = `<!DOCTYPE html>
   });
 
   // ── Board context panel ───────────────────────────────────────────────────────
-  function openBoardCtx(item){
+  var bctxH=280;
+  function openBoardCtx(item,cardEl){
     boardCtxItem=item;
     boardCtxThread=null;
     var panel=ge('board-ctx');
     panel.style.display='flex';
-    panel.style.height='520px';
+    panel.style.height=bctxH+'px';
     ge('board-ctx-title').textContent=item.title;
     bctxTab(boardCtxTab);
     loadBoardCtx();
+    if(cardEl){
+      requestAnimationFrame(function(){
+        cardEl.scrollIntoView({block:'nearest',behavior:'smooth'});
+      });
+    }
   }
+
+  // ── Resize handle ─────────────────────────────────────────────────────────────
+  (function(){
+    var handle=ge('bctx-resize');
+    var panel=ge('board-ctx');
+    var startY=0,startH=0,active=false;
+    handle.addEventListener('mousedown',function(e){
+      active=true;startY=e.clientY;startH=bctxH;
+      document.body.style.cursor='ns-resize';
+      document.body.style.userSelect='none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',function(e){
+      if(!active)return;
+      var dy=startY-e.clientY;
+      bctxH=Math.max(120,Math.min(700,startH+dy));
+      panel.style.height=bctxH+'px';
+    });
+    document.addEventListener('mouseup',function(){
+      if(!active)return;
+      active=false;
+      document.body.style.cursor='';
+      document.body.style.userSelect='';
+    });
+  })();
 
   function stopOutputPoll(){if(outputPollTimer){clearInterval(outputPollTimer);outputPollTimer=null;}}
   function stopAskPoll(){if(askPollTimer){clearInterval(askPollTimer);askPollTimer=null;}}

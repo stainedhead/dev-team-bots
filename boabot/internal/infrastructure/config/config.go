@@ -11,7 +11,6 @@ type Config struct {
 	Bot          BotConfig          `yaml:"bot"`
 	Orchestrator OrchestratorConfig `yaml:"orchestrator"`
 	Models       ModelsConfig       `yaml:"models"`
-	Budget       BudgetConfig       `yaml:"budget"`
 	Team         TeamFileConfig     `yaml:"team"`
 	Memory       MemoryConfig       `yaml:"memory"`
 	Backup       BackupConfig       `yaml:"backup"`
@@ -79,11 +78,6 @@ type ProviderConfig struct {
 	// BinaryPath overrides the default CLI binary name/path for subprocess providers.
 	// Defaults to "claude" for claude_code and "codex" for codex.
 	BinaryPath string `yaml:"binary_path"`
-}
-
-type BudgetConfig struct {
-	TokenSpendDaily int64 `yaml:"token_spend_daily"`
-	ToolCallsHourly int   `yaml:"tool_calls_hourly"`
 }
 
 func Load(path string) (Config, error) {

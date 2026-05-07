@@ -141,9 +141,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-opus-4-5
-budget:
-  token_spend_daily: 100000
-  tool_calls_hourly: 50
 team:
   file_path: ./team.yaml
   bots_dir: ./bots
@@ -168,9 +165,6 @@ backup:
 	}
 	if cfg.Orchestrator.APIPort != 8080 {
 		t.Errorf("APIPort: got %d", cfg.Orchestrator.APIPort)
-	}
-	if cfg.Budget.TokenSpendDaily != 100000 {
-		t.Errorf("Budget.TokenSpendDaily: got %d", cfg.Budget.TokenSpendDaily)
 	}
 	if cfg.Memory.HeapWarnMB != 256 {
 		t.Errorf("Memory.HeapWarnMB: got %d", cfg.Memory.HeapWarnMB)

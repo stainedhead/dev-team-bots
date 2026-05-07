@@ -10,12 +10,11 @@ import (
 type ExecuteTaskUseCase struct {
 	provider      domain.ModelProvider
 	chatProvider  domain.ModelProvider // used for chat-source tasks; nil falls back to provider
-	mcp           domain.MCPClient
-	memory        domain.MemoryStore
-	embedder      domain.Embedder
-	vectors       domain.VectorStore
-	soulPrompt    string
-	budgetTracker domain.BudgetTracker
+	mcp          domain.MCPClient
+	memory       domain.MemoryStore
+	embedder     domain.Embedder
+	vectors      domain.VectorStore
+	soulPrompt   string
 }
 
 func NewExecuteTaskUseCase(
@@ -41,20 +40,7 @@ func (u *ExecuteTaskUseCase) WithChatProvider(p domain.ModelProvider) {
 	u.chatProvider = p
 }
 
-// WithBudgetTracker wires a BudgetTracker into the use case.  When set, every
-// model invocation is gated by CheckAndRecordToolCall before the call and
-// CheckAndRecordTokens after, using the actual token counts from the response.
-func (u *ExecuteTaskUseCase) WithBudgetTracker(bt domain.BudgetTracker) {
-	u.budgetTracker = bt
-}
-
 func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (domain.TaskResult, error) {
-	if u.budgetTracker != nil {
-		if err := u.budgetTracker.CheckAndRecordToolCall(ctx); err != nil {
-			return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("budget tool call gate: %w", err)
-		}
-	}
-
 	msgCtx, err := u.buildContext(ctx, task)
 	if err != nil {
 		return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("build context: %w", err)
@@ -73,13 +59,6 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 	})
 	if err != nil {
 		return domain.TaskResult{TaskID: task.ID, Err: err}, fmt.Errorf("model invoke: %w", err)
-	}
-
-	if u.budgetTracker != nil {
-		total := int64(resp.Usage.InputTokens + resp.Usage.OutputTokens)
-		if err := u.budgetTracker.CheckAndRecordTokens(ctx, total); err != nil {
-			return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("budget token gate: %w", err)
-		}
 	}
 
 	return domain.TaskResult{

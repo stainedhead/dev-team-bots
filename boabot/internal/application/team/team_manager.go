@@ -20,7 +20,6 @@ import (
 	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
 	httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
-	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/budget"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
@@ -390,27 +389,6 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		return fmt.Errorf("create VectorStore for %q: %w", entry.Name, err)
 	}
 
-	// Wire domain.BudgetTracker.
-	bt, err := budget.New(botCfg.Budget, memPath)
-	if err != nil {
-		return fmt.Errorf("create BudgetTracker for %q: %w", entry.Name, err)
-	}
-	// Use a derived context for the budget flusher so it is cancelled when
-	// startBot returns (whether cleanly or due to an error). Wait for the
-	// goroutine to exit before returning so no files are written after startBot
-	// returns (prevents t.TempDir() cleanup races in tests).
-	budgetCtx, budgetCancel := context.WithCancel(ctx)
-	var budgetDone sync.WaitGroup
-	budgetDone.Add(1)
-	defer func() {
-		budgetCancel()
-		budgetDone.Wait()
-	}()
-	go func() {
-		defer budgetDone.Done()
-		_ = bt.Run(budgetCtx)
-	}()
-
 	// Run the scheduled backup loop if configured.
 	if backupUC != nil {
 		backupCtx, backupCancel := context.WithCancel(ctx)
@@ -570,8 +548,6 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		vecStore,
 		soulPrompt,
 	)
-	worker.WithBudgetTracker(bt)
-
 	// Wire chat provider if configured and different from the default.
 	if chatName := botCfg.Models.ChatProvider; chatName != "" && chatName != providerName {
 		if chatProvider, chatErr := pf.Get(chatName); chatErr != nil {

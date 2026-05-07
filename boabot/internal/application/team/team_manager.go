@@ -108,8 +108,22 @@ type TeamManager struct {
 	// techLeadPool manages the pool of tech-lead instances (orchestrator mode only).
 	techLeadPool *pool.Pool
 
+	// orchestratorName is the name of the orchestrator bot, set during Run.
+	// Used by spawnTechLead to wire pool entries to the correct routing topology.
+	orchestratorName string
+
+	// dynamicBots tracks goroutines started by the tech-lead pool's spawnFn.
+	dynamicBots   map[string]*dynamicBot
+	dynamicBotsMu sync.Mutex
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
+}
+
+// dynamicBot holds the lifecycle handles for a pool-spawned tech-lead goroutine.
+type dynamicBot struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // NewTeamManager constructs a TeamManager.  Call Run to start the team.
@@ -122,6 +136,7 @@ func NewTeamManager(cfg ManagerConfig, router *queue.Router, bus *bus.Bus) *Team
 		registry: NewBotRegistry(),
 	}
 	tm.botRunner = tm.startBot
+	tm.dynamicBots = make(map[string]*dynamicBot)
 	return tm
 }
 
@@ -178,12 +193,18 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	sharedBoard := orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
 	tm.sharedBoard = sharedBoard
 
+	// Store orchestratorName for use by pool spawn callbacks.
+	tm.orchestratorName = orchestratorName
+
 	// Wire the TechLeadPool with a board status-change hook.
 	psf := infrastructure.NewPoolStateFile(filepath.Join(orchestratorMemPath, "pool.json"))
 	techLeadPool := pool.New(pool.Config{
 		BotsDir:    tm.cfg.BotsDir,
 		MemoryRoot: tm.cfg.MemoryRoot,
 	}, psf)
+	techLeadPool.SetSpawnFn(tm.spawnTechLead)
+	techLeadPool.SetStopFn(tm.stopTechLead)
+	techLeadPool.SetIsRunningFn(tm.isTechLeadRunning)
 	if err := techLeadPool.Reconcile(ctx); err != nil {
 		slog.Warn("tech-lead pool reconcile failed", "err", err)
 	}
@@ -692,6 +713,81 @@ func isDirEmpty(path string) (bool, error) {
 		return false, err
 	}
 	return len(entries) == 0, nil
+}
+
+// spawnTechLead starts a new tech-lead instance in a managed goroutine and is
+// injected into the TechLeadPool as its spawnFn.
+func (tm *TeamManager) spawnTechLead(ctx context.Context, instanceName string) error {
+	// Find the first tech-lead BotEntry to use as a template.
+	var template *BotEntry
+	for i := range tm.teamEntries {
+		if tm.teamEntries[i].Type == "tech-lead" {
+			template = &tm.teamEntries[i]
+			break
+		}
+	}
+	if template == nil {
+		return fmt.Errorf("spawnTechLead: no tech-lead bot entry found in team config")
+	}
+
+	entry := BotEntry{
+		Name:    instanceName,
+		Type:    template.Type,
+		Enabled: true,
+	}
+	tm.router.Register(instanceName, 0)
+
+	botCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	tm.dynamicBotsMu.Lock()
+	tm.dynamicBots[instanceName] = &dynamicBot{cancel: cancel, done: done}
+	tm.dynamicBotsMu.Unlock()
+
+	tm.wg.Add(1)
+	go func() {
+		defer tm.wg.Done()
+		defer func() {
+			tm.dynamicBotsMu.Lock()
+			delete(tm.dynamicBots, instanceName)
+			tm.dynamicBotsMu.Unlock()
+			close(done)
+		}()
+		tm.runBotWithRestart(botCtx, entry, tm.orchestratorName)
+	}()
+
+	return nil
+}
+
+// stopTechLead cancels a dynamically spawned tech-lead instance.
+func (tm *TeamManager) stopTechLead(_ context.Context, instanceName string) error {
+	tm.dynamicBotsMu.Lock()
+	db, ok := tm.dynamicBots[instanceName]
+	tm.dynamicBotsMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("stopTechLead: instance %q not found", instanceName)
+	}
+	db.cancel()
+	return nil
+}
+
+// isTechLeadRunning reports whether a dynamically spawned tech-lead goroutine
+// is still active. Used by TechLeadPool.Reconcile.
+func (tm *TeamManager) isTechLeadRunning(_ context.Context, instanceName string) bool {
+	tm.dynamicBotsMu.Lock()
+	db, ok := tm.dynamicBots[instanceName]
+	tm.dynamicBotsMu.Unlock()
+
+	if !ok {
+		return false
+	}
+	select {
+	case <-db.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func loadTeamConfig(path string) (TeamConfig, error) {

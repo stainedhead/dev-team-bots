@@ -488,3 +488,61 @@ func TestManager_TearDownAll_EmptyManager_Noop(t *testing.T) {
 		t.Errorf("TearDownAll on empty manager: unexpected error: %v", err)
 	}
 }
+
+// TestManager_Spawn_TerminatedAgent_CanBeRespawned verifies that a name can be
+// reused after the previous agent with that name has terminated.
+func TestManager_Spawn_TerminatedAgent_CanBeRespawned(t *testing.T) {
+	t.Parallel()
+	botsDir := makeBotsDir(t, "tech-lead")
+	m := subteam.New(subteam.Config{
+		BotsDir:          botsDir,
+		MemoryRoot:       t.TempDir(),
+		HeartbeatTimeout: 30 * time.Second,
+	})
+
+	ctx := context.Background()
+	if _, err := m.Spawn(ctx, "tech-lead", "tech-lead-1", ""); err != nil {
+		t.Fatalf("first Spawn: %v", err)
+	}
+	if err := m.Terminate(ctx, "tech-lead-1"); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	// Re-spawning the same name after termination must succeed.
+	if _, err := m.Spawn(ctx, "tech-lead", "tech-lead-1", ""); err != nil {
+		t.Fatalf("re-Spawn after termination: %v", err)
+	}
+	_ = m.TearDownAll(context.Background())
+}
+
+// TestManager_WithSessionFile_ClearsStaleRecords verifies that pre-existing
+// session records are discarded when WithSessionFile is called.
+func TestManager_WithSessionFile_ClearsStaleRecords(t *testing.T) {
+	t.Parallel()
+	botsDir := makeBotsDir(t, "tech-lead")
+	dir := t.TempDir()
+	sfPath := filepath.Join(dir, "session.json")
+
+	// Pre-populate the session file with a stale record.
+	sf := infrastructure.NewSessionFile(sfPath)
+	stale := []infrastructure.SessionRecord{
+		{Name: "stale-bot", BotType: "tech-lead", Status: domain.AgentStatusWorking},
+	}
+	if err := sf.Save(stale); err != nil {
+		t.Fatalf("pre-populate session file: %v", err)
+	}
+
+	// Attaching a new manager via WithSessionFile must clear the stale records.
+	subteam.New(subteam.Config{
+		BotsDir:    botsDir,
+		MemoryRoot: dir,
+	}).WithSessionFile(sf)
+
+	records, err := sf.Load()
+	if err != nil {
+		t.Fatalf("Load after WithSessionFile: %v", err)
+	}
+	if len(records) != 0 {
+		t.Errorf("expected 0 records after WithSessionFile (stale cleared), got %d", len(records))
+	}
+}

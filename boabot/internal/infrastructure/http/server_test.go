@@ -1665,7 +1665,7 @@ func TestPool_Endpoint_ReturnsEntries(t *testing.T) {
 
 func TestPool_Endpoint_NoPool_Returns200Empty(t *testing.T) {
 	t.Parallel()
-	// Pool is nil in config -- endpoint should return empty pool JSON.
+	// Pool is nil in config -- authenticated request should return empty pool JSON.
 	s := httpserver.New(httpserver.Config{
 		Auth:   &fakeAuth{},
 		Board:  &fakeBoardStore{},
@@ -1678,6 +1678,7 @@ func TestPool_Endpoint_NoPool_Returns200Empty(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/pool", nil)
+	req.Header.Set("Authorization", authHeader())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -1686,5 +1687,31 @@ func TestPool_Endpoint_NoPool_Returns200Empty(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestPool_Endpoint_RequiresAuth(t *testing.T) {
+	t.Parallel()
+	s := httpserver.New(httpserver.Config{
+		Auth:   &fakeAuth{},
+		Board:  &fakeBoardStore{},
+		Team:   &fakeControlPlane{},
+		Users:  &fakeUserStore{},
+		Skills: &fakeSkillRegistry{},
+		DLQ:    &fakeDLQStore{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/pool", nil)
+	// No Authorization header.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", resp.StatusCode)
 	}
 }

@@ -107,20 +107,20 @@ func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (do
 // If the item's Status differs from the stored value, the registered statusChangeHook is called.
 func (s *InMemoryBoardStore) Update(_ context.Context, item domain.WorkItem) (domain.WorkItem, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	existing, ok := s.items[item.ID]
 	if !ok {
+		s.mu.Unlock()
 		return domain.WorkItem{}, ErrWorkItemNotFound
 	}
 	oldStatus := existing.Status
 	s.items[item.ID] = item
 	s.persist()
+	hook := s.statusChangeHook
+	s.mu.Unlock()
 
-	if s.statusChangeHook != nil && oldStatus != item.Status {
-		s.statusChangeHook(oldStatus, item.Status, item)
+	if hook != nil && oldStatus != item.Status {
+		hook(oldStatus, item.Status, item)
 	}
-
 	return item, nil
 }
 

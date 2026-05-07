@@ -17,6 +17,8 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
 )
 
+var _ domain.SubTeamManager = (*Manager)(nil)
+
 // Config configures the SubTeamManager.
 type Config struct {
 	// BotsDir is the directory containing bots/<type>/config.yaml.
@@ -71,11 +73,16 @@ func New(cfg Config) *Manager {
 	}
 }
 
-// WithSessionFile attaches a session file to the manager. On construction, it
-// loads existing session records and attempts to reconnect any live sessions.
+// WithSessionFile attaches a session file to the manager. Pre-existing records
+// are discarded with a warning — goroutine reconnect is not supported.
 // Call before Spawn to enable persistence.
 func (m *Manager) WithSessionFile(sf *infrastructure.SessionFile) *Manager {
 	m.sf = sf
+	if records, err := sf.Load(); err == nil && len(records) > 0 {
+		slog.Warn("subteam: stale session records found at startup; discarding",
+			"count", len(records))
+		_ = sf.Save([]infrastructure.SessionRecord{})
+	}
 	return m
 }
 
@@ -94,7 +101,7 @@ func (m *Manager) Spawn(ctx context.Context, botType, name, workDir string) (*do
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.bots[name]; exists {
+	if state, exists := m.bots[name]; exists && state.agent.Status != domain.AgentStatusTerminated {
 		return nil, fmt.Errorf("subteam: agent %q is already active", name)
 	}
 
@@ -305,7 +312,7 @@ func (m *Manager) TearDownAll(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("subteam: TearDownAll timed out waiting for %q", state.agent.Name))
 			continue
 		}
-		waitCtx, waitCancel := context.WithTimeout(ctx, remaining)
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), remaining)
 		select {
 		case <-state.done:
 		case <-waitCtx.Done():

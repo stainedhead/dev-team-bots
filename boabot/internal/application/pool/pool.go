@@ -14,6 +14,8 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
 )
 
+var _ domain.TechLeadPool = (*Pool)(nil)
+
 // Config configures the TechLeadPool.
 type Config struct {
 	// BotsDir is the directory containing bots/<type>/config.yaml.

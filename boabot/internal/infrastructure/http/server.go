@@ -136,7 +136,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/chat/{bot}", s.auth(s.handleChatSend))
 
 	// Tech-lead pool
-	mux.HandleFunc("GET /api/v1/pool", s.handlePoolList)
+	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)

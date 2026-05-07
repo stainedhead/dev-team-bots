@@ -1693,7 +1693,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg"><label class="fl">Title</label><input class="fi" id="ni-title" type="text" placeholder="What needs to be done?"/></div>
   <div class="fg"><label class="fl">Description</label><textarea class="fi" id="ni-desc" placeholder="Optional details…"></textarea></div>
   <div class="fg"><label class="fl">Assign to bot</label><select class="fi" id="ni-bot"><option value="">Unassigned</option></select></div>
-  <div class="fg"><label class="fl">Working directory</label><input class="fi" id="ni-workdir" type="text" placeholder="/path/to/repo (optional)"/></div>
+  <div class="fg"><label class="fl">Working directory</label><select class="fi" id="ni-workdir-sel" onchange="ge('ni-workdir-txt').style.display=this.value?'block':'none'"><option value="">None</option></select><input class="fi" id="ni-workdir-txt" type="text" placeholder="sub/path/within/root (optional)" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="ni-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('ni-dlg')">Cancel</button><button class="btn btn-primary" onclick="doCreateItem()">Create</button></div>
 </dialog>
@@ -1727,7 +1727,7 @@ const kanbanHTML = `<!DOCTYPE html>
     <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem"><input type="radio" name="at-timing" id="at-later" onchange="ge('at-sched-wrap').style.display='block'"> Schedule</label>
   </div>
   <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Schedule At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
-  <div class="fg"><label class="fl">Working directory (optional)</label><select class="fi" id="at-workdir-sel" onchange="ge('at-workdir-txt').style.display=this.value==='__custom__'?'block':'none'"><option value="">None</option></select><input class="fi" id="at-workdir-txt" type="text" placeholder="or enter path…" style="margin-top:.35rem;display:none"/></div>
+  <div class="fg"><label class="fl">Working directory (optional)</label><select class="fi" id="at-workdir-sel" onchange="ge('at-workdir-txt').style.display=this.value?'block':'none'"><option value="">None</option></select><input class="fi" id="at-workdir-txt" type="text" placeholder="sub/path/within/root (optional)" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="at-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-primary" onclick="doDispatchTask()">Dispatch</button></div>
 </dialog>
@@ -2022,18 +2022,25 @@ const kanbanHTML = `<!DOCTYPE html>
     allBots.forEach(function(b){
       var o=document.createElement('option');o.value=b.name;o.textContent=b.name+(b.status==='active'?'':' (offline)');sel.appendChild(o);
     });
+    var wsel=ge('ni-workdir-sel');
+    wsel.innerHTML='<option value="">None</option>';
+    (allWorkDirs||[]).forEach(function(d){var o=document.createElement('option');o.value=d;o.textContent=d;wsel.appendChild(o);});
+    ge('ni-workdir-txt').style.display='none';
+    ge('ni-workdir-txt').value='';
     ge('ni-err').style.display='none';
     dlg('ni-dlg');
   }
 
   function doCreateItem(){
-    var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,workdir=ge('ni-workdir').value.trim(),e=ge('ni-err');
+    var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,e=ge('ni-err');
     e.style.display='none';
     if(!title){e.textContent='Title is required';e.style.display='block';return}
+    var root=ge('ni-workdir-sel').value,sub=ge('ni-workdir-txt').value.trim();
+    var workdir=root?(sub?root+'/'+sub:root):'';
     var body={title:title,description:desc,assigned_to:bot};
     if(workdir)body.work_dir=workdir;
     api('POST','/api/v1/board',body)
-      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir').value='';loadBoard()})
+      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir-sel').value='';ge('ni-workdir-txt').value='';ge('ni-workdir-txt').style.display='none';loadBoard()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -2219,9 +2226,6 @@ const kanbanHTML = `<!DOCTYPE html>
       o.value=d;o.textContent=d;
       sel.appendChild(o);
     });
-    var custom=document.createElement('option');
-    custom.value='__custom__';custom.textContent='Custom path…';
-    sel.appendChild(custom);
     ge('at-workdir-txt').style.display='none';
     ge('at-workdir-txt').value='';
     dlg('at-dlg');
@@ -2235,8 +2239,8 @@ const kanbanHTML = `<!DOCTYPE html>
     var e=ge('at-err');
     e.style.display='none';
     if(!instruction){e.textContent='Instruction is required';e.style.display='block';return}
-    var selVal=ge('at-workdir-sel').value;
-    var workDir=selVal==='__custom__'?ge('at-workdir-txt').value.trim():selVal;
+    var root=ge('at-workdir-sel').value,sub=ge('at-workdir-txt').value.trim();
+    var workDir=root?(sub?root+'/'+sub:root):'';
     var body={instruction:instruction};
     if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
     if(workDir){body.work_dir=workDir}

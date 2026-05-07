@@ -3003,13 +3003,21 @@ const kanbanHTML = `<!DOCTYPE html>
       var sub=txt&&txt.style.display!=='none'?txt.value.trim():'';
       return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
     }
+    function getNiWorkDir(){
+      var sel=ge('ni-workdir-sel'),txt=ge('ni-workdir-txt');
+      var base=sel?sel.value:'';
+      var sub=txt&&txt.style.display!=='none'?txt.value.trim():'';
+      return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
+    }
     var bCtxDir=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
     // Register mention keydown handlers FIRST so mpOnKeydown fires before send handlers.
+    // Note: bctx-desc is dynamically recreated by loadBoardCtx() so it is attached there instead.
     attachMention(ge('chat-input'),bCtxDir);
     attachMention(ge('board-ctx-ask-input'),bCtxDir);
+    attachMention(ge('ni-title'),getNiWorkDir);
+    attachMention(ge('ni-desc'),getNiWorkDir);
     attachMention(ge('at-title'),getAtWorkDir);
     attachMention(ge('at-instr'),getAtWorkDir);
-    attachMention(ge('bctx-desc'),bCtxDir);
     // Ask input: Enter triggers boardAsk only when mention popup is not active.
     var askIn=ge('board-ctx-ask-input');
     if(askIn)askIn.addEventListener('keydown',function(e){
@@ -3155,6 +3163,12 @@ const kanbanHTML = `<!DOCTYPE html>
         (it.active_task_id&&it.status==='in-progress'?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
         (canEdit?'<div style="margin-top:.75rem"><button id="bctx-save-btn" class="btn btn-primary btn-sm" disabled onclick="saveBoardAllEdits()" style="opacity:.4;cursor:not-allowed">Save changes</button></div>':'')+
         (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
+      // Re-attach mention pickers to dynamically-created editable fields.
+      if(canEdit){
+        var _bwd=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
+        attachMention(ge('bctx-desc'),_bwd);
+        attachMention(ge('bctx-workdir-sub'),_bwd);
+      }
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
       function renderOutput(resp){

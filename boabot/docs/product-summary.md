@@ -21,3 +21,8 @@ When `orchestrator.enabled: true` is set in config, the same binary additionally
 - Runs the Kanban board (work tracking).
 - Serves the REST API and web UI via configured ports.
 - Manages user authentication (JWT).
+- Maintains a dynamic pool of tech-lead instances, one per In Progress kanban item, with automatic allocation and deallocation as items change state.
+
+## Dynamic Subteam Spawning (Tech-Lead Bots)
+
+Tech-lead bots can spawn and manage named sub-agent goroutines at runtime. Each spawned sub-agent runs in complete isolation with its own message bus and queue router. Spawning and termination are triggered via typed messages on the existing queue. A heartbeat watchdog on each spawned agent ensures stale goroutines are self-terminated automatically. Sub-agent state is persisted to a session file so the tech-lead survives process restarts without losing context.

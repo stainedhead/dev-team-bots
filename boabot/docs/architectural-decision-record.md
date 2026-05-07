@@ -79,3 +79,35 @@ Module-specific decisions. For system-level decisions see root [`docs/architectu
 **Rationale:** No API key or network call needed — the embedder is self-contained in the process. FNV-1a hashing is deterministic and fast. The O(n) flat search is sufficient for memory stores up to ~100k documents before latency becomes a concern. The `domain.Embedder` interface is swappable: operators can replace BM25 with an OpenAI or other neural embedder by setting `memory.embedder` in config, with no application-layer changes required.
 
 **Rejected:** Neural embedding model in-process (200–500 MB memory overhead, cgo complexity, GPU dependency); OpenAI embeddings as the default (requires API key, adds per-write latency and cost, unavailable offline); HNSW approximate nearest neighbour (complexity without evidence of need at current scale).
+
+---
+
+## ADR-B010 — Tech-lead sub-agent isolation via distinct Bus and Router instances
+
+**Decision:** Each sub-agent spawned by `SubTeamManager.Spawn` receives a new `context.CancelFunc` (derived from the tech-lead's context) plus a unique bus ID. No shared in-process state (bus, queue, router) is reused between the parent tech-lead and its sub-agents, or between sibling sub-agents.
+
+**Rationale:** Sub-agents must not be able to interfere with each other through shared queues or bus subscriptions. Giving each sub-agent its own cancellable context also ensures clean teardown: the tech-lead can terminate one sub-agent without affecting any others. A shared bus would require careful filtering to prevent message cross-contamination, which is error-prone; isolation by construction eliminates the problem entirely.
+
+**Message-based spawn/terminate instead of LLM tool calls.** Spawn and terminate operations arrive as typed messages (`subteam.spawn`, `subteam.terminate`) on the tech-lead's existing queue, processed by `RunAgentUseCase`. This keeps the harness as the single entry point for all external control signals and avoids adding spawn/terminate as model-visible tools (which would allow an LLM to autonomously spawn unlimited sub-agents without any operator visibility).
+
+**Heartbeat watchdog.** The 30s/90s heartbeat design (three missed intervals trigger self-termination) was chosen over a configurable TTL or an explicit "idle" signal because it provides automatic cleanup without requiring the parent to explicitly track sub-agent liveness. The watchdog runs entirely inside the sub-agent's goroutine — no separate monitor goroutine is required.
+
+**Session file persistence.** Sub-agent state is persisted to `<memory>/session.json` using atomic writes (write .tmp → `os.Rename`). A corrupt or missing file returns an empty slice with no crash, enabling recovery from partial writes or unexpected process termination.
+
+**Rejected:** Shared bus with per-bot topic filtering (complex, error-prone); LLM tool call as spawn trigger (no operator visibility, unbounded spawning risk); per-sub-agent monitor goroutine (one heartbeat loop per sub-agent within the sub-agent's own goroutine is simpler and avoids goroutine proliferation).
+
+---
+
+## ADR-B011 — Orchestrator pool management via board hook rather than polling
+
+**Decision:** `TechLeadPool.Allocate` and `TechLeadPool.Deallocate` are called directly from the orchestrator's board mutation path when an item transitions into or out of `in-progress`. The pool does not poll the board for state changes.
+
+**Rationale:** Hooking into the mutation path gives zero-latency allocation: the tech-lead is associated with an item at the exact moment the transition occurs, not after a polling interval. It also makes allocation causal — a tech-lead is guaranteed to exist before the assigned bot receives its task notification. Polling would require a separate goroutine, introduce latency, and risk double-allocation races.
+
+**Warm standby pattern.** The last pool entry is never stopped on `Deallocate` — it is demoted to `idle`. This eliminates cold-start latency for the next allocation. The cost is one idle goroutine at all times once the pool has been used; this is considered acceptable given the typical cadence of kanban transitions.
+
+**Serialised pool allocation.** All `Allocate` and `Deallocate` operations hold the pool mutex for their full duration (including the `spawnFn` call with a 1s timeout). This prevents double-allocation at the cost of brief serialisation on high-frequency board transitions. Given typical human-driven board update rates, contention is not expected to be a problem.
+
+**Pool state file persistence.** Pool state is persisted to `<orchestrator-memory>/pool.json` on every mutation using the same atomic write strategy as `SessionFile`. Startup `Reconcile` re-derives liveness by calling the injected `isRunFn` predicate for each record, so the file is used as a hint rather than ground truth.
+
+**Rejected:** Polling the board from a separate goroutine (latency, double-allocation risk); restarting all pool entries on process restart (expensive, breaks warm standby); blocking deallocation until `stopFn` completes under the mutex (could delay board transitions if stop is slow — `stopFn` is called after the entry is removed from the slice, outside the performance-critical path of the lock).

@@ -40,6 +40,8 @@ internal/
     scheduler/          # cron-based task scheduler; TriageUseCase for label-based routing
     team/               # TeamManager (goroutine-per-bot), BotRegistry, localProviderFactory
     workflow/           # CreateWorkItem, AdvanceWorkflow, AssignBot, StalledItemRecovery
+    subteam/            # SubTeamManager: spawn/terminate/heartbeat for tech-lead sub-agents
+    pool/               # TechLeadPool: allocate/deallocate pool of tech-lead instances (orchestrator)
 
   infrastructure/
     aws/
@@ -68,9 +70,13 @@ internal/
     workflow/           # ConfigLoader: YAML workflow config with SIGHUP hot-reload
     http/               # Orchestrator REST API (Go 1.22 ServeMux) + HTMX Kanban board web UI
                         # Auth: Bearer JWT middleware; admin-only guard on protected routes
-                        # Routes: /api/v1/{auth,board,team,skills,users,profile,dlq}
+                        # Routes: /api/v1/{auth,board,team,skills,users,profile,dlq,pool}
                         # Web UI: / → HTMX Kanban board (auto-refreshes every 30s)
                         # htmx loaded from unpkg.com with SHA-384 SRI hash for supply-chain safety
+    session_file.go     # SessionFile: atomic JSON persistence for spawned sub-agent records
+                        # (<memory>/session.json; write-tmp-then-rename; corrupt file → empty slice)
+    pool_state_file.go  # PoolStateFile: atomic JSON persistence for pool state records
+                        # (<orchestrator-memory>/pool.json; same atomic write strategy)
     config/             # config file loading (YAML)
 ```
 
@@ -84,6 +90,9 @@ main goroutine
         │           └── Worker goroutines (per task, recover() guards panic)
         │                 └── ContextManager (progressive disclosure, checkpoint-and-restart)
         │                 └── ToolGater (BM25 scoring, schema injection)
+        │     └── [tech-lead only] SubTeamManager
+        │           └── spawned bot goroutine (per sub-agent, recover() guards panic)
+        │                 └── heartbeat watchdog timer (90s timeout → self-terminate)
         └── watchdog goroutine (heap monitor, optional; cancels shared context on hard limit)
 ```
 
@@ -160,6 +169,93 @@ context:
 ```
 
 Credentials (API keys) are **never** stored in `config.yaml`. They are read from `~/.boabot/credentials` (INI format) or environment variables at startup. The `BOABOT_PROFILE` environment variable selects a non-default profile.
+
+## SubTeamManager
+
+**Clean Architecture placement:** Application layer (`internal/application/subteam/`). Implements `domain.SubTeamManager`. Depends on `infrastructure.SessionFile` for persistence.
+
+**Isolation model.** Each spawned sub-agent receives a dedicated `context.CancelFunc` derived from the tech-lead's context. The sub-agent's bus ID (`bus-<name>`) and queue router are created fresh per spawn; no shared state exists between the parent and the sub-agent or between sibling sub-agents. The `botState` struct holds the cancel function, a `done` channel (closed when the goroutine exits), and a buffered heartbeat channel.
+
+**Heartbeat mechanism.** `SendHeartbeat(ctx)` acquires a lock over all live bots and sends a `struct{}{}` to each bot's `heartbeat` channel (non-blocking, drops on full). Inside `runBot`, a `time.Timer` is reset on each received heartbeat. If the timer fires before the next heartbeat, the goroutine logs a warning and returns, triggering the deferred `markTerminated` cleanup. Default interval: 30s. Default timeout: 90s (three missed intervals).
+
+**Panic recovery.** `runBot` defers a `recover()`. Any panic inside a spawned bot goroutine is caught, logged with `slog.Error`, and the goroutine exits cleanly. The panic does not propagate to the tech-lead.
+
+**Session file persistence.** A `SessionFile` path is `<memory>/session.json`. On `Spawn`, the new `SessionRecord` (name, bot_type, work_dir, bus_id, status, spawned_at) is appended and the file re-saved atomically (write .tmp → `os.Rename`). On `markTerminated`, the record for that name is filtered out and the file re-saved. If the file does not exist on `Load`, an empty slice is returned — no error. If the file is corrupt, a warning is logged and an empty slice is returned.
+
+**Soft spawn limit.** Default: 5. When `len(bots)+1 > SoftSpawnLimit`, `slog.Warn` is emitted. Spawning proceeds regardless.
+
+**`Terminate` timeout.** `Terminate` cancels the bot's context then waits on `done` with a 5-second `context.WithTimeout`. If the goroutine does not exit in time, `Terminate` returns a timeout error but the goroutine may still be running — callers should treat the agent as unreliable after this point.
+
+**`TearDownAll` timeout.** Cancels all bot contexts concurrently, then waits on each `done` channel with a shared 10-second deadline. Errors are accumulated and returned via `errors.Join`.
+
+## TechLeadPool
+
+**Clean Architecture placement:** Application layer (`internal/application/pool/`). Implements `domain.TechLeadPool`. Depends on `infrastructure.PoolStateFile` for persistence.
+
+**Pool lifecycle.** The pool is a slice of `*domain.PoolEntry` protected by a `sync.Mutex`. All mutating operations (`Allocate`, `Deallocate`) hold the mutex for their full duration, ensuring serialised access. An auto-incrementing counter generates instance names in the form `tech-lead-N`.
+
+**Allocate.** Scans entries for an idle entry first. If found, status is set to `allocated`, `ItemID` and `AllocatedAt` are updated, the file is saved, and the entry is returned. If no idle entry exists, `spawnFn(ctx, name)` is called with a `SpawnTimeout` (default 1s) context. On spawn success, a new `PoolEntry` is appended. On spawn failure, the counter is rolled back.
+
+**Deallocate.** Finds the entry by `ItemID`. If it is the only entry in the slice, the entry is converted to idle warm standby (status `idle`, `ItemID` cleared) — `stopFn` is not called. If there are multiple entries, the entry is removed from the slice and `stopFn(ctx, instanceName)` is called (errors are logged but not returned).
+
+**Warm standby guarantee.** At least one `idle` entry always remains in the pool once the first allocation has occurred. This eliminates cold-start latency for the next `Allocate` call.
+
+**Reconcile.** On startup, `Reconcile(ctx)` loads the `PoolStateFile`, calls `isRunFn(ctx, instanceName)` for each record, discards records whose instances are not running, and rebuilds the live slice. The file is re-saved after reconciliation.
+
+**Persistence.** `PoolStateFile` writes to `<orchestrator-memory>/pool.json` atomically (write .tmp → `os.Rename`). Each `PoolStateRecord` carries: `instance_name`, `status`, `item_id` (omitempty), `bus_id`, `allocated_at` (omitempty).
+
+**Soft pool limit.** Default: 10. `slog.Warn` is emitted when `len(entries)+1 > SoftPoolLimit`. Allocation is not blocked.
+
+## New Message Types
+
+Three new message types were added to `domain.MessageType` in `internal/domain/message.go`:
+
+| Constant | Wire value | Payload struct | Description |
+|---|---|---|---|
+| `MessageTypeSubTeamSpawn` | `subteam.spawn` | `SubTeamSpawnPayload` | Instructs a tech-lead to spawn a named sub-agent |
+| `MessageTypeSubTeamTerminate` | `subteam.terminate` | `SubTeamTerminatePayload` | Instructs a tech-lead to terminate a named sub-agent |
+| `MessageTypeSubTeamHeartbeat` | `subteam.heartbeat` | — | Heartbeat signal sent to a tech-lead's queue; tech-lead calls `SubTeamManager.SendHeartbeat` in response |
+
+**`SubTeamSpawnPayload`**
+```json
+{
+  "bot_type": "implementer",
+  "name":     "impl-auth",
+  "work_dir": "/workspace/auth-service"
+}
+```
+
+**`SubTeamTerminatePayload`**
+```json
+{
+  "name": "impl-auth"
+}
+```
+
+`work_dir` is optional in `SubTeamSpawnPayload` — omit or set to `""` to inherit the tech-lead's working directory.
+
+## REST API — GET /api/v1/pool
+
+Returns the current tech-lead pool state. No authentication required. Available only when `orchestrator.enabled: true`.
+
+**Response schema:**
+```json
+{
+  "pool": [
+    {
+      "InstanceName": "tech-lead-1",
+      "Status":       "allocated",
+      "ItemID":       "item-42",
+      "AllocatedAt":  "2026-05-07T14:30:00Z",
+      "BusID":        "bus-tech-lead-1"
+    }
+  ]
+}
+```
+
+Field types follow `domain.PoolEntry`. `Status` values: `idle`, `allocated`, `terminating`. `ItemID` and `AllocatedAt` are empty/zero on idle entries.
+
+If the pool is not configured (nil), the endpoint returns `{"pool": []}` with status 200.
 
 ## Key Design Decisions
 

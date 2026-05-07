@@ -4,13 +4,14 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 
 ## What It Does
 
-- Polls SQS, monitors Slack and Teams, spawns worker threads for incoming tasks.
+- Polls the in-process queue, monitors Slack and Teams, spawns worker threads for incoming tasks.
 - Executes tasks agentically using a configured language model, built-in harness tools, MCP tools, and Agent Skills.
-- Maintains a git-backed memory directory synced to private S3; uses S3 Vectors for semantic search.
+- Maintains a local git-backed memory directory with optional GitHub backup; uses a local BM25 embedder and cosine similarity vector store for semantic search.
 - Enforces Tool Attention (BM25 scoring) to keep injected tool schemas under the 20-tool cap.
 - Checkpoints worker state and restarts when context window approaches capacity.
-- Tracks token spend and tool call counts in memory, flushed to DynamoDB every 30 seconds.
-- When `orchestrator.enabled: true`: runs the control plane, Kanban board, REST API, and web UI.
+- Tracks token spend and tool call counts in a local JSON-backed budget tracker.
+- When `orchestrator.enabled: true`: runs the control plane, Kanban board, REST API, web UI, and tech-lead pool.
+- Tech-lead bots can dynamically spawn and manage isolated sub-agent goroutines via `SubTeamManager`.
 
 ## Documentation
 
@@ -21,8 +22,11 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 
 ## User Documentation
 
+- [`user-docs/getting-started.md`](user-docs/getting-started.md) — quick start
 - [`user-docs/configuration.md`](user-docs/configuration.md) — config file reference
 - [`user-docs/orchestrator.md`](user-docs/orchestrator.md) — running in orchestrator mode
+- [`user-docs/subteam-spawning.md`](user-docs/subteam-spawning.md) — tech-lead subteam spawning
+- [`user-docs/pool-management.md`](user-docs/pool-management.md) — orchestrator tech-lead pool
 
 ## Development
 

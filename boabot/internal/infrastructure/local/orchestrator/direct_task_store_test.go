@@ -114,13 +114,13 @@ func TestInMemoryDirectTaskStore_Update(t *testing.T) {
 	created, _ := store.Create(ctx, task)
 
 	now := time.Now().UTC()
-	created.Status = domain.DirectTaskStatusDispatched
+	created.Status = domain.DirectTaskStatusRunning
 	created.DispatchedAt = &now
 	updated, err := store.Update(ctx, created)
 	if err != nil {
 		t.Fatalf("Update returned unexpected error: %v", err)
 	}
-	if updated.Status != domain.DirectTaskStatusDispatched {
+	if updated.Status != domain.DirectTaskStatusRunning {
 		t.Errorf("expected Status=dispatched, got %q", updated.Status)
 	}
 	if updated.DispatchedAt == nil {
@@ -200,7 +200,7 @@ func TestInMemoryDirectTaskStore_ListAll(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending})
-	_, _ = store.Create(ctx, domain.DirectTask{BotName: "qa-1", Status: domain.DirectTaskStatusDispatched})
+	_, _ = store.Create(ctx, domain.DirectTask{BotName: "qa-1", Status: domain.DirectTaskStatusRunning})
 	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-2", Status: domain.DirectTaskStatusFailed})
 
 	items, err := store.ListAll(ctx)

@@ -36,7 +36,7 @@ func TestBoardUpdate_DispatchesTaskOnInProgress(t *testing.T) {
 		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
-			return domain.DirectTask{ID: "dispatched-task", BotName: botName, Status: domain.DirectTaskStatusDispatched}, nil
+			return domain.DirectTask{ID: "dispatched-task", BotName: botName, Status: domain.DirectTaskStatusRunning}, nil
 		},
 	}
 

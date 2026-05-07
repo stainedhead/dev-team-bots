@@ -759,7 +759,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			// Mark the task as completed.
 			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
 				now := time.Now().UTC()
-				task.Status = domain.DirectTaskStatusCompleted
+				task.Status = domain.DirectTaskStatusSucceeded
 				task.CompletedAt = &now
 				task.Output = p.Output
 				_, _ = sharedTasks.Update(handlerCtx, task)

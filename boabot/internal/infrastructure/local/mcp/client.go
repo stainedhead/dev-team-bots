@@ -388,6 +388,28 @@ func (c *Client) isAllowed(path string) bool {
 	return false
 }
 
+// AllowDir temporarily adds dir to the client's allowed directories and returns
+// a cleanup function that removes it. Callers must invoke the returned function
+// (typically via defer) when the temporary permission is no longer needed.
+// Safe to call because bots process tasks sequentially.
+func (c *Client) AllowDir(path string) func() {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return func() {}
+	}
+	clean := filepath.Clean(abs)
+	c.allowedDirs = append(c.allowedDirs, clean)
+	return func() {
+		updated := make([]string, 0, len(c.allowedDirs))
+		for _, d := range c.allowedDirs {
+			if d != clean {
+				updated = append(updated, d)
+			}
+		}
+		c.allowedDirs = updated
+	}
+}
+
 func okResult(text string) domain.MCPToolResult {
 	return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: text}}}
 }

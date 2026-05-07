@@ -1565,7 +1565,8 @@ const kanbanHTML = `<!DOCTYPE html>
     .pill{display:inline-block;padding:.1rem .45rem;border-radius:9999px;font-size:.62rem;font-weight:600;white-space:nowrap}
     .pill-ok{background:#14532d;color:#86efac}
     .pill-warn{background:#78350f;color:#fde68a}
-    .pill-off{background:#1e293b;color:#475569}
+    .pill-info{background:#7c2d12;color:#fdba74}
+    .pill-off{background:#450a0a;color:#fca5a5}
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
     .acts{display:flex;gap:.3rem;align-items:center}
@@ -2517,7 +2518,7 @@ const kanbanHTML = `<!DOCTYPE html>
     var tasks=getFilteredTasks();
     if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">None</div>';return}
     var rows=tasks.map(function(t){
-      var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
+      var sc=t.status==='pending'?'pill-warn':t.status==='running'?'pill-info':t.status==='succeeded'?'pill-ok':'pill-off';
       var label=esc(t.title||(t.instruction||'').substring(0,60))+((!t.title&&t.instruction&&t.instruction.length>60)?'&#x2026;':'');
       return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+label+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
     }).join('');
@@ -2561,7 +2562,7 @@ const kanbanHTML = `<!DOCTYPE html>
     ge('tasks-list').querySelectorAll('input[data-cid]:checked').forEach(function(cb){
       var id=cb.getAttribute('data-cid');
       var task=allTasksList.find(function(t){return t.id===id});
-      if(task&&task.status!=='dispatched')ids.push(id);
+      if(task&&task.status!=='running')ids.push(id);
     });
     if(!ids.length){alert('No eligible tasks selected (already-running tasks are skipped).');return}
     Promise.all(ids.map(function(id){return api('POST','/api/v1/tasks/'+id+'/run',{})}))
@@ -3121,7 +3122,7 @@ const kanbanHTML = `<!DOCTYPE html>
     if(taskCtxActiveTab==='output'){
       if(t.output){
         body.innerHTML='<div class="ctx-output" style="max-height:none">'+esc(t.output)+'</div>';
-      } else if(t.status==='dispatched'){
+      } else if(t.status==='running'){
         body.innerHTML='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
       } else {
         body.innerHTML='<div style="color:#475569;font-size:.78rem">No output recorded.</div>';

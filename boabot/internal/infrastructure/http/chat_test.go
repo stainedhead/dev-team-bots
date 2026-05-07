@@ -197,7 +197,7 @@ func TestChatSend_Returns201WithMessage(t *testing.T) {
 		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
-			return domain.DirectTask{ID: "task-99", BotName: botName, Instruction: instruction, Status: domain.DirectTaskStatusDispatched}, nil
+			return domain.DirectTask{ID: "task-99", BotName: botName, Instruction: instruction, Status: domain.DirectTaskStatusRunning}, nil
 		},
 	}
 	s := httpserver.New(httpserver.Config{

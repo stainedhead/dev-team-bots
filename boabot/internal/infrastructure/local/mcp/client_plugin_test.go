@@ -172,4 +172,3 @@ printf '{"content":[{"type":"text","text":"called with args"}],"is_error":false}
 		t.Error("expected non-empty content")
 	}
 }
-

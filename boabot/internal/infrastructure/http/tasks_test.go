@@ -62,7 +62,7 @@ func (f *fakeDirectTaskStore) ListAll(ctx context.Context) ([]domain.DirectTask,
 	}
 	return []domain.DirectTask{
 		{ID: "task-1", BotName: "dev-1", Status: domain.DirectTaskStatusPending},
-		{ID: "task-2", BotName: "qa-1", Status: domain.DirectTaskStatusDispatched},
+		{ID: "task-2", BotName: "qa-1", Status: domain.DirectTaskStatusRunning},
 	}, nil
 }
 
@@ -89,12 +89,12 @@ func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction 
 		ID:          "task-new",
 		BotName:     botName,
 		Instruction: instruction,
-		Status:      domain.DirectTaskStatusDispatched,
+		Status:      domain.DirectTaskStatusRunning,
 	}, nil
 }
 
 func (f *fakeTaskDispatcher) RunNow(_ context.Context, _ string) (domain.DirectTask, error) {
-	return domain.DirectTask{Status: domain.DirectTaskStatusDispatched}, nil
+	return domain.DirectTask{Status: domain.DirectTaskStatusRunning}, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

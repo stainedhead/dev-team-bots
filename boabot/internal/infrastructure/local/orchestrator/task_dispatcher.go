@@ -72,7 +72,7 @@ func (d *LocalTaskDispatcher) dispatchNow(ctx context.Context, task domain.Direc
 	}
 
 	now := time.Now().UTC()
-	task.Status = domain.DirectTaskStatusDispatched
+	task.Status = domain.DirectTaskStatusRunning
 	task.DispatchedAt = &now
 
 	updated, err := d.store.Update(ctx, task)
@@ -89,7 +89,7 @@ func (d *LocalTaskDispatcher) RunNow(ctx context.Context, id string) (domain.Dir
 	if err != nil {
 		return domain.DirectTask{}, err
 	}
-	if task.Status == domain.DirectTaskStatusDispatched {
+	if task.Status == domain.DirectTaskStatusRunning {
 		return task, nil
 	}
 	return d.dispatchNow(ctx, task)

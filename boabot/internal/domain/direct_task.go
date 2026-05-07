@@ -39,14 +39,14 @@ type DirectTask struct {
 type DirectTaskStatus string
 
 const (
-	// DirectTaskStatusPending means the task has been created but not yet dispatched.
+	// DirectTaskStatusPending means the task has been created but not yet sent to the bot.
 	DirectTaskStatusPending DirectTaskStatus = "pending"
-	// DirectTaskStatusDispatched means the task message has been sent to the bot queue.
-	DirectTaskStatusDispatched DirectTaskStatus = "dispatched"
-	// DirectTaskStatusFailed means the task could not be dispatched.
+	// DirectTaskStatusRunning means the task message has been sent and the bot is executing it.
+	DirectTaskStatusRunning DirectTaskStatus = "running"
+	// DirectTaskStatusFailed means the task could not be dispatched or the bot reported an error.
 	DirectTaskStatusFailed DirectTaskStatus = "failed"
-	// DirectTaskStatusCompleted means the task has been completed and output is available.
-	DirectTaskStatusCompleted DirectTaskStatus = "completed"
+	// DirectTaskStatusSucceeded means the task completed successfully and output is available.
+	DirectTaskStatusSucceeded DirectTaskStatus = "succeeded"
 )
 
 // DirectTaskStore persists and retrieves direct tasks.

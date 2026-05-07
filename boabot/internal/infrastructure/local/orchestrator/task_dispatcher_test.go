@@ -64,7 +64,7 @@ func TestLocalTaskDispatcher_Dispatch_Immediate(t *testing.T) {
 	}
 
 	// Returned task should be dispatched immediately.
-	if task.Status != domain.DirectTaskStatusDispatched {
+	if task.Status != domain.DirectTaskStatusRunning {
 		t.Errorf("expected status=dispatched, got %q", task.Status)
 	}
 	if task.DispatchedAt == nil {
@@ -94,7 +94,7 @@ func TestLocalTaskDispatcher_Dispatch_Immediate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.Status != domain.DirectTaskStatusDispatched {
+	if stored.Status != domain.DirectTaskStatusRunning {
 		t.Errorf("stored task status: got %q, want dispatched", stored.Status)
 	}
 }
@@ -112,7 +112,7 @@ func TestLocalTaskDispatcher_Dispatch_ImmediateForPastScheduledAt(t *testing.T) 
 		t.Fatalf("Dispatch: %v", err)
 	}
 
-	if task.Status != domain.DirectTaskStatusDispatched {
+	if task.Status != domain.DirectTaskStatusRunning {
 		t.Errorf("expected dispatched for past scheduledAt, got %q", task.Status)
 	}
 	if len(q.getSent()) != 1 {
@@ -160,7 +160,7 @@ func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 
 	// Store should now show dispatched.
 	stored, _ := store.Get(ctx, task.ID)
-	if stored.Status != domain.DirectTaskStatusDispatched {
+	if stored.Status != domain.DirectTaskStatusRunning {
 		t.Errorf("stored status after dispatch: got %q, want dispatched", stored.Status)
 	}
 }

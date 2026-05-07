@@ -67,10 +67,23 @@ func (u *ExecuteTaskUseCase) WithRulesTracker(rt domain.RulesTracker) {
 	u.rulesTracker = rt
 }
 
+// dirAllower is an optional extension of MCPClient that grants temporary
+// directory permissions for the duration of a task.
+type dirAllower interface {
+	AllowDir(path string) func()
+}
+
 func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (domain.TaskResult, error) {
 	msgCtx, err := u.buildContext(ctx, task)
 	if err != nil {
 		return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("build context: %w", err)
+	}
+
+	// Temporarily allow the task's working directory so tools can access it.
+	if task.WorkDir != "" {
+		if a, ok := u.mcp.(dirAllower); ok {
+			defer a.AllowDir(task.WorkDir)()
+		}
 	}
 
 	// Pre-load rules from the task work directory.

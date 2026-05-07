@@ -6,6 +6,7 @@ import (
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/anthropic"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/codeagent"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	openaiinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
 )
@@ -69,6 +70,26 @@ func buildProvider(pc config.ProviderConfig) (domain.ModelProvider, error) {
 			return nil, fmt.Errorf("team: build openai provider %q: %w", pc.Name, err)
 		}
 		return p, nil
+
+	case "claude_code":
+		if pc.WorkDir == "" {
+			return nil, fmt.Errorf("team: claude_code provider %q requires work_dir to be set", pc.Name)
+		}
+		bin := pc.BinaryPath
+		if bin == "" {
+			bin = "claude"
+		}
+		return codeagent.New(bin, pc.WorkDir), nil
+
+	case "codex":
+		if pc.WorkDir == "" {
+			return nil, fmt.Errorf("team: codex provider %q requires work_dir to be set", pc.Name)
+		}
+		bin := pc.BinaryPath
+		if bin == "" {
+			bin = "codex"
+		}
+		return codeagent.New(bin, pc.WorkDir, codeagent.WithDialect(codeagent.DialectCodex)), nil
 
 	default:
 		return nil, fmt.Errorf("team: unsupported provider type %q", pc.Type)

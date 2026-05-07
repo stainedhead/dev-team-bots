@@ -81,6 +81,76 @@ func TestLocalProviderFactory_GetUnregisteredName(t *testing.T) {
 	}
 }
 
+func TestLocalProviderFactory_ClaudeCode_Success(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "cc", Type: "claude_code", WorkDir: t.TempDir()},
+	}
+	p, err := buildTestFactory(cfgs).Get("cc")
+	if err != nil {
+		t.Fatalf("expected no error for claude_code provider, got: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestLocalProviderFactory_ClaudeCode_EmptyWorkDir(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "cc", Type: "claude_code", WorkDir: ""},
+	}
+	_, err := buildTestFactory(cfgs).Get("cc")
+	if err == nil {
+		t.Fatal("expected error for claude_code provider with no work_dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "work_dir") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestLocalProviderFactory_Codex_Success(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "cx", Type: "codex", WorkDir: t.TempDir()},
+	}
+	p, err := buildTestFactory(cfgs).Get("cx")
+	if err != nil {
+		t.Fatalf("expected no error for codex provider, got: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestLocalProviderFactory_Codex_EmptyWorkDir(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "cx", Type: "codex", WorkDir: ""},
+	}
+	_, err := buildTestFactory(cfgs).Get("cx")
+	if err == nil {
+		t.Fatal("expected error for codex provider with no work_dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "work_dir") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestLocalProviderFactory_Codex_CustomBinaryPath(t *testing.T) {
+	t.Parallel()
+	cfgs := []config.ProviderConfig{
+		{Name: "cx", Type: "codex", WorkDir: t.TempDir(), BinaryPath: "/usr/local/bin/codex"},
+	}
+	p, err := buildTestFactory(cfgs).Get("cx")
+	if err != nil {
+		t.Fatalf("expected no error for codex provider with custom binary, got: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
 func TestLocalProviderFactory_AnthropicNoKey(t *testing.T) {
 	// Cannot call t.Parallel() with t.Setenv — env mutation is not safe under parallel execution.
 	t.Setenv("ANTHROPIC_API_KEY", "")

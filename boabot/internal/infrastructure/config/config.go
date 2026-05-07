@@ -79,6 +79,11 @@ type ProviderConfig struct {
 	ModelID  string `yaml:"model_id"`
 	Region   string `yaml:"region"`
 	Endpoint string `yaml:"endpoint"`
+	// WorkDir is the working directory for subprocess-based providers (claude_code, codex).
+	WorkDir string `yaml:"work_dir"`
+	// BinaryPath overrides the default CLI binary name/path for subprocess providers.
+	// Defaults to "claude" for claude_code and "codex" for codex.
+	BinaryPath string `yaml:"binary_path"`
 }
 
 type ToolsConfig struct {

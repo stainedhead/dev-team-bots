@@ -1,0 +1,44 @@
+# Tech Lead bot configuration
+
+bot:
+  name: tech-lead
+  type: tech-lead
+
+models:
+  default: ollama-chat
+  chat_provider: ollama-gemma
+  providers:
+    - name: ollama-chat
+      type: openai
+      model_id: qwen3.6:35b-a3b-coding-bf16
+      endpoint: http://localhost:11434/v1
+    - name: ollama-gemma
+      type: openai
+      model_id: gemma4:31b
+      endpoint: http://localhost:11434/v1
+
+tools:
+  allowed_tools:
+    - read_file
+    - list_dir
+    - glob
+    - grep
+    - write_file
+    - edit_file
+    - memory_search
+    - send_message
+    - read_messages
+    - todo_write
+    - todo_read
+    - http_request
+  http_allowed_hosts:
+    - api.github.com
+  receive_from:
+    - orchestrator
+
+budget:
+  token_spend_daily: 2000000
+  tool_calls_hourly: 1000
+
+context:
+  threshold_tokens: 200000

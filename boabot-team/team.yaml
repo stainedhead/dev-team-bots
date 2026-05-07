@@ -29,3 +29,7 @@ team:
   - name: maintainer
     type: maintainer
     enabled: true
+
+  - name: tech-lead
+    type: tech-lead
+    enabled: false

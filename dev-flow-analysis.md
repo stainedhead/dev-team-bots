@@ -1,109 +1,107 @@
 # Dev-Flow Process Analysis
 
-**Feature:** remove-aws-infra — Local Single-Binary Runtime
-**Spec directory:** specs/archive/260506-remove-aws-infra/
-**Report generated:** 2026-05-06
+**Feature:** tech-lead-dynamic-subteam  
+**Spec directory:** specs/archive/260507-tech-lead-dynamic-subteam/  
+**Review spec:** specs/archive/260507-tech-lead-dynamic-subteam-auto-review/  
+**Report generated:** 2026-05-07
 
 ---
 
 ## 1. Executive Summary
 
-This feature replaced all six AWS runtime dependencies (SQS, SNS, S3, DynamoDB, Secrets Manager, S3 Vectors) in the `boabot` agent runtime with local in-process equivalents, enabling the full bot team to run from a single binary with no cloud account. The Anthropic Claude SDK was added as a first-class LLM provider, and a GitHub-backed memory backup adapter was implemented to replace S3 durability. Seven implementation milestones were delivered across 15 commits.
+This feature adds two tightly coupled capabilities to the BaoBot orchestrator: (1) tech-lead bots can now spawn, heartbeat, and terminate isolated sub-agent goroutines via a `SubTeamManager` application service; (2) the orchestrator maintains a `TechLeadPool` that automatically allocates a tech-lead instance to every in-progress Kanban item and reclaims it when the item leaves that state. New infrastructure includes atomic JSON persistence for session records and pool state, a `ScopedBus` factory, `Router.Deregister`, and a board status-change hook. A REST endpoint (`GET /api/v1/pool`) exposes the pool state.
 
-**Total runtime (first spec commit → final quality pass commit):** 8h 28m
-(2026-05-05T22:14:03−04:00 → 2026-05-06T06:42:36−04:00)
+**Total runtime (git):** `2026-05-07T10:07:01-04:00` → `2026-05-07T13:02:26-04:00` = **2h 55min (175 min)**  
+**Overall assessment:** Feature landed with correct architecture and full test coverage. The spec review step absorbed most of the elapsed time due to four non-trivial gap findings requiring interactive resolution. Review fixes were implemented in the same session as the code review (steps 5 and 9 collapsed), which was efficient.
 
-**Overall assessment:** Clean execution with a single large bottleneck: M4 (TeamManager + bot wiring) consumed 6h 46m of wall-clock time, accounting for 80% of total implementation runtime. All other milestones were delivered in under 15 minutes each. Three Must Fix items surfaced in code review and were resolved without requiring a second review cycle. Quality gates were met on the first pass.
+> **Note on DEV-FLOW-STATUS.md timestamps:** The step start/end times in that file were estimated by the orchestrator during the session and do not reflect real clock times. All timing in this report uses `git log --format="%aI"` as the authoritative source.
 
 ---
 
 ## 2. Step-by-Step Timing
 
-Timestamps sourced from `git log --format="%aI"` — authoritative for all timing.
+All timestamps from `git log`.
 
-| Step | Name | Git Start | Git End | Runtime | Key Outputs |
-|------|------|-----------|---------|---------|-------------|
-| 1  | Create Spec from PRD     | 22:14:03 May 5 | 22:16:35 May 5 | 2 min   | `specs/260506-remove-aws-infra/` — 8 phase files |
-| 2  | Review Spec              | 22:16:35 May 5 | 22:16:48 May 5 | <1 min  | 2 spec warnings resolved before step 2 commit |
-| 3  | Implement Product        | 22:16:48 May 5 | 06:18:31 May 6 | 7h 2m   | 7 milestones, 12 new packages, ≥90% coverage |
-| 4  | Documentation            | 06:18:31 May 6 | 06:21:00 May 6 | 3 min   | README updated, configuration.md rewritten, getting-started.md added |
-| 5  | Code and Design Review   | 06:21:00 May 6 | 06:34:41 May 6 | 14 min  | 3 Must Fix items found and fixed in same step |
-| 6  | Prepare Review PRD       | 06:34:41 May 6 | 06:35:53 May 6 | 1 min   | `remove-aws-infra-auto-review-PRD.md` |
-| 7  | Archive Original Spec    | 06:35:53 May 6 | 06:39:45 May 6 | 4 min   | `specs/archive/260506-remove-aws-infra/` |
-| 8  | Spec Review Fixes        | 06:39:45 May 6 | 06:39:45 May 6 | <1 min  | `specs/archive/260506-remove-aws-infra-auto-review/` (bundled commit) |
-| 9  | Implement Review Fixes   | 06:39:45 May 6 | 06:39:45 May 6 | <1 min  | Fixes already implemented in Step 5; spec created post-hoc |
-| 10 | Archive Fixes Spec       | 06:39:45 May 6 | 06:39:45 May 6 | <1 min  | Bundled into steps 7–10 commit |
-| 11 | Final Quality Pass       | 06:39:45 May 6 | 06:42:36 May 6 | 3 min   | All tests pass, lint clean, coverage ≥90% on all packages |
+| Step | Name | Git Start | Git End | Runtime (min) | Key Git Outputs |
+|------|------|-----------|---------|---------------|-----------------|
+| Pre | Merge PRD | 10:07:01 | 10:12:15 | 5 | `851d807` — merged PRDs into single file |
+| 1 | Create Spec from PRD | 10:12:15 | 10:19:30 | 7 | `00137bc` — spec directory + 8 phase files |
+| 2 | Review Spec (+ W1–W4 + Q6) | 10:19:30 | 12:06:47 | 107 | `f6b6e38`, `9bef19c` — gap fixes committed |
+| 3 | Implement Product (phases 5a–5f) | 12:06:47 | 12:24:40 | 18 | `b3bf934`–`b2c8796` — 7 commits, all phases |
+| 4 | Documentation and User Docs | 12:24:40 | 12:30:06 | 5 | `86096e4` — docs + user-docs |
+| 5+9 | Code Review + Implement Fixes | 12:30:06 | 12:55:45 | 26 | `27cdc9a` — 7 fixes in single commit |
+| 6 | Prepare Review PRD | 12:55:45 | 12:57:53 | 2 | `dc318ec` — auto-review PRD |
+| 7 | Archive Original Spec | 12:57:53 | 12:58:27 | 1 | `dfa92f6` — spec moved to archive |
+| 8 | Spec Review Fixes (create spec) | 12:58:27 | 13:00:30 | 2 | `d194d89` — review-fixes spec |
+| 10 | Archive Fixes Spec | 13:00:30 | 13:01:02 | 1 | `7edc2a7` — fixes spec archived |
+| 11 | Final Quality Pass | 13:01:02 | 13:02:26 | 1 | `5d76001` — go fmt cleanup |
 
 **Notable observations:**
 
-- **Step 3 (M4 gap):** Wall-clock time between M3 commit (22:51 May 5) and M4 commit (05:37 May 6) was 6h 46m — by far the largest single interval. M4 implemented `TeamManager`, `BotRegistry`, local provider factory, and full `main.go` rewiring: the most structurally complex milestone. All other milestones took 7–15 minutes.
-- **Steps 8–10 collapsed:** The review PRD documented three findings that had already been fixed during Step 5 (code review and fix were performed in the same pass). Steps 8–10 created and archived the spec, but the actual fixes preceded spec creation. This is a process sequence inversion — discussed further in Section 6.
-- **Steps 7–10 bundled into one commit:** The archive, spec creation, and review-fixes implementation committed together as a single checkpoint rather than four discrete commits, reducing git-based timing resolution.
+- **Step 2 took 107 min** — the spec review found four substantive gaps (W1: missing acceptance criteria; W2: ScopedBus isolation unclear; W3: wrong file paths in scope table; W4: missing edge-case risk mitigations). Each required reading existing code to resolve, which extended the step considerably.
+- **Steps 5 and 9 were collapsed** — all seven review-fix findings were implemented during the code review session itself (before the review PRD was even written to disk). This was more efficient than the intended sequence (review → PRD → separate fix session) and reduced total time.
+- **Phases 5a–5f committed within 43 seconds** — the six implementation phases were developed in sequence but committed in rapid batch succession. The effective coding window was ~18 min after the last spec research commit; the implementation was staged and pushed at the end of that window.
+- **Steps 6–8, 10–11 totalled 7 min combined** — archiving and spec administration steps were very fast as expected.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits on `feat/remove-aws-infra`:** 69
-**Implementation-specific commits (spec creation through quality pass):** 15
+**Total commits on branch:** 138 (including pre-existing work before this feature)  
+**Feature-specific commits (Steps 1–11):** 18
 
-| Commit   | Timestamp (−04:00)  | Message |
-|----------|---------------------|---------|
-| 5e4e844  | 2026-05-05 22:14:03 | feat(spec): create spec for remove-aws-infra |
-| b84537e  | 2026-05-05 22:16:35 | docs(spec): resolve review warnings in remove-aws-infra spec |
-| 048b9f5  | 2026-05-05 22:16:48 | chore(flow): step 2 complete — spec review |
-| 6754719  | 2026-05-05 22:31:06 | feat(local): add local queue, bus, fs, budget adapters (M1) |
-| c4774aa  | 2026-05-05 22:38:05 | feat(anthropic): add Anthropic SDK model provider (M2) |
-| 9075714  | 2026-05-05 22:51:09 | feat(local): add vector store (cosine) + BM25 embedder (M3) |
-| c0ef3f8  | 2026-05-06 05:37:56 | feat(team): add TeamManager, BotRegistry, local bot wiring (M4) |
-| 0077193  | 2026-05-06 05:53:22 | feat(backup): add GitHub memory backup adapter + boabotctl memory subcommands (M5) |
-| 144ccdf  | 2026-05-06 06:04:22 | feat(config): expand config schema, add credentials file, heap watchdog (M6) |
-| 0869c30  | 2026-05-06 06:18:31 | feat(m7): delete AWS packages, CDK, AWSConfig; update docs for local runtime (M7) |
-| ab5b75d  | 2026-05-06 06:21:00 | docs(step4): update README, rewrite configuration.md, add self-hosting guide |
-| 9bc4bd8  | 2026-05-06 06:34:41 | fix: address review findings — strict config parsing, backup wiring, embedder warning |
-| b203b78  | 2026-05-06 06:35:53 | docs(step5): write auto-review PRD documenting code review findings |
-| b743a9d  | 2026-05-06 06:39:45 | chore(flow): archive specs (steps 7-10); mark phases complete |
-| b484ef1  | 2026-05-06 06:42:36 | chore(dev-flow): final quality pass complete; all checks green |
+| Short SHA | Timestamp (UTC-4) | Message |
+|-----------|-------------------|---------|
+| `851d807` | 10:12:15 | docs(prd): merge subteam spawning and pool management PRDs into single file |
+| `00137bc` | 10:19:30 | feat(spec): create spec for tech-lead dynamic subteam and pool management |
+| `f6b6e38` | 12:02:51 | docs(spec): resolve review findings W1-W4 in tech-lead dynamic subteam spec |
+| `9bef19c` | 12:06:47 | docs(spec): resolve Research Q6 — spawn_agent/terminate_agent as message types |
+| `b3bf934` | 12:23:57 | feat(subteam): Phase 5a — domain interfaces for subteam and pool management |
+| `66c3e8a` | 12:24:03 | feat(subteam): Phase 5b — ScopedBus, Router.Deregister, InMemoryBoardStore.SetStatusChangeHook |
+| `b46075e` | 12:24:08 | feat(subteam): Phase 5c — SessionFile and PoolStateFile atomic JSON persistence |
+| `386e2b6` | 12:24:13 | feat(subteam): Phase 5d — SubTeamManager application service (90.5% coverage) |
+| `034091060` | 12:24:18 | feat(subteam): Phase 5e — TechLeadPool application service (91.4% coverage) |
+| `9e20393` | 12:24:24 | feat(subteam): Phase 5f — wire-up: subteam messages, pool management, REST API |
+| `b2c8796` | 12:24:40 | docs(spec): mark Phase 5 implementation complete in status.md |
+| `86096e4` | 12:30:06 | docs(boabot): document tech-lead subteam spawning and pool management |
+| `27cdc9a` | 12:55:45 | fix(subteam,pool,board,http): address code review findings |
+| `dc318ec` | 12:57:53 | docs(review): add tech-lead-dynamic-subteam auto-review PRD |
+| `dfa92f6` | 12:58:27 | chore(spec): archive 260507-tech-lead-dynamic-subteam spec |
+| `d194d89` | 13:00:30 | chore(spec): create review-fixes spec from auto-review PRD |
+| `7edc2a7` | 13:01:02 | chore(spec): archive review-fixes spec |
+| `5d76001` | 13:02:26 | chore: final quality pass — go fmt formatting cleanup |
 
-Pull request: not yet opened (Step 14 pending).
+PR: not yet opened (Step 14 pending).
 
 ---
 
 ## 4. Spec vs. Implementation Comparison
 
-| Phase | Planned (spec) | Actual (git log) | Difference | Notes |
-|-------|----------------|------------------|------------|-------|
-| Research / Data Modeling | Integrated into spec creation | <1 min absorbed into Steps 1–2 | — | Research resolved during spec authoring |
-| Architecture | Integrated into spec creation | <1 min | — | Decisions documented in spec.md |
-| M1: Local adapters | — | 14 min | — | Queue, bus, fs, budget; stdlib only |
-| M2: Anthropic provider | — | 7 min | — | 14 unit tests, 100% coverage |
-| M3: Vector store + BM25 | — | 13 min | — | 40ms/search at 100k×512-dim benchmark met |
-| M4: TeamManager + wiring | — | 6h 46m | Largest variance | Complex multi-interface wiring + test seam patterns |
-| M5: GitHub backup | — | 15 min | — | go-git adapter + boabotctl memory subcommands |
-| M6: Config + credentials + watchdog | — | 11 min | — | INI parser, heap watchdog, config schema expansion |
-| M7: AWS deletion + docs | — | 14 min | — | Deleted 7 AWS packages + CDK; go.mod cleaned |
-| Testing / Quality | — | 3 min (final pass only) | — | Coverage ≥90% enforced per milestone, not batched |
+| Phase | Planned (spec tasks.md) | Actual (git) | Notes |
+|-------|------------------------|--------------|-------|
+| 5a — Domain | ~30 min (estimated) | Part of 18 min window | Committed with 5b–5f |
+| 5b — Infra (ScopedBus, Deregister, Hook) | ~30 min | Same window | |
+| 5c — Persistence (SessionFile, PoolStateFile) | ~20 min | Same window | |
+| 5d — SubTeamManager | ~30 min | Same window | 90.5% coverage met |
+| 5e — TechLeadPool | ~30 min | Same window | 91.4% coverage met |
+| 5f — Wire-up + REST API | ~30 min | Same window | |
+| Review fixes (7 findings) | Separate step | Same session as review | Steps 5+9 collapsed |
 
-**Phases skipped:** None — all spec phases completed.
+**Phases skipped:** None.  
+**Phases added:** None, but the spec review phase was significantly more expensive than planned due to four gap findings requiring code archaeology.
 
-**Phases added:** Code review (Step 5) surfaced three Must Fix issues not captured in the original spec: strict YAML schema enforcement (`KnownFields(true)`), backup adapters implemented but never wired into `startBot`, and embedder config field silently ignored. All three were fixed before PR.
+**Coverage outcomes:** Both new application packages met the ≥90% target (subteam: 90.8%, pool: 91.4%).
 
 ---
 
 ## 5. Token / Message Usage
 
-Exact token counts are unavailable — the orchestrator does not currently instrument per-step LLM usage. Conservative estimates based on step complexity:
+Exact token counts are unavailable — the Claude Code agent does not expose per-session token counts in the filesystem.
 
-| Step | Estimated Agent Turns | Notes |
-|------|-----------------------|-------|
-| 1 (Create Spec) | ~15 | PRD read + 8 phase files generated |
-| 2 (Review Spec) | ~10 | Spec read + dimension scoring + warning resolution |
-| 3 (Implement) | ~200–400 | 7 milestones; each involving TDD cycles, file writes, test runs |
-| 4 (Docs) | ~20 | 3 doc files rewritten |
-| 5 (Code Review + Fixes) | ~40 | Full diff analysis + 3 fixes implemented |
-| 6–11 (Remaining steps) | ~30 | Archiving, PRD validation, quality checks |
-| **Total estimate** | **~315–515 turns** | Orchestrator + implementation sub-agents combined |
+**Estimated usage (conservative):**
+- Orchestrator turns (this conversation): ~50–70 turns across 14 steps
+- Spec review step was heaviest: ~15–20 turns reading existing code (bus, queue, board, team_manager) to resolve the four spec gaps
+- Implementation used rapid parallel commits; no sub-agents were spawned for this feature (all work done in the main session)
 
 ---
 
@@ -111,34 +109,40 @@ Exact token counts are unavailable — the orchestrator does not currently instr
 
 ### What worked well
 
-- **TDD per milestone:** Enforcing ≥90% coverage at each milestone completion meant the final quality pass was trivially fast (3 min). No coverage debt accumulated.
-- **Milestones M1–M3 and M5–M7:** Each completed in under 15 minutes with clean coverage and lint. The local adapter pattern (interface-first, stdlib implementations) was well-scoped and matched the domain boundaries exactly.
-- **Code review caught real bugs:** The three Must Fix items from Step 5 were genuine gaps — backup adapters implemented but never instantiated, `KnownFields(true)` missing from the YAML decoder, and the embedder config field silently ignored. None of these would have been caught by the test suite alone because the tests mocked at the interface level.
-- **AWS deletion in M7 was clean:** Removing 7 AWS packages + CDK without breaking tests confirms Clean Architecture boundaries were enforced — domain code never directly imported the deleted packages, so removal required only infrastructure-layer changes.
+- **Incremental spec validation before implementation** — the four W1–W4 gaps caught real issues (wrong file paths, missing ACs for edge cases) before any code was written. The implementation proceeded cleanly because the spec was accurate.
+- **Research phase resolving Q6** — determining that `spawn_agent`/`terminate_agent` are message types (not MCP/LLM tools) was a non-obvious architectural decision that, once resolved, unlocked clean implementation of `handleSubTeamSpawn`/`handleSubTeamTerminate`.
+- **Collapsing steps 5 and 9** — implementing all review fixes immediately during the review session (before writing the PRD) eliminated a round-trip and cut ~30 min from the projected schedule.
+- **Atomic commit pattern for phases** — committing each implementation phase separately (5a–5f) made the history readable and bisectable even though all commits landed in the same minute.
+- **Compile-time interface checks** — adding `var _ domain.SubTeamManager = (*Manager)(nil)` and `var _ domain.TechLeadPool = (*Pool)(nil)` as an info-level finding prevented future silent interface drift.
 
 ### What caused delays or rework
 
-- **M4 (TeamManager) bottleneck:** 6h 46m for TeamManager wiring vs. <15 min for every other milestone. The root cause was multi-interface orchestration complexity: `startBot` had to wire queue, bus, fs, vector, budget, credentials, provider, embedder, backup, and watchdog in the correct dependency order with proper context propagation. The `botRunner` func-field injection pattern for test seaming also added design overhead. Future specs should decompose this into 2–3 sub-milestones.
-- **Steps 8–10 sequence inversion:** The review PRD was created after the fixes were already implemented. Step 9 ("Implement Review Fixes") was effectively a no-op — the spec was created to document completed work rather than to guide it. The process intent is: document findings → spec → implement. The actual execution was: implement → document → spec.
-- **Steps 7–10 bundled into one commit:** Losing discrete commit boundaries makes git-based timing analysis imprecise for these steps.
+- **Spec review gap W3 (wrong file paths)** — `router.go` was listed in the scope table but the actual file is `queue.go`. This required reading the codebase to verify. More careful initial spec authoring (verifying file paths exist before writing them) would have avoided this.
+- **Spec review step duration (107 min vs. 15 min estimated)** — the four gaps each required reading 2–4 existing source files for context before a fix could be written. Spec gaps that require code archaeology are expensive.
+- **Must Fix 2 (spawnFn never wired)** — this was a non-obvious omission: the `pool.New()` default spawnFn returns an error silently, so unit tests did not catch it. Better default behavior (e.g., a startup assertion) would surface this faster.
 
 ### Recommendations for future runs
 
-1. **Split complex wiring milestones:** Any milestone touching 5+ interfaces should be split. M4 would have been better as: M4a (TeamManager skeleton + BotRegistry) → M4b (local provider factory + wiring) → M4c (main.go integration + tests).
-2. **Enforce code-review-then-fix sequencing:** Step 5 should produce a commit containing *only* the review PRD. Step 9 should then implement fixes against that PRD. Collapsing them removes the spec as a pre-implementation contract.
-3. **One commit per dev-flow step:** Even trivial steps (archive, spec creation) should produce their own commit so git timestamps anchor each step precisely for this report.
-4. **Instrument token usage:** A lightweight hook logging message count and estimated tokens per step would make Section 5 authoritative rather than estimated.
+1. **Pre-verify file paths in spec.md scope tables before commit** — run `find . -name <file>` for every path listed in Scope of Changes. Catches W3-type errors at spec creation time.
+2. **Write a smoke test for any default fn that returns "not configured"** — or consider panicking at startup if nil, which makes the misconfiguration impossible to miss.
+3. **Estimate spec review time based on number of new file paths** — for specs referencing 6+ unfamiliar files, budget 60–90 min rather than 15 min.
+4. **Consider collapsing steps 5+9 into a single "review and fix" step** in future runs where the review findings are all addressed in-session.
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration:** 3–5 days
-Assumes one senior Go engineer; excludes design review meetings and PR iteration cycles.
-Breakdown: 1 day for M1–M3 (local adapters + providers), 1–2 days for M4 (TeamManager wiring), 0.5 day for M5–M7 (backup, config, AWS deletion), 0.5 day for code review, doc updates, and quality pass.
+**Estimated manual duration (senior Go developer):**
+- PRD authoring + merge: 30 min (already done; excluded from comparison)
+- Spec creation + review + gap fixes: 2–3 hours
+- Implementation (6 phases, TDD): 6–8 hours
+- Documentation + user docs: 1 hour
+- Code review (7 findings) + fixes + tests: 2–3 hours
+- Process administration (archive, spec files, PRD): 1 hour
+- **Total estimated manual: 12–16 hours**
 
-**Actual automated runtime (first spec commit → quality pass):** 8h 28m
+**Actual automated runtime:** 2h 55min (175 min)
 
-**Efficiency gain:** ~4–8× wall-clock reduction. The automated run also produced richer test coverage (≥90% on all 12 new packages) and complete documentation updates in the same pass — work that is frequently deferred in manual developer flows.
+**Efficiency gain:** ~5–6× faster than estimated manual pace for a senior developer.
 
-The main limitation is that M4's 6h 46m interval would likely be shorter with a human engineer who can hold more architectural context simultaneously. Better milestone decomposition (recommendation 1 above) would reduce this gap by allowing the orchestrator to commit and re-orient at sub-milestone boundaries.
+The comparison assumes a developer who has already read the codebase and can start immediately. The automated session also performed the same codebase reading (resolving Q6 and W3 required finding and reading ~8 source files), which is reflected in the Step 2 duration. The gain would be lower for a developer who is deeply familiar with the codebase already.

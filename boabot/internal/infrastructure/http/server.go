@@ -1956,7 +1956,34 @@ const kanbanHTML = `<!DOCTYPE html>
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
-  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null;
+  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null, boardAskPending=false;
+
+  function renderBoardAskMsgs(msgs){
+    var body=ge('board-ctx-body');
+    if(!body)return;
+    if(!msgs||!msgs.length){
+      body.innerHTML='<div style="color:#475569;font-size:.75rem">No messages yet. Ask the bot a question below.</div>';
+    } else {
+      var html='<div class="ask-thread">';
+      msgs.forEach(function(m){
+        var isUser=m.direction==='outbound';
+        html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
+          +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
+          +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
+          +'</div>';
+      });
+      html+='</div>';
+      body.innerHTML=html;
+      // Bot has replied — clear pending state.
+      if(boardAskPending&&msgs[msgs.length-1].direction==='inbound')boardAskPending=false;
+    }
+    if(boardAskPending){
+      var td=document.createElement('div');
+      td.style.cssText='display:flex;align-items:center;gap:.5rem;padding:.35rem .65rem';
+      td.innerHTML='<span style="font-size:.65rem;color:#64748b">thinking…</span><div class="chat-thinking"><span></span><span></span><span></span></div>';
+      body.appendChild(td);
+    }
+  }
   var taskCtxTask=null, taskCtxActiveTab='detail';
   var allTasksList=[], currentTaskFilter='all';
   var dragging=false;
@@ -2705,7 +2732,8 @@ const kanbanHTML = `<!DOCTYPE html>
           }
         });
         resolved.forEach(function(id){hideThinking(id);delete pendingTasks[id]});
-        if(!Object.keys(pendingTasks).length)stopFastPoll();
+        if(!Object.keys(pendingTasks).length){stopFastPoll();}
+        else{Object.keys(pendingTasks).forEach(function(tid){showThinking(pendingTasks[tid],tid);});}
       })
       .catch(function(){el.innerHTML='<div class="nil">Failed to load messages</div>'});
   }
@@ -2830,7 +2858,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function bctxTab(name){
     if(name!=='output')stopOutputPoll();
-    if(name!=='ask')stopAskPoll();
+    if(name!=='ask'){stopAskPoll();boardAskPending=false;}
     boardCtxTab=name;
     ['detail','output','ask','files'].forEach(function(t){
       var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
@@ -2945,31 +2973,15 @@ const kanbanHTML = `<!DOCTYPE html>
         .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load activity</div>'});
     } else if(boardCtxTab==='ask'){
       body.innerHTML='<div style="color:#475569;font-size:.75rem">Loading conversation&#x2026;</div>';
-      function renderAskMessages(msgs){
-        if(!msgs||!msgs.length){
-          body.innerHTML='<div style="color:#475569;font-size:.75rem">No messages yet. Ask the bot a question below.</div>';
-          return;
-        }
-        var html='<div class="ask-thread">';
-        msgs.forEach(function(m){
-          var isUser=m.direction==='outbound';
-          html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
-            +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
-            +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
-            +'</div>';
-        });
-        html+='</div>';
-        body.innerHTML=html;
-      }
       var askItemID=boardCtxItem.id;
       api('GET','/api/v1/board/'+askItemID+'/messages',null)
-        .then(renderAskMessages)
+        .then(renderBoardAskMsgs)
         .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load messages</div>';});
       if(!askPollTimer&&boardCtxItem&&boardCtxItem.active_task_id){
         askPollTimer=setInterval(function(){
           if(boardCtxTab!=='ask'||!boardCtxItem||boardCtxItem.id!==askItemID){stopAskPoll();return;}
           api('GET','/api/v1/board/'+askItemID+'/messages',null)
-            .then(renderAskMessages)
+            .then(renderBoardAskMsgs)
             .catch(function(){});
         },2000);
       }
@@ -3060,29 +3072,16 @@ const kanbanHTML = `<!DOCTYPE html>
     ge('board-ctx-ask-input').value='';
     api('POST','/api/v1/board/'+boardCtxItem.id+'/ask',{content:content})
       .then(function(){
-        // Reload messages immediately after sending and start polling for the reply.
+        boardAskPending=true;
+        // Reload messages immediately after sending (shows the user's outbound message).
         loadBoardCtx();
-        if(!askPollTimer&&boardCtxItem&&boardCtxItem.active_task_id){
+        // Also start a poll so the thinking dots update when the bot replies.
+        if(!askPollTimer){
           var pollID=boardCtxItem.id;
           askPollTimer=setInterval(function(){
             if(boardCtxTab!=='ask'||!boardCtxItem||boardCtxItem.id!==pollID){stopAskPoll();return;}
             api('GET','/api/v1/board/'+pollID+'/messages',null)
-              .then(function(msgs){
-                var body=ge('board-ctx-body');
-                if(!body)return;
-                // Only re-render the thread, not the whole panel.
-                if(!msgs||!msgs.length)return;
-                var html='<div class="ask-thread">';
-                msgs.forEach(function(m){
-                  var isUser=m.direction==='outbound';
-                  html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
-                    +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
-                    +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
-                    +'</div>';
-                });
-                html+='</div>';
-                body.innerHTML=html;
-              })
+              .then(renderBoardAskMsgs)
               .catch(function(){});
           },2000);
         }

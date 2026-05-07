@@ -12,8 +12,8 @@
 |-------|------|--------|-------|
 | 0 | Spec Creation & Research | ✅ Done | |
 | 1 | Domain Types & Interfaces | ✅ Done | P1.1–P1.5 complete |
-| 2 | REST API | 🔄 In Progress | |
-| 3 | MCP Client Integration | Not Started | |
+| 2 | REST API | ✅ Done | P2.1–P2.5 complete |
+| 3 | MCP Client Integration | ✅ Done | |
 | 4 | Admin UI | Not Started | |
 | 5 | Default Registry Wiring | Not Started | |
 | 6 | boabotctl Plugin Subcommands | Not Started | |

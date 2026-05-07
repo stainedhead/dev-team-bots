@@ -138,11 +138,10 @@ Two related gaps exist in the current system:
 | `TechLeadPoolImpl` | New | `boabot/internal/application/` |
 | `SessionFile` | New | `boabot/internal/infrastructure/` |
 | `PoolStateFile` | New | `boabot/internal/infrastructure/` |
-| `spawn_agent` tool | New | tech-lead bot tool handler |
-| `terminate_agent` tool | New | tech-lead bot tool handler |
-| `local/queue` router | Modified | `boabot/internal/infrastructure/local/queue/` |
-| Orchestrator board watcher | Modified | orchestrator bot application layer |
-| `/api/v1` REST handler | Modified | orchestrator infrastructure layer |
+| `spawn_agent` / `terminate_agent` tools | New | tech-lead bot tool handler (path TBD — Research Q6) |
+| `local/queue` `Router` | Modified | `boabot/internal/infrastructure/local/queue/queue.go` |
+| `InMemoryBoardStore` | Modified | `boabot/internal/infrastructure/local/orchestrator/board.go` |
+| HTTP server | Modified | `boabot/internal/infrastructure/http/server.go` |
 
 ---
 
@@ -161,10 +160,10 @@ Two related gaps exist in the current system:
 
 ### Files to Modify
 
-- `boabot/internal/infrastructure/local/queue/router.go` — per-session routing tables
-- Orchestrator bot: board watcher → emit status-change events
-- Orchestrator bot: REST API handler → pool state endpoint
-- Tech-lead bot: tool registry → register `spawn_agent`, `terminate_agent`
+- `boabot/internal/infrastructure/local/queue/queue.go` — add `Deregister` method to `Router` for session teardown; per-session `*Router` instances require no structural change (each is already independent)
+- `boabot/internal/infrastructure/local/orchestrator/board.go` (`InMemoryBoardStore`) — emit internal status-change events when item transitions to/from `in_progress`
+- `boabot/internal/infrastructure/http/server.go` — add `/api/v1/pool` endpoint; extend team roster response with `status` and `item_id` fields
+- Tech-lead bot tool handler (file path to be confirmed during Phase 2 research — see Research Q6)
 
 ### Dependencies
 
@@ -191,6 +190,11 @@ Two related gaps exist in the current system:
 - [ ] `spawn_agent` with invalid `type` returns clear error and spawns nothing
 - [ ] Bot receiving no heartbeat within timeout finishes current task, checkpoints, and self-terminates
 - [ ] Restarted tech-lead discovers still-running bots via session file and reconnects without re-spawning
+- [ ] Tech-lead sends `send_message` to a spawned bot by instance name; bot receives it on the private bus; no copy of the message appears on the main team channel or in any other bot's queue (FR-004)
+- [ ] `spawn_agent` called with a `name` already held by an active spawned bot in the same session returns a clear error and spawns nothing (name uniqueness enforcement)
+- [ ] Tech-lead sends a message to a named bot that has already self-terminated; operation returns an error to the tech-lead and does not silently drop the message
+- [ ] `terminate_agent` called with a name that was never spawned or has already been cleaned up returns a clear error without panicking
+- [ ] On tech-lead startup, if the session file exists but is unreadable or fails JSON parse, the tech-lead logs a warning, discards the file, and starts a fresh session — no crash
 
 ### Orchestrator Pool Management
 
@@ -204,6 +208,7 @@ Two related gaps exist in the current system:
 - [ ] Tech-lead crash (heartbeat timeout) → orchestrator marks item `blocked` and logs event
 - [ ] Pool state file writes are atomic — simulated kill mid-write leaves previous valid state intact
 - [ ] `/api/v1` returns pool state with all tech-lead instances, statuses, and item associations
+- [ ] Item status transition is detected within 500ms of the board mutation; the pool allocation begins immediately without waiting for a fixed polling interval (FR-015)
 
 ### Quality Gates
 
@@ -224,6 +229,9 @@ Two related gaps exist in the current system:
 | Pool state file drift on hard kill | Atomic writes + startup reconciliation prunes stale dead-instance entries |
 | Session file stale records on SIGKILL | Reconnect logic verifies each discovered bot is actually alive before rejoining |
 | Heap exhaustion from large sessions | Heap watchdog is backstop; soft-threshold warnings from both tech-lead and orchestrator |
+| Duplicate instance name on spawn | `spawn_agent` validates name uniqueness against active session before goroutine launch; returns error without side effects |
+| Message to already-terminated bot | Send operation checks agent status before routing; returns error to caller rather than silently dropping |
+| Corrupt or missing session file on startup | Startup reconciliation treats unreadable/unparseable session file as empty; logs warning and continues — no crash |
 
 ---
 

@@ -10,15 +10,17 @@
 
 The following questions are derived from the PRD's dependencies and open risks. They must be answered before architecture is finalised.
 
-1. **Scoped bus implementation:** Does the existing `local/bus` implementation support multiple independent bus instances in the same process, or does it rely on a single global event loop? What changes are required for `NewScopedBus()` to guarantee isolation?
+1. **Scoped bus implementation:** ✅ Answered — `bus.New()` already returns an independent `*Bus` with its own `subscribers` map. Two `*Bus` values share no state. `NewScopedBus()` is simply an alias or thin wrapper for `bus.New()`. No changes to broadcast algorithm needed. See `boabot/internal/infrastructure/local/bus/bus.go`.
 
-2. **Queue router extensibility:** How does `local/queue` currently route messages to bot instances? Does it use a single shared routing table, or does it already support per-session namespacing? What is the minimal change to support parallel routing tables?
+2. **Queue router extensibility:** ✅ Answered — `queue.NewRouter()` already returns an independent `*Router` with its own channel map. Per-session isolation is achieved by giving each session its own `*Router`. The only required change is adding a `Deregister(botName string)` method to `Router` for session teardown. See `boabot/internal/infrastructure/local/queue/queue.go`.
 
-3. **TeamManager bot lifecycle:** What is the current contract for registering and deregistering bots with `TeamManager`? Can bots be dynamically added and removed at runtime without restarting the manager, and without disrupting existing registered bots?
+3. **TeamManager bot lifecycle:** Open — need to confirm whether `TeamManager` supports dynamic add/remove of bots at runtime without restart. See `boabot/internal/application/team/team_manager.go`.
 
-4. **Board status transition latency:** How does the orchestrator currently detect item status changes — polling interval or event-driven? What is the current worst-case latency, and is it sufficient for the 1s spawn-ready requirement?
+4. **Board status transition latency:** Open — `InMemoryBoardStore` currently has no event emission mechanism; the board is mutated by HTTP handlers. Need to determine how the pool manager will be notified of status changes within the 500ms detection requirement. Options: callback at construction, internal channel, or short-interval poll. See `boabot/internal/infrastructure/local/orchestrator/board.go`.
 
-5. **Atomic file writes on the target platform:** What is the correct pattern for atomic file replacement in Go on Linux/macOS (write to temp file, `os.Rename`)? Are there any ECS/container filesystem constraints that would prevent `os.Rename` from being atomic?
+5. **Atomic file writes on the target platform:** ✅ Answered — `InMemoryBoardStore.persist()` already uses `os.WriteFile(path+".tmp") + os.Rename(tmp, path)`. This pattern is proven in the codebase and is atomic on Linux/macOS (both use POSIX `rename(2)`). ECS uses Linux — no constraint. Pool state file and session file will use the identical pattern.
+
+6. **Tech-lead tool registry:** Open — the spec lists `spawn_agent` and `terminate_agent` as new tools registered in the "tech-lead bot tool handler", but no specific file path has been identified. Need to find how individual bot types register their tools (the handler that maps tool call names to functions for the tech-lead personality). Likely lives in a bot-specific config or runtime file under `boabot-team/bots/tech-lead/` or wired in `boabot/internal/application/run_agent.go`. Must be confirmed before P5f.1 implementation begins.
 
 ---
 

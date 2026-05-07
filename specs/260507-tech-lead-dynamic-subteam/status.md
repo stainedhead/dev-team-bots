@@ -26,7 +26,7 @@
 - [x] PRD moved into spec directory
 - [x] All phase files initialized
 - [x] Research questions identified
-- [ ] spec.md reviewed and gaps resolved
+- [x] spec.md reviewed and gaps resolved (W1–W4 fixes applied)
 - [ ] status.md updated to reflect Phase 1 start
 
 ---

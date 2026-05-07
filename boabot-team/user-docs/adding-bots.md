@@ -65,10 +65,6 @@ tools:
     - todo_write
     - todo_read
     - http_request
-  http_allowed_hosts:
-    - api.github.com
-  receive_from:
-    - orchestrator
 
 budget:
   token_spend_daily: 1000000

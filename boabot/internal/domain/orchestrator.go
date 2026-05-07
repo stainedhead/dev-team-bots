@@ -42,12 +42,15 @@ type BoardStore interface {
 }
 
 // Attachment holds a file uploaded to a WorkItem.
+// If StoragePath is non-empty the file lives on disk and Content is empty.
+// If StoragePath is empty the file is stored inline in Content (base64).
 type Attachment struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	ContentType string    `json:"content_type"`
-	Content     string    `json:"content"`  // base64-encoded file bytes
-	Size        int       `json:"size"`     // original byte count
+	Content     string    `json:"content,omitempty"`      // base64-encoded, only when not on disk
+	StoragePath string    `json:"storage_path,omitempty"` // absolute path when stored on disk
+	Size        int       `json:"size"`
 	UploadedAt  time.Time `json:"uploaded_at"`
 }
 

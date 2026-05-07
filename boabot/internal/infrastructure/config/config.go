@@ -59,11 +59,12 @@ type BotConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	APIPort       int    `yaml:"api_port"`
-	WebPort       int    `yaml:"web_port"`
-	JWTSecret     string `yaml:"jwt_secret"`     // generated randomly if empty
-	AdminPassword string `yaml:"admin_password"` // defaults to "admin" if empty
+	Enabled       bool     `yaml:"enabled"`
+	APIPort       int      `yaml:"api_port"`
+	WebPort       int      `yaml:"web_port"`
+	JWTSecret     string   `yaml:"jwt_secret"`     // generated randomly if empty
+	AdminPassword string   `yaml:"admin_password"` // defaults to "admin" if empty
+	WorkDirs      []string `yaml:"work_dirs"`      // allowed base directories for board item workspaces
 }
 
 type ModelsConfig struct {

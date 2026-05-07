@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,11 +54,29 @@ type InMemoryAuthProvider struct {
 func NewInMemoryAuthProvider(adminPassword, jwtSecret, persistPath string) (*InMemoryAuthProvider, error) {
 	secret := []byte(jwtSecret)
 	if len(secret) == 0 {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			return nil, fmt.Errorf("orchestrator auth: generate jwt secret: %w", err)
+		// Derive a secret file path next to the persist file so the JWT secret
+		// survives server restarts (tokens issued before restart remain valid).
+		secretFile := ""
+		if persistPath != "" {
+			secretFile = filepath.Join(filepath.Dir(persistPath), "jwt.secret")
 		}
-		secret = []byte(hex.EncodeToString(b))
+		if secretFile != "" {
+			if existing, readErr := os.ReadFile(secretFile); readErr == nil && len(existing) > 0 {
+				// Trim whitespace/newline in case the file was written with a trailing newline.
+				secret = []byte(strings.TrimSpace(string(existing)))
+			}
+		}
+		if len(secret) == 0 {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				return nil, fmt.Errorf("orchestrator auth: generate jwt secret: %w", err)
+			}
+			secret = []byte(hex.EncodeToString(b))
+			if secretFile != "" {
+				_ = os.MkdirAll(filepath.Dir(secretFile), 0o755)
+				_ = os.WriteFile(secretFile, secret, 0o600)
+			}
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcryptCostAuth)
@@ -108,7 +127,7 @@ func (p *InMemoryAuthProvider) loadFromDisk() {
 			User:         r.User,
 			passwordHash: r.PasswordHash,
 		}
-		rec.User.PasswordHash = ""
+		rec.PasswordHash = ""
 		p.users[r.Username] = rec
 	}
 }

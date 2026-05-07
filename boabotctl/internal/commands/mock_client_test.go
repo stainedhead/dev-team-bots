@@ -72,25 +72,26 @@ type mockClient struct {
 	memoryStatusErr  error
 
 	// Board extras
-	boardActivityResp        domain.ActivityResponse
-	boardActivityErr         error
-	boardAskResp             domain.ChatMessage
-	boardAskErr              error
-	boardAttachUploadResp    domain.WorkItem
-	boardAttachUploadErr     error
-	boardAttachGetData       []byte
-	boardAttachGetCT         string
-	boardAttachGetName       string
-	boardAttachGetErr        error
-	boardAttachDeleteErr     error
+	boardActivityResp     domain.ActivityResponse
+	boardActivityErr      error
+	boardAskResp          domain.ChatMessage
+	boardAskErr           error
+	boardAttachUploadResp domain.WorkItem
+	boardAttachUploadErr  error
+	boardAttachGetData    []byte
+	boardAttachGetCT      string
+	boardAttachGetName    string
+	boardAttachGetErr     error
+	boardAttachDeleteErr  error
 
 	// Tasks
-	taskListResp    []domain.DirectTask
-	taskListErr     error
-	taskGetResp     domain.DirectTask
-	taskGetErr      error
-	taskCreateResp  domain.DirectTask
-	taskCreateErr   error
+	taskListResp   []domain.DirectTask
+	taskListErr    error
+	taskGetResp    domain.DirectTask
+	taskGetErr     error
+	taskCreateResp domain.DirectTask
+	taskCreateErr  error
+	taskDeleteErr  error
 
 	// Chat / threads
 	threadListResp     []domain.ChatThread
@@ -255,6 +256,9 @@ func (m *mockClient) TaskCreate(_ context.Context, _, _ string, _ *time.Time) (d
 func (m *mockClient) TaskGet(_ context.Context, _ string) (domain.DirectTask, error) {
 	return m.taskGetResp, m.taskGetErr
 }
+func (m *mockClient) TaskDelete(_ context.Context, _ string) error {
+	return m.taskDeleteErr
+}
 func (m *mockClient) ThreadList(_ context.Context) ([]domain.ChatThread, error) {
 	return m.threadListResp, m.threadListErr
 }
@@ -289,8 +293,8 @@ func (e *errClient) BoardUpdate(_ context.Context, _ string, _ domain.UpdateWork
 func (e *errClient) BoardAssign(_ context.Context, _, _ string) (domain.WorkItem, error) {
 	return domain.WorkItem{}, e.err
 }
-func (e *errClient) BoardClose(_ context.Context, _ string) error  { return e.err }
-func (e *errClient) BoardDelete(_ context.Context, _ string) error { return e.err }
+func (e *errClient) BoardClose(_ context.Context, _ string) error          { return e.err }
+func (e *errClient) BoardDelete(_ context.Context, _ string) error         { return e.err }
 func (e *errClient) TeamList(_ context.Context) ([]domain.BotEntry, error) { return nil, e.err }
 func (e *errClient) TeamGet(_ context.Context, _ string) (domain.BotEntry, error) {
 	return domain.BotEntry{}, e.err
@@ -348,6 +352,7 @@ func (e *errClient) TaskCreate(_ context.Context, _, _ string, _ *time.Time) (do
 func (e *errClient) TaskGet(_ context.Context, _ string) (domain.DirectTask, error) {
 	return domain.DirectTask{}, e.err
 }
+func (e *errClient) TaskDelete(_ context.Context, _ string) error              { return e.err }
 func (e *errClient) ThreadList(_ context.Context) ([]domain.ChatThread, error) { return nil, e.err }
 func (e *errClient) ThreadCreate(_ context.Context, _ string, _ []string) (domain.ChatThread, error) {
 	return domain.ChatThread{}, e.err

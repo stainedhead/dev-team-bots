@@ -59,6 +59,7 @@ type fakeBoardStore struct {
 	updateFn func(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error)
 	getFn    func(ctx context.Context, id string) (domain.WorkItem, error)
 	listFn   func(ctx context.Context, filter domain.WorkItemFilter) ([]domain.WorkItem, error)
+	deleteFn func(ctx context.Context, id string) error
 }
 
 func (f *fakeBoardStore) Create(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error) {
@@ -85,6 +86,12 @@ func (f *fakeBoardStore) List(ctx context.Context, filter domain.WorkItemFilter)
 		return f.listFn(ctx, filter)
 	}
 	return []domain.WorkItem{{ID: "1", Title: "first"}}, nil
+}
+func (f *fakeBoardStore) Delete(ctx context.Context, id string) error {
+	if f.deleteFn != nil {
+		return f.deleteFn(ctx, id)
+	}
+	return nil
 }
 
 type fakeControlPlane struct {
@@ -153,6 +160,7 @@ func (f *fakeUserStore) List(ctx context.Context) ([]domain.User, error) {
 type fakeSkillRegistry struct {
 	listFn    func(ctx context.Context, botType string, status domain.SkillStatus) ([]domain.Skill, error)
 	getFn     func(ctx context.Context, id string) (domain.Skill, error)
+	stageFn   func(ctx context.Context, name, botType string, files map[string][]byte) (domain.Skill, error)
 	approveFn func(ctx context.Context, id string) error
 	rejectFn  func(ctx context.Context, id string) error
 	revokeFn  func(ctx context.Context, id string) error
@@ -169,6 +177,12 @@ func (f *fakeSkillRegistry) Get(ctx context.Context, id string) (domain.Skill, e
 		return f.getFn(ctx, id)
 	}
 	return domain.Skill{ID: id}, nil
+}
+func (f *fakeSkillRegistry) Stage(ctx context.Context, name, botType string, files map[string][]byte) (domain.Skill, error) {
+	if f.stageFn != nil {
+		return f.stageFn(ctx, name, botType, files)
+	}
+	return domain.Skill{ID: "staged-1", Name: name, Status: domain.SkillStatusStaged}, nil
 }
 func (f *fakeSkillRegistry) Approve(ctx context.Context, id string) error {
 	if f.approveFn != nil {

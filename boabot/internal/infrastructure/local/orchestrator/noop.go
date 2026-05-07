@@ -27,6 +27,11 @@ func (NoopSkillRegistry) Get(_ context.Context, _ string) (domain.Skill, error) 
 	return domain.Skill{}, ErrSkillNotFound
 }
 
+// Stage always returns ErrSkillNotFound.
+func (NoopSkillRegistry) Stage(_ context.Context, _, _ string, _ map[string][]byte) (domain.Skill, error) {
+	return domain.Skill{}, ErrSkillNotFound
+}
+
 // Approve always returns ErrSkillNotFound.
 func (NoopSkillRegistry) Approve(_ context.Context, _ string) error {
 	return ErrSkillNotFound

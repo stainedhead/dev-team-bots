@@ -72,7 +72,9 @@ func doMultipartUpload(t *testing.T, srv *httptest.Server, itemID string, files 
 			t.Fatalf("write form file: %v", err)
 		}
 	}
-	mw.Close()
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/board/"+itemID+"/attachments", &buf)
 	if err != nil {
@@ -350,7 +352,7 @@ func TestBoardUpdate_InjectsTextAttachmentsIntoInstruction(t *testing.T) {
 	}
 
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			capturedInstruction = instruction
 			return domain.DirectTask{ID: "t1"}, nil
 		},

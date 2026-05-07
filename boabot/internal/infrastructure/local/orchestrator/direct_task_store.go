@@ -152,6 +152,18 @@ func (s *InMemoryDirectTaskStore) ListAll(_ context.Context) ([]domain.DirectTas
 	return result, nil
 }
 
+// Delete removes the task with the given ID. Returns ErrDirectTaskNotFound if absent.
+func (s *InMemoryDirectTaskStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return ErrDirectTaskNotFound
+	}
+	delete(s.tasks, id)
+	s.persist()
+	return nil
+}
+
 // ListBySource returns all tasks with the given source, sorted newest-first.
 func (s *InMemoryDirectTaskStore) ListBySource(_ context.Context, source domain.DirectTaskSource) ([]domain.DirectTask, error) {
 	s.mu.RLock()

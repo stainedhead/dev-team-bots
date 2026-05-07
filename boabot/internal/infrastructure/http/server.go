@@ -2,6 +2,8 @@
 package httpserver
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -12,6 +14,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,15 +35,17 @@ type AuthProvider interface {
 
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
-	Auth       AuthProvider
-	Board      domain.BoardStore
-	Team       domain.ControlPlane
-	Users      domain.UserStore
-	Skills     domain.SkillRegistry
-	DLQ        domain.DLQStore
-	Tasks      domain.DirectTaskStore
-	Dispatcher domain.TaskDispatcher
-	Chat       domain.ChatStore
+	Auth            AuthProvider
+	Board           domain.BoardStore
+	Team            domain.ControlPlane
+	Users           domain.UserStore
+	Skills          domain.SkillRegistry
+	DLQ             domain.DLQStore
+	Tasks           domain.DirectTaskStore
+	Dispatcher      domain.TaskDispatcher
+	Chat            domain.ChatStore
+	AllowedWorkDirs []string // whitelisted base directories for item working directories
+	TaskLogBase     string   // base directory for per-task log directories (optional)
 }
 
 // Server is the orchestrator HTTP server.
@@ -58,6 +64,9 @@ func (s *Server) Handler() http.Handler {
 
 	// Public
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+
+	// Work directory roots (public read — UI needs these before login)
+	mux.HandleFunc("GET /api/v1/workdirs", s.handleWorkDirList)
 
 	// Board — read endpoints are public; write endpoints require auth
 	mux.HandleFunc("GET /api/v1/board", s.handleBoardList)
@@ -103,8 +112,12 @@ func (s *Server) Handler() http.Handler {
 	// Direct tasks — require auth
 	mux.HandleFunc("GET /api/v1/tasks", s.auth(s.handleTaskList))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", s.auth(s.handleTaskGet))
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.auth(s.adminOnly(s.handleTaskDelete)))
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
+
+	// Skill upload (admin)
+	mux.HandleFunc("POST /api/v1/skills", s.auth(s.adminOnly(s.handleSkillUpload)))
 
 	// Board activity and ask — require auth
 	mux.HandleFunc("GET /api/v1/board/{id}/activity", s.auth(s.handleBoardActivity))
@@ -199,6 +212,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── work-dir helpers ──────────────────────────────────────────────────────────
+
+// isAllowedWorkDir reports whether p is equal to or a child of one of the
+// configured allowed roots. Both p and each root are cleaned before comparison
+// to prevent path-traversal bypasses.
+func isAllowedWorkDir(p string, roots []string) bool {
+	p = filepath.Clean(p)
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if p == root || strings.HasPrefix(p, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleWorkDirList(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.cfg.AllowedWorkDirs)
+}
+
 // ── board handlers ────────────────────────────────────────────────────────────
 
 func (s *Server) handleBoardList(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +270,16 @@ func (s *Server) handleBoardCreate(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if req.WorkDir != "" {
+		if len(s.cfg.AllowedWorkDirs) == 0 {
+			writeError(w, http.StatusBadRequest, "no work directories are configured on this server")
+			return
+		}
+		if !isAllowedWorkDir(req.WorkDir, s.cfg.AllowedWorkDirs) {
+			writeError(w, http.StatusBadRequest, "work_dir is outside the configured allowed directories")
+			return
+		}
 	}
 	claims := claimsFromContext(r)
 	now := time.Now().UTC()
@@ -292,6 +335,16 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		existing.AssignedTo = *req.AssignedTo
 	}
 	if req.WorkDir != nil {
+		if *req.WorkDir != "" {
+			if len(s.cfg.AllowedWorkDirs) == 0 {
+				writeError(w, http.StatusBadRequest, "no work directories are configured on this server")
+				return
+			}
+			if !isAllowedWorkDir(*req.WorkDir, s.cfg.AllowedWorkDirs) {
+				writeError(w, http.StatusBadRequest, "work_dir is outside the configured allowed directories")
+				return
+			}
+		}
 		existing.WorkDir = *req.WorkDir
 	}
 	existing.UpdatedAt = time.Now().UTC()
@@ -308,6 +361,9 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		if updated.WorkDir != "" {
 			instruction += fmt.Sprintf("\n\nWorking directory: %s\nYou may read and write files in this directory to complete your work. If it is a git repository you may also use git commands.", updated.WorkDir)
 		}
+		if len(s.cfg.AllowedWorkDirs) > 0 {
+			instruction += fmt.Sprintf("\n\nSECURITY CONSTRAINT: You are only permitted to access files within these directories: %s\nDo not read, write, or execute files outside these paths.", strings.Join(s.cfg.AllowedWorkDirs, ", "))
+		}
 		for _, att := range updated.Attachments {
 			raw, decErr := base64.StdEncoding.DecodeString(att.Content)
 			if decErr != nil {
@@ -321,7 +377,7 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 				instruction += fmt.Sprintf("\n\n--- Attachment: %s ---\n%s", att.Name, string(raw))
 			}
 		}
-		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard, ""); dispErr != nil {
+		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard, "", updated.WorkDir); dispErr != nil {
 			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
 			// Non-fatal: the board update already succeeded.
 		} else {
@@ -356,9 +412,8 @@ func (s *Server) handleBoardAttachmentUpload(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
 		return
 	}
-	files := r.MultipartForm.File["files"]
 	const maxFileSize = 10 << 20 // 10 MB
-	for _, fh := range files {
+	for _, fh := range r.MultipartForm.File["files"] {
 		f, openErr := fh.Open()
 		if openErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to open uploaded file")
@@ -385,11 +440,25 @@ func (s *Server) handleBoardAttachmentUpload(w http.ResponseWriter, r *http.Requ
 		}
 		att := domain.Attachment{
 			ID:          attID,
-			Name:        fh.Filename,
+			Name:        filepath.Base(fh.Filename), // strip any path the client may have sent
 			ContentType: ct,
-			Content:     base64.StdEncoding.EncodeToString(raw),
 			Size:        len(raw),
 			UploadedAt:  time.Now().UTC(),
+		}
+		if item.WorkDir != "" {
+			// Write to disk inside the working directory.
+			destPath := filepath.Join(item.WorkDir, att.Name)
+			if mkErr := os.MkdirAll(item.WorkDir, 0o755); mkErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create working directory")
+				return
+			}
+			if wErr := os.WriteFile(destPath, raw, 0o644); wErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to write file to working directory")
+				return
+			}
+			att.StoragePath = destPath
+		} else {
+			att.Content = base64.StdEncoding.EncodeToString(raw)
 		}
 		item.Attachments = append(item.Attachments, att)
 	}
@@ -420,17 +489,26 @@ func (s *Server) handleBoardAttachmentGet(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
 	}
-	raw, decErr := base64.StdEncoding.DecodeString(found.Content)
-	if decErr != nil {
-		writeError(w, http.StatusInternalServerError, "failed to decode attachment")
-		return
+	var raw []byte
+	if found.StoragePath != "" {
+		raw, err = os.ReadFile(found.StoragePath)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "attachment file not found on disk")
+			return
+		}
+	} else {
+		raw, err = base64.StdEncoding.DecodeString(found.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to decode attachment")
+			return
+		}
 	}
 	ct := found.ContentType
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	if ct == "" || strings.HasPrefix(ct, "text/") || ct == "application/json" {
+	if strings.HasPrefix(ct, "text/") || ct == "application/json" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, found.Name))
 	} else {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, found.Name))
@@ -446,16 +524,21 @@ func (s *Server) handleBoardAttachmentDelete(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "item not found")
 		return
 	}
-	originalLen := len(item.Attachments)
+	var toDelete *domain.Attachment
 	filtered := item.Attachments[:0]
-	for _, a := range item.Attachments {
-		if a.ID != attId {
+	for i, a := range item.Attachments {
+		if a.ID == attId {
+			toDelete = &item.Attachments[i]
+		} else {
 			filtered = append(filtered, a)
 		}
 	}
-	if len(filtered) == originalLen {
+	if toDelete == nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
+	}
+	if toDelete.StoragePath != "" {
+		_ = os.Remove(toDelete.StoragePath) // best-effort; don't block the delete on a missing file
 	}
 	item.Attachments = filtered
 	if _, err := s.cfg.Board.Update(r.Context(), item); err != nil {
@@ -830,6 +913,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Instruction string     `json:"instruction"`
 		ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+		WorkDir     string     `json:"work_dir,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -839,7 +923,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "instruction must not be empty")
 		return
 	}
-	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator, "")
+	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator, "", req.WorkDir)
 	if err != nil {
 		writeInternalError(w, "bot task create", err)
 		return
@@ -882,6 +966,110 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Tasks == nil {
+		writeError(w, http.StatusServiceUnavailable, "tasks not available")
+		return
+	}
+	id := r.PathValue("id")
+	task, err := s.cfg.Tasks.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if delErr := s.cfg.Tasks.Delete(r.Context(), id); delErr != nil {
+		writeInternalError(w, "task delete", delErr)
+		return
+	}
+	// Clean up log directory if configured.
+	if s.cfg.TaskLogBase != "" {
+		_ = os.RemoveAll(filepath.Join(s.cfg.TaskLogBase, task.ID))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Skills == nil {
+		writeError(w, http.StatusServiceUnavailable, "skills not available")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse upload")
+		return
+	}
+	name := r.FormValue("name")
+	botType := r.FormValue("bot_type")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+
+	fh := r.MultipartForm.File["file"]
+	if len(fh) == 0 {
+		writeError(w, http.StatusBadRequest, "file required")
+		return
+	}
+	header := fh[0]
+	f, err := header.Open()
+	if err != nil {
+		writeInternalError(w, "open upload", err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	content, err := io.ReadAll(f)
+	if err != nil {
+		writeInternalError(w, "read upload", err)
+		return
+	}
+
+	skillFiles := make(map[string][]byte)
+
+	filename := header.Filename
+	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		// Unzip and preserve directory structure.
+		zr, zipErr := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+		if zipErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid zip file")
+			return
+		}
+		for _, zf := range zr.File {
+			if zf.FileInfo().IsDir() {
+				continue
+			}
+			rc, openErr := zf.Open()
+			if openErr != nil {
+				continue
+			}
+			data, readErr := io.ReadAll(rc)
+			_ = rc.Close()
+			if readErr != nil {
+				continue
+			}
+			// Sanitize path to prevent path traversal.
+			clean := filepath.Clean(zf.Name)
+			if strings.HasPrefix(clean, "..") {
+				continue
+			}
+			skillFiles[clean] = data
+		}
+	} else {
+		// Single .md or other text file.
+		skillFiles[filename] = content
+	}
+
+	if len(skillFiles) == 0 {
+		writeError(w, http.StatusBadRequest, "no files in upload")
+		return
+	}
+
+	skill, err := s.cfg.Skills.Stage(r.Context(), name, botType, skillFiles)
+	if err != nil {
+		writeInternalError(w, "skill stage", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, skill)
 }
 
 func (s *Server) handleBoardActivity(w http.ResponseWriter, r *http.Request) {
@@ -949,7 +1137,7 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, msg)
 	instruction := fmt.Sprintf("Regarding board item '%s' (ID: %s):\n\n%s", item.Title, item.ID, req.Content)
-	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat, threadID)
+	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat, threadID, item.WorkDir)
 	if dispErr != nil {
 		writeInternalError(w, "ask dispatch", dispErr)
 		return
@@ -1055,7 +1243,7 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	task, err := s.cfg.Dispatcher.Dispatch(ctx, bot, instruction, nil, domain.DirectTaskSourceChat, threadID)
+	task, err := s.cfg.Dispatcher.Dispatch(ctx, bot, instruction, nil, domain.DirectTaskSourceChat, threadID, "")
 	if err != nil {
 		writeInternalError(w, "chat dispatch", err)
 		return
@@ -1426,8 +1614,15 @@ const kanbanHTML = `<!DOCTYPE html>
 
     <!-- Tasks -->
     <div class="pane" id="pane-tasks" style="overflow:hidden">
-      <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
-      <div id="tasks-body" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
+      <div class="sec-hdr">
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <button class="tab active" id="tt-direct" onclick="taskSubTab('direct')" style="font-size:.75rem;padding:.2rem .6rem">Direct</button>
+          <button class="tab" id="tt-sched" onclick="taskSubTab('sched')" style="font-size:.75rem;padding:.2rem .6rem">Scheduled</button>
+        </div>
+        <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div>
+      </div>
+      <div id="tasks-direct" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
+      <div id="tasks-sched" style="flex:1;overflow:auto;display:none"><div class="empty-state">Loading&#x2026;</div></div>
       <div class="ctx-panel" id="task-ctx" style="display:none">
         <div class="ctx-hdr">
           <span class="ctx-title" id="task-ctx-title">Select a task</span>
@@ -1461,7 +1656,8 @@ const kanbanHTML = `<!DOCTYPE html>
 
     <!-- Skills -->
     <div class="pane" id="pane-skills">
-      <div class="sec-hdr"><div class="sec-title">Skills</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button></div></div>
+      <div class="sec-hdr"><div class="sec-title">Skills</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button><button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button></div></div>
+      <input type="file" id="skill-upload-inp" accept=".md,.zip" style="display:none" onchange="uploadSkill(this)"/>
       <div id="skills-body"><div class="empty-state">Loading…</div></div>
     </div>
 
@@ -1531,6 +1727,7 @@ const kanbanHTML = `<!DOCTYPE html>
     <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem"><input type="radio" name="at-timing" id="at-later" onchange="ge('at-sched-wrap').style.display='block'"> Schedule</label>
   </div>
   <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Schedule At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
+  <div class="fg"><label class="fl">Working directory (optional)</label><select class="fi" id="at-workdir-sel" onchange="ge('at-workdir-txt').style.display=this.value==='__custom__'?'block':'none'"><option value="">None</option></select><input class="fi" id="at-workdir-txt" type="text" placeholder="or enter path…" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="at-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-primary" onclick="doDispatchTask()">Dispatch</button></div>
 </dialog>
@@ -1558,7 +1755,7 @@ const kanbanHTML = `<!DOCTYPE html>
 <script>
   // ── State ───────────────────────────────────────────────────────────────────
   var token=null, me=null, myRole=null;
-  var allItems=[], allBots=[];
+  var allItems=[], allBots=[], allWorkDirs=[];
   var selectedBots=[], pendingTasks={}, fastPollTimer=null;
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
@@ -1841,6 +2038,25 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Skills ───────────────────────────────────────────────────────────────────
+  function uploadSkill(input){
+    var file=input.files[0];
+    if(!file)return;
+    input.value='';
+    var name=prompt('Skill name:',file.name.replace(/\.[^.]+$/,''))||'';
+    if(!name)return;
+    var botType=prompt('Bot type (leave blank for all):','')||'';
+    var fd=new FormData();
+    fd.append('file',file);
+    fd.append('name',name);
+    fd.append('bot_type',botType);
+    var opts={method:'POST',headers:{},body:fd};
+    if(token)opts.headers['Authorization']='Bearer '+token;
+    fetch('/api/v1/skills',opts)
+      .then(function(r){return r.json().then(function(d){if(!r.ok)throw new Error(d.error||r.statusText);return d})})
+      .then(function(){loadSkills()})
+      .catch(function(e){alert('Upload failed: '+e.message)});
+  }
+
   function loadSkills(){
     var el=ge('skills-body');
     if(!token){el.innerHTML='<div class="empty-state">Sign in to manage skills</div>';return}
@@ -1930,29 +2146,63 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Tasks ─────────────────────────────────────────────────────────────────────
+  var currentTaskSubTab='direct';
+
+  function taskSubTab(tab){
+    currentTaskSubTab=tab;
+    ge('tasks-direct').style.display=tab==='direct'?'flex':'none';
+    ge('tasks-sched').style.display=tab==='sched'?'flex':'none';
+    ge('tt-direct').classList.toggle('active',tab==='direct');
+    ge('tt-sched').classList.toggle('active',tab==='sched');
+  }
+
+  function renderTaskTable(tasks,containerId){
+    var el=ge(containerId);
+    if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">None</div>';return}
+    var rows=tasks.map(function(t){
+      var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
+      var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'&#x2026;':'');
+      var del=token?'<button class="btn btn-danger btn-sm" style="padding:.1rem .4rem;font-size:.7rem" onclick="deleteTask(event,\''+esc(t.id)+'\')">&#x1F5D1;</button>':'';
+      return'<tr data-tid="'+esc(t.id)+'"><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td><td>'+del+'</td></tr>';
+    }).join('');
+    el.innerHTML='<table><thead><tr><th>Bot</th><th>Instruction</th><th>Status</th><th>Sched</th><th>Created</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el.querySelectorAll('tr[data-tid]').forEach(function(tr){
+      tr.style.cursor='pointer';
+      tr.onclick=function(ev){
+        if(ev.target.tagName==='BUTTON')return;
+        var tid=tr.getAttribute('data-tid');
+        var task=allTasksList.find(function(t){return t.id===tid});
+        if(task)openTaskCtx(task);
+      };
+    });
+  }
+
   function loadTasks(){
-    var el=ge('tasks-body');
-    if(!token){el.innerHTML='<div class="empty-state">Sign in to view tasks</div>';return}
+    if(!token){
+      ge('tasks-direct').innerHTML='<div class="empty-state">Sign in to view tasks</div>';
+      ge('tasks-sched').innerHTML='<div class="empty-state">Sign in to view tasks</div>';
+      return;
+    }
     api('GET','/api/v1/tasks')
       .then(function(tasks){
         allTasksList=tasks||[];
-        if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">No direct tasks</div>';return}
-        var rows=tasks.map(function(t){
-          var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
-          var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'&#x2026;':'');
-          return'<tr data-tid="'+esc(t.id)+'"><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+(t.dispatched_at?ago(t.dispatched_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
-        }).join('');
-        el.innerHTML='<table><thead><tr><th>Bot</th><th>Instruction</th><th>Status</th><th>Scheduled At</th><th>Dispatched At</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
-        document.querySelectorAll('#tasks-body tr[data-tid]').forEach(function(tr){
-          tr.style.cursor='pointer';
-          tr.onclick=function(){
-            var tid=tr.getAttribute('data-tid');
-            var task=allTasksList.find(function(t){return t.id===tid});
-            if(task)openTaskCtx(task);
-          };
-        });
+        var direct=allTasksList.filter(function(t){return!t.scheduled_at});
+        var sched=allTasksList.filter(function(t){return!!t.scheduled_at});
+        renderTaskTable(direct,'tasks-direct');
+        renderTaskTable(sched,'tasks-sched');
       })
-      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load tasks</div>'});
+      .catch(function(){
+        ge('tasks-direct').innerHTML='<div class="empty-state">Failed to load tasks</div>';
+        ge('tasks-sched').innerHTML='<div class="empty-state">Failed to load tasks</div>';
+      });
+  }
+
+  function deleteTask(ev,id){
+    ev.stopPropagation();
+    if(!confirm('Delete this task? The task log directory will also be removed.'))return;
+    api('DELETE','/api/v1/tasks/'+id,null)
+      .then(function(){closeTaskCtx();loadTasks()})
+      .catch(function(e){alert('Delete failed: '+e.message)});
   }
 
   function openAssignTask(botName){
@@ -1962,6 +2212,18 @@ const kanbanHTML = `<!DOCTYPE html>
     ge('at-sched-wrap').style.display='none';
     ge('at-sched').value='';
     ge('at-err').style.display='none';
+    var sel=ge('at-workdir-sel');
+    sel.innerHTML='<option value="">None</option>';
+    (allWorkDirs||[]).forEach(function(d){
+      var o=document.createElement('option');
+      o.value=d;o.textContent=d;
+      sel.appendChild(o);
+    });
+    var custom=document.createElement('option');
+    custom.value='__custom__';custom.textContent='Custom path…';
+    sel.appendChild(custom);
+    ge('at-workdir-txt').style.display='none';
+    ge('at-workdir-txt').value='';
     dlg('at-dlg');
   }
 
@@ -1973,10 +2235,13 @@ const kanbanHTML = `<!DOCTYPE html>
     var e=ge('at-err');
     e.style.display='none';
     if(!instruction){e.textContent='Instruction is required';e.style.display='block';return}
+    var selVal=ge('at-workdir-sel').value;
+    var workDir=selVal==='__custom__'?ge('at-workdir-txt').value.trim():selVal;
     var body={instruction:instruction};
     if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
+    if(workDir){body.work_dir=workDir}
     api('POST','/api/v1/bots/'+botName+'/tasks',body)
-      .then(function(){cls('at-dlg');tab('tasks');loadTasks()})
+      .then(function(){cls('at-dlg');taskSubTab('direct');tab('tasks');loadTasks()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -2179,18 +2444,51 @@ const kanbanHTML = `<!DOCTYPE html>
       var it=boardCtxItem;
       var attCount=(it.attachments||[]).length;
       var isDone=it.status==='done';
+      var isBacklog=it.status==='backlog';
+      var canEdit=token&&(isBacklog);
+
+      // Work dir row — picker if allowed dirs are configured, else free-text
+      var workdirInput='';
+      if(allWorkDirs.length>0){
+        workdirInput='<select id="bctx-workdir" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem">'+
+          '<option value="">— none —</option>';
+        allWorkDirs.forEach(function(d){workdirInput+='<option value="'+esc(d)+'"'+(it.work_dir===d?' selected':'')+'>'+esc(d)+'</option>'});
+        workdirInput+='</select>';
+      } else {
+        workdirInput='<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem"/>';
+      }
+
+      // Bot selector for backlog editing
+      var botRow='<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+
+        (canEdit
+          ? '<select id="bctx-bot" style="background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem;max-width:140px">'+
+            '<option value="">Unassigned</option>'+
+            allBots.map(function(b){return'<option value="'+esc(b.name)+'"'+(it.assigned_to===b.name?' selected':'')+'>'+esc(b.name)+'</option>'}).join('')+
+            '</select>'
+          : (it.assigned_to||'&#x2014;'))+
+        '</span></div>';
+
+      // Description — editable in backlog
+      var descRow='<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+
+        (canEdit
+          ? '<textarea id="bctx-desc" style="flex:1;width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem;resize:vertical;min-height:3rem">'+esc(it.description||'')+'</textarea>'
+          : (it.description?esc(it.description):'&#x2014;'))+
+        '</span></div>';
+
       body.innerHTML=
         '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
-        '<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+(it.assigned_to||'&#x2014;')+'</span></div>'+
-        '<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+(it.description?esc(it.description):'&#x2014;')+'</span></div>'+
+        botRow+
+        descRow+
         '<div class="ctx-row"><span class="ctx-lbl">Work dir</span><span class="ctx-val" style="display:flex;align-items:center;gap:.5rem">'+
-          '<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem"/>'+
+          workdirInput+
           '<button class="btn btn-secondary btn-sm" onclick="saveBoardWorkDir()">Save</button>'+
         '</span></div>'+
+        (it.work_dir?'<div style="font-size:.7rem;color:#475569;padding:.1rem 0 .4rem 0">Attachments will be written to this directory.</div>':'')+
         '<div class="ctx-row"><span class="ctx-lbl">Attachments</span><span class="ctx-val"><a href="#" onclick="bctxTab(\'files\');return false" style="color:#60a5fa">'+attCount+' file'+(attCount!==1?'s':'')+'</a></span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
         (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
-        (isDone&&token?'<div style="margin-top:.75rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
+        (canEdit?'<div style="margin-top:.75rem"><button class="btn btn-primary btn-sm" onclick="saveBoardBacklogEdits()">Save changes</button></div>':'')+
+        (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
       api('GET','/api/v1/board/'+boardCtxItem.id+'/activity',null)
@@ -2245,6 +2543,18 @@ const kanbanHTML = `<!DOCTYPE html>
     var val=(ge('bctx-workdir')||{}).value||'';
     api('PATCH','/api/v1/board/'+boardCtxItem.id,{work_dir:val})
       .then(function(item){boardCtxItem=item;loadBoard();})
+      .catch(function(e){alert('Failed to save: '+e.message)});
+  }
+
+  function saveBoardBacklogEdits(){
+    if(!boardCtxItem||!token)return;
+    var update={};
+    var desc=(ge('bctx-desc')||{}).value;
+    var bot=(ge('bctx-bot')||{}).value;
+    if(desc!==undefined)update.description=desc;
+    if(bot!==undefined)update.assigned_to=bot;
+    api('PATCH','/api/v1/board/'+boardCtxItem.id,update)
+      .then(function(item){boardCtxItem=item;loadBoard();loadBoardCtx();})
       .catch(function(e){alert('Failed to save: '+e.message)});
   }
 
@@ -2368,6 +2678,10 @@ const kanbanHTML = `<!DOCTYPE html>
   function closeViewer(){ge('viewer-overlay').style.display='none'}
 
   // ── Refresh loop ──────────────────────────────────────────────────────────────
+  function loadWorkDirs(){
+    api('GET','/api/v1/workdirs',null).then(function(dirs){allWorkDirs=dirs||[];}).catch(function(){allWorkDirs=[]});
+  }
+
   function refreshAll(){
     loadBoard(); loadTeam(); loadThreads();
     if(activeTab==='tasks')loadTasks();
@@ -2394,6 +2708,7 @@ const kanbanHTML = `<!DOCTYPE html>
     },1000);
   }
 
+  loadWorkDirs();
   refreshAll();
   startTick();
 </script>

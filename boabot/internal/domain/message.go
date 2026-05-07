@@ -74,6 +74,7 @@ type TaskPayload struct {
 	TaskID      string `json:"task_id"`
 	BoardItemID string `json:"board_item_id,omitempty"`
 	Instruction string `json:"instruction"`
+	WorkDir     string `json:"work_dir,omitempty"`
 }
 
 type TaskResultPayload struct {

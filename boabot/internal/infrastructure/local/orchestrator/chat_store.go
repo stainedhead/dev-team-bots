@@ -14,8 +14,8 @@ import (
 
 // chatStoreState is the JSON-serialisable state persisted to disk.
 type chatStoreState struct {
-	Threads  []domain.ChatThread   `json:"threads"`
-	Messages []domain.ChatMessage  `json:"messages"`
+	Threads  []domain.ChatThread  `json:"threads"`
+	Messages []domain.ChatMessage `json:"messages"`
 }
 
 // InMemoryChatStore implements domain.ChatStore with optional file persistence.

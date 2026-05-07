@@ -18,13 +18,13 @@ import (
 // ── fake chat store ───────────────────────────────────────────────────────────
 
 type fakeChatStore struct {
-	appendFn         func(ctx context.Context, msg domain.ChatMessage) error
-	listFn           func(ctx context.Context, threadID string) ([]domain.ChatMessage, error)
-	listAllFn        func(ctx context.Context) ([]domain.ChatMessage, error)
-	listByBotFn      func(ctx context.Context, botName string) ([]domain.ChatMessage, error)
-	createThreadFn   func(ctx context.Context, title string, participants []string) (domain.ChatThread, error)
-	listThreadsFn    func(ctx context.Context) ([]domain.ChatThread, error)
-	deleteThreadFn   func(ctx context.Context, threadID string) error
+	appendFn       func(ctx context.Context, msg domain.ChatMessage) error
+	listFn         func(ctx context.Context, threadID string) ([]domain.ChatMessage, error)
+	listAllFn      func(ctx context.Context) ([]domain.ChatMessage, error)
+	listByBotFn    func(ctx context.Context, botName string) ([]domain.ChatMessage, error)
+	createThreadFn func(ctx context.Context, title string, participants []string) (domain.ChatThread, error)
+	listThreadsFn  func(ctx context.Context) ([]domain.ChatThread, error)
+	deleteThreadFn func(ctx context.Context, threadID string) error
 }
 
 func (f *fakeChatStore) CreateThread(ctx context.Context, title string, participants []string) (domain.ChatThread, error) {
@@ -194,7 +194,7 @@ func TestChatSend_Returns201WithMessage(t *testing.T) {
 	}
 	var dispatchedBot, dispatchedInstruction string
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
 			return domain.DirectTask{ID: "task-99", BotName: botName, Instruction: instruction, Status: domain.DirectTaskStatusDispatched}, nil

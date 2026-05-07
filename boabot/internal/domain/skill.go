@@ -27,6 +27,9 @@ const (
 type SkillRegistry interface {
 	List(ctx context.Context, botType string, status SkillStatus) ([]Skill, error)
 	Get(ctx context.Context, id string) (Skill, error)
+	// Stage stores skill files and creates a staged Skill record.
+	// files is a map of relative path → content.
+	Stage(ctx context.Context, name, botType string, files map[string][]byte) (Skill, error)
 	Approve(ctx context.Context, id string) error
 	Reject(ctx context.Context, id string) error
 	Revoke(ctx context.Context, id string) error

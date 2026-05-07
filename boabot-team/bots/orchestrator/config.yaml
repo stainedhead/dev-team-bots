@@ -8,6 +8,9 @@ orchestrator:
   enabled: true
   api_port: 8080
   web_port: 8081
+  work_dirs:
+    - /Users/iggybdda/Code
+    - /tmp
 
 models:
   default: ollama-chat

@@ -518,6 +518,14 @@ func (c *HTTPClient) TaskGet(ctx context.Context, id string) (domain.DirectTask,
 	return out, decodeJSON(resp, &out)
 }
 
+func (c *HTTPClient) TaskDelete(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "tasks/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
 // ── Chat / Threads ────────────────────────────────────────────────────────────
 
 func (c *HTTPClient) ThreadList(ctx context.Context) ([]domain.ChatThread, error) {

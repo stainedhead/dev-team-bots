@@ -32,6 +32,7 @@ type OrchestratorClient interface {
 	TaskListByBot(ctx context.Context, botName string) ([]domain.DirectTask, error)
 	TaskCreate(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error)
 	TaskGet(ctx context.Context, id string) (domain.DirectTask, error)
+	TaskDelete(ctx context.Context, id string) error
 
 	// Chat / Threads
 	ThreadList(ctx context.Context) ([]domain.ChatThread, error)

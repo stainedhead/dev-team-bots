@@ -24,6 +24,7 @@ type fakeDirectTaskStore struct {
 	getFn     func(ctx context.Context, id string) (domain.DirectTask, error)
 	listFn    func(ctx context.Context, botName string) ([]domain.DirectTask, error)
 	listAllFn func(ctx context.Context) ([]domain.DirectTask, error)
+	deleteFn  func(ctx context.Context, id string) error
 }
 
 func (f *fakeDirectTaskStore) Create(ctx context.Context, task domain.DirectTask) (domain.DirectTask, error) {
@@ -69,13 +70,20 @@ func (f *fakeDirectTaskStore) ListBySource(_ context.Context, _ domain.DirectTas
 	return []domain.DirectTask{}, nil
 }
 
-type fakeTaskDispatcher struct {
-	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string) (domain.DirectTask, error)
+func (f *fakeDirectTaskStore) Delete(ctx context.Context, id string) error {
+	if f.deleteFn != nil {
+		return f.deleteFn(ctx, id)
+	}
+	return nil
 }
 
-func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string) (domain.DirectTask, error) {
+type fakeTaskDispatcher struct {
+	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string, workDir string) (domain.DirectTask, error)
+}
+
+func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string, workDir string) (domain.DirectTask, error) {
 	if f.dispatchFn != nil {
-		return f.dispatchFn(ctx, botName, instruction, scheduledAt, source, threadID)
+		return f.dispatchFn(ctx, botName, instruction, scheduledAt, source, threadID, workDir)
 	}
 	return domain.DirectTask{
 		ID:          "task-new",
@@ -157,7 +165,7 @@ func TestBotTaskCreate_WithScheduledAt(t *testing.T) {
 	var capturedBotName, capturedInstruction string
 
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, scheduledAt *time.Time, _ domain.DirectTaskSource, _ string) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, scheduledAt *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			capturedBotName = botName
 			capturedInstruction = instruction
 			capturedScheduledAt = scheduledAt
@@ -233,7 +241,7 @@ func TestBotTaskCreate_RequiresAuth(t *testing.T) {
 
 func TestBotTaskCreate_DispatcherError_Returns500(t *testing.T) {
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource, _ string) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource, _ string, _ string) (domain.DirectTask, error) {
 			return domain.DirectTask{}, errors.New("queue full")
 		},
 	}

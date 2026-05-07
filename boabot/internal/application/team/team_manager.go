@@ -463,16 +463,28 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		orchChatStore = tm.sharedChatStore
 
+		// Wire LocalSkillRegistry; fall back to noop if the directory cannot be created.
+		var skillReg domain.SkillRegistry = orchestratorlocal.NoopSkillRegistry{}
+		if sr, srErr := orchestratorlocal.NewLocalSkillRegistry(filepath.Join(memPath, "skills")); srErr == nil {
+			skillReg = sr
+		} else {
+			slog.Warn("skill registry unavailable; using noop", "bot", entry.Name, "err", srErr)
+		}
+
+		taskLogBase := filepath.Join(memPath, "task-logs")
+
 		srv := httpserver.New(httpserver.Config{
-			Auth:       oAuth,
-			Board:      board,
-			Team:       cp,
-			Users:      oAuth,
-			Skills:     orchestratorlocal.NoopSkillRegistry{},
-			DLQ:        orchestratorlocal.NoopDLQStore{},
-			Tasks:      orchTaskStore,
-			Dispatcher: dispatcher,
-			Chat:       orchChatStore,
+			Auth:            oAuth,
+			Board:           board,
+			Team:            cp,
+			Users:           oAuth,
+			Skills:          skillReg,
+			DLQ:             orchestratorlocal.NoopDLQStore{},
+			Tasks:           orchTaskStore,
+			Dispatcher:      dispatcher,
+			Chat:            orchChatStore,
+			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
+			TaskLogBase:     taskLogBase,
 		})
 
 		httpSrv := &http.Server{

@@ -321,3 +321,157 @@ func (m *RulesTracker) Reset() {
 		fn()
 	}
 }
+
+// --- PluginStore ---
+
+// PluginStore is a hand-written mock for domain.PluginStore.
+type PluginStore struct {
+	ListFn    func(ctx context.Context) ([]domain.Plugin, error)
+	GetFn     func(ctx context.Context, id string) (domain.Plugin, error)
+	InstallFn func(ctx context.Context, manifest domain.PluginManifest, archive []byte, registry string, trusted bool) (domain.Plugin, error)
+	ApproveFn func(ctx context.Context, id string) error
+	RejectFn  func(ctx context.Context, id string) error
+	DisableFn func(ctx context.Context, id string) error
+	EnableFn  func(ctx context.Context, id string) error
+	UpdateFn  func(ctx context.Context, id string, manifest domain.PluginManifest, archive []byte) error
+	ReloadFn  func(ctx context.Context, id string) error
+	RemoveFn  func(ctx context.Context, id string) error
+
+	mu           sync.Mutex
+	InstallCalls []struct {
+		Manifest domain.PluginManifest
+		Registry string
+		Trusted  bool
+	}
+}
+
+func (m *PluginStore) List(ctx context.Context) ([]domain.Plugin, error) {
+	if m.ListFn != nil {
+		return m.ListFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *PluginStore) Get(ctx context.Context, id string) (domain.Plugin, error) {
+	if m.GetFn != nil {
+		return m.GetFn(ctx, id)
+	}
+	return domain.Plugin{}, nil
+}
+
+func (m *PluginStore) Install(ctx context.Context, manifest domain.PluginManifest, archive []byte, registry string, trusted bool) (domain.Plugin, error) {
+	m.mu.Lock()
+	m.InstallCalls = append(m.InstallCalls, struct {
+		Manifest domain.PluginManifest
+		Registry string
+		Trusted  bool
+	}{Manifest: manifest, Registry: registry, Trusted: trusted})
+	m.mu.Unlock()
+	if m.InstallFn != nil {
+		return m.InstallFn(ctx, manifest, archive, registry, trusted)
+	}
+	return domain.Plugin{}, nil
+}
+
+func (m *PluginStore) Approve(ctx context.Context, id string) error {
+	if m.ApproveFn != nil {
+		return m.ApproveFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *PluginStore) Reject(ctx context.Context, id string) error {
+	if m.RejectFn != nil {
+		return m.RejectFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *PluginStore) Disable(ctx context.Context, id string) error {
+	if m.DisableFn != nil {
+		return m.DisableFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *PluginStore) Enable(ctx context.Context, id string) error {
+	if m.EnableFn != nil {
+		return m.EnableFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *PluginStore) Update(ctx context.Context, id string, manifest domain.PluginManifest, archive []byte) error {
+	if m.UpdateFn != nil {
+		return m.UpdateFn(ctx, id, manifest, archive)
+	}
+	return nil
+}
+
+func (m *PluginStore) Reload(ctx context.Context, id string) error {
+	if m.ReloadFn != nil {
+		return m.ReloadFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *PluginStore) Remove(ctx context.Context, id string) error {
+	if m.RemoveFn != nil {
+		return m.RemoveFn(ctx, id)
+	}
+	return nil
+}
+
+// --- RegistryManager ---
+
+// RegistryManager is a hand-written mock for domain.RegistryManager.
+type RegistryManager struct {
+	ListFn          func(ctx context.Context) ([]domain.PluginRegistry, error)
+	AddFn           func(ctx context.Context, reg domain.PluginRegistry) error
+	RemoveFn        func(ctx context.Context, name string) error
+	FetchIndexFn    func(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error)
+	FetchManifestFn func(ctx context.Context, manifestURL string) (domain.PluginManifest, error)
+	FetchArchiveFn  func(ctx context.Context, downloadURL string) ([]byte, error)
+}
+
+func (m *RegistryManager) List(ctx context.Context) ([]domain.PluginRegistry, error) {
+	if m.ListFn != nil {
+		return m.ListFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *RegistryManager) Add(ctx context.Context, reg domain.PluginRegistry) error {
+	if m.AddFn != nil {
+		return m.AddFn(ctx, reg)
+	}
+	return nil
+}
+
+func (m *RegistryManager) Remove(ctx context.Context, name string) error {
+	if m.RemoveFn != nil {
+		return m.RemoveFn(ctx, name)
+	}
+	return nil
+}
+
+func (m *RegistryManager) FetchIndex(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error) {
+	if m.FetchIndexFn != nil {
+		return m.FetchIndexFn(ctx, registryURL, force)
+	}
+	return domain.RegistryIndex{}, nil
+}
+
+func (m *RegistryManager) FetchManifest(ctx context.Context, manifestURL string) (domain.PluginManifest, error) {
+	if m.FetchManifestFn != nil {
+		return m.FetchManifestFn(ctx, manifestURL)
+	}
+	return domain.PluginManifest{}, nil
+}
+
+func (m *RegistryManager) FetchArchive(ctx context.Context, downloadURL string) ([]byte, error) {
+	if m.FetchArchiveFn != nil {
+		return m.FetchArchiveFn(ctx, downloadURL)
+	}
+	return nil, nil
+}

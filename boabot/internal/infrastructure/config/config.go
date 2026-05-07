@@ -55,11 +55,26 @@ type BotConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Enabled       bool     `yaml:"enabled"`
-	APIPort       int      `yaml:"api_port"`
-	JWTSecret     string   `yaml:"jwt_secret"`     // generated randomly if empty
-	AdminPassword string   `yaml:"admin_password"` // defaults to "admin" if empty
-	WorkDirs      []string `yaml:"work_dirs"`      // allowed base directories for board item workspaces
+	Enabled       bool          `yaml:"enabled"`
+	APIPort       int           `yaml:"api_port"`
+	JWTSecret     string        `yaml:"jwt_secret"`     // generated randomly if empty
+	AdminPassword string        `yaml:"admin_password"` // defaults to "admin" if empty
+	WorkDirs      []string      `yaml:"work_dirs"`      // allowed base directories for board item workspaces
+	Plugins       PluginsConfig `yaml:"plugins"`
+}
+
+// PluginsConfig configures the plugin registry and installer.
+type PluginsConfig struct {
+	InstallDir string                 `yaml:"install_dir"`
+	Registries []PluginRegistryConfig `yaml:"registries"`
+	AutoUpdate bool                   `yaml:"auto_update"`
+}
+
+// PluginRegistryConfig is a statically configured plugin registry.
+type PluginRegistryConfig struct {
+	Name    string `yaml:"name"`
+	URL     string `yaml:"url"`
+	Trusted bool   `yaml:"trusted"`
 }
 
 type ModelsConfig struct {

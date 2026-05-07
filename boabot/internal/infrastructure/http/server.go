@@ -33,6 +33,31 @@ type AuthProvider interface {
 	VerifyPassword(ctx context.Context, username, password string) error
 }
 
+// PluginInstaller is the subset of the install use case required by the server.
+type PluginInstaller interface {
+	Install(ctx context.Context, registryName, name, version, actor string) (domain.Plugin, error)
+}
+
+// PluginManager is the subset of the manage use case required by the server.
+type PluginManager interface {
+	List(ctx context.Context) ([]domain.Plugin, error)
+	Get(ctx context.Context, id string) (domain.Plugin, error)
+	Approve(ctx context.Context, id, actor string) error
+	Reject(ctx context.Context, id, actor string) error
+	Enable(ctx context.Context, id, actor string) error
+	Disable(ctx context.Context, id, actor string) error
+	Reload(ctx context.Context, id, actor string) error
+	Remove(ctx context.Context, id, actor string) error
+}
+
+// PluginRegistryUseCase is the subset of the registry use case required by the server.
+type PluginRegistryUseCase interface {
+	List(ctx context.Context) ([]domain.PluginRegistry, error)
+	Add(ctx context.Context, reg domain.PluginRegistry) error
+	Remove(ctx context.Context, name string) error
+	FetchIndex(ctx context.Context, name string, force bool) (domain.RegistryIndex, error)
+}
+
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
 	Auth            AuthProvider
@@ -48,6 +73,12 @@ type Config struct {
 	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
 	AllowedWorkDirs []string            // whitelisted base directories for item working directories
 	TaskLogBase     string              // base directory for per-task log directories (optional)
+	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
+	Plugins        domain.PluginStore
+	RegistryMgr    domain.RegistryManager
+	PluginInstall  PluginInstaller
+	PluginManage   PluginManager
+	PluginRegistry PluginRegistryUseCase
 }
 
 // Server is the orchestrator HTTP server.
@@ -139,6 +170,24 @@ func (s *Server) Handler() http.Handler {
 
 	// Tech-lead pool
 	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
+
+	// Plugin registry & management (optional — registered only if plugin store is configured)
+	if s.cfg.Plugins != nil {
+		mux.HandleFunc("GET /api/v1/registries", s.handleRegistriesList)
+		mux.HandleFunc("POST /api/v1/registries", s.auth(s.adminOnly(s.handleRegistriesAdd)))
+		mux.HandleFunc("DELETE /api/v1/registries/{name}", s.auth(s.adminOnly(s.handleRegistriesRemove)))
+		mux.HandleFunc("GET /api/v1/registries/{name}/index", s.auth(s.adminOnly(s.handleRegistriesFetchIndex)))
+
+		mux.HandleFunc("GET /api/v1/plugins", s.handlePluginsList)
+		mux.HandleFunc("GET /api/v1/plugins/{id}", s.handlePluginsGet)
+		mux.HandleFunc("POST /api/v1/plugins", s.auth(s.adminOnly(s.handlePluginsInstall)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/approve", s.auth(s.adminOnly(s.handlePluginsApprove)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/reject", s.auth(s.adminOnly(s.handlePluginsReject)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/enable", s.auth(s.adminOnly(s.handlePluginsEnable)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/disable", s.auth(s.adminOnly(s.handlePluginsDisable)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/reload", s.auth(s.adminOnly(s.handlePluginsReload)))
+		mux.HandleFunc("DELETE /api/v1/plugins/{id}", s.auth(s.adminOnly(s.handlePluginsRemove)))
+	}
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)
@@ -2927,6 +2976,237 @@ func claimsFromContext(r *http.Request) domainauth.Claims {
 	}
 	claims, _ := v.(domainauth.Claims)
 	return claims
+}
+
+// ── plugin registry handlers ──────────────────────────────────────────────────
+
+func (s *Server) handleRegistriesList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeJSON(w, http.StatusOK, []domain.PluginRegistry{})
+		return
+	}
+	regs, err := s.cfg.PluginRegistry.List(r.Context())
+	if err != nil {
+		writeInternalError(w, "registries list", err)
+		return
+	}
+	if regs == nil {
+		regs = []domain.PluginRegistry{}
+	}
+	writeJSON(w, http.StatusOK, regs)
+}
+
+func (s *Server) handleRegistriesAdd(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	var req domain.AddRegistryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !strings.HasPrefix(req.URL, "https://") {
+		writeError(w, http.StatusBadRequest, "registry URL must use https://")
+		return
+	}
+	reg := domain.PluginRegistry(req) //nolint:gocritic
+	if err := s.cfg.PluginRegistry.Add(r.Context(), reg); err != nil {
+		writeInternalError(w, "registries add", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, reg)
+}
+
+func (s *Server) handleRegistriesRemove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.cfg.PluginRegistry.Remove(r.Context(), name); err != nil {
+		writeInternalError(w, "registries remove", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRegistriesFetchIndex(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	name := r.PathValue("name")
+	force := r.URL.Query().Get("force") == "true"
+	idx, err := s.cfg.PluginRegistry.FetchIndex(r.Context(), name, force)
+	if err != nil {
+		writeInternalError(w, "registries fetch index", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, idx)
+}
+
+// ── plugin management handlers ────────────────────────────────────────────────
+
+func (s *Server) handlePluginsList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeJSON(w, http.StatusOK, []domain.Plugin{})
+		return
+	}
+	plugins, err := s.cfg.PluginManage.List(r.Context())
+	if err != nil {
+		writeInternalError(w, "plugins list", err)
+		return
+	}
+	if plugins == nil {
+		plugins = []domain.Plugin{}
+	}
+	writeJSON(w, http.StatusOK, plugins)
+}
+
+func (s *Server) handlePluginsGet(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	id := r.PathValue("id")
+	p, err := s.cfg.PluginManage.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handlePluginsInstall(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginInstall == nil {
+		writeError(w, http.StatusNotImplemented, "plugin installer not configured")
+		return
+	}
+	var req domain.InstallPluginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	p, err := s.cfg.PluginInstall.Install(r.Context(), req.Registry, req.Name, req.Version, actor)
+	if err != nil {
+		writeInternalError(w, "plugins install", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handlePluginsApprove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Approve(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins approve", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsReject(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Reject(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins reject", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsEnable(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Enable(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins enable", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsDisable(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Disable(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins disable", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsReload(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Reload(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins reload", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsRemove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Remove(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins remove", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Pool ──────────────────────────────────────────────────────────────────────

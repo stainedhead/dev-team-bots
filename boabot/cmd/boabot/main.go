@@ -74,6 +74,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		TeamFilePath:    cfg.Team.FilePath,
 		BotsDir:         cfg.Team.BotsDir,
 		MemoryRoot:      cfg.Memory.Path,
+		AllowedWorkDirs: cfg.Orchestrator.WorkDirs,
 		RestartDelay:    time.Second,
 		MaxRestartDelay: 5 * time.Minute,
 		WatchdogCfg: watchdog.Config{

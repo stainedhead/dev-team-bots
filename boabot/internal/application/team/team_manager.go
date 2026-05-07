@@ -25,6 +25,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
+	localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
@@ -53,6 +54,9 @@ type ManagerConfig struct {
 	BotsDir string
 	// MemoryRoot is the base path for per-bot memory files. Defaults to ./memory.
 	MemoryRoot string
+	// AllowedWorkDirs is the set of base directories that bots may read/write
+	// via their MCP filesystem tools. Typically sourced from orchestrator.work_dirs.
+	AllowedWorkDirs []string
 	// RestartDelay is the initial back-off on panic restart. Defaults to 1s.
 	RestartDelay time.Duration
 	// MaxRestartDelay is the maximum back-off. Defaults to 5 minutes.
@@ -116,6 +120,9 @@ type TeamManager struct {
 	dynamicBots   map[string]*dynamicBot
 	dynamicBotsMu sync.Mutex
 
+	// askRouter routes mid-task user questions to running bots.
+	askRouter *teamAskRouter
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
@@ -130,15 +137,20 @@ type dynamicBot struct {
 func NewTeamManager(cfg ManagerConfig, router *queue.Router, bus *bus.Bus) *TeamManager {
 	cfg.applyDefaults()
 	tm := &TeamManager{
-		cfg:      cfg,
-		router:   router,
-		bus:      bus,
-		registry: NewBotRegistry(),
+		cfg:       cfg,
+		router:    router,
+		bus:       bus,
+		registry:  NewBotRegistry(),
+		askRouter: &teamAskRouter{chs: make(map[string]chan domain.AskRequest)},
 	}
 	tm.botRunner = tm.startBot
 	tm.dynamicBots = make(map[string]*dynamicBot)
 	return tm
 }
+
+// AskRouter returns the domain.AskRouter that routes mid-task user questions
+// to whichever bot is currently running.  Wire this into the HTTP server config.
+func (tm *TeamManager) AskRouter() domain.AskRouter { return tm.askRouter }
 
 // Registry returns the BotRegistry so callers can inspect running bots.
 func (tm *TeamManager) Registry() *BotRegistry { return tm.registry }
@@ -512,6 +524,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			Tasks:           orchTaskStore,
 			Dispatcher:      dispatcher,
 			Chat:            orchChatStore,
+			AskRouter:       tm.askRouter,
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 			TaskLogBase:     taskLogBase,
 		})
@@ -587,8 +600,13 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		}
 	}
 
-	// Wire no-op MCP client.
-	mcpClient := &noopMCPClient{}
+	// Wire local filesystem MCP client. Non-tech-lead bots also get the
+	// complete_board_item tool so they can mark items done independently.
+	var mcpOpts []func(*localmcp.Client)
+	if entry.Type != "tech-lead" && tm.sharedBoard != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithBoardStore(tm.sharedBoard))
+	}
+	mcpClient := localmcp.NewClient(tm.cfg.AllowedWorkDirs, mcpOpts...)
 
 	// Construct the worker (ExecuteTaskUseCase).
 	worker := application.NewExecuteTaskUseCase(
@@ -609,6 +627,9 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			slog.Info("chat provider wired", "bot", entry.Name, "chat_provider", chatName)
 		}
 	}
+
+	// Wire mid-task ask channel so the bot can answer questions between tool calls.
+	worker.WithAskChannel(tm.askRouter.getOrCreate(entry.Name))
 
 	workerFactory := &simpleWorkerFactory{worker: worker}
 
@@ -698,7 +719,65 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		})
 	}
 
+	// Wire live progress handler so the Output tab reflects tool-call traces mid-run.
+	if sharedTasks != nil {
+		worker.WithProgressHandler(func(taskID, line string) {
+			task, getErr := sharedTasks.Get(context.Background(), taskID)
+			if getErr != nil {
+				return
+			}
+			task.Output += line + "\n"
+			_, _ = sharedTasks.Update(context.Background(), task)
+
+			if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
+				items, listErr := tm.sharedBoard.List(context.Background(), domain.WorkItemFilter{ActiveTaskID: taskID})
+				if listErr == nil && len(items) > 0 {
+					item := items[0]
+					item.LastResult += line + "\n"
+					_, _ = tm.sharedBoard.Update(context.Background(), item)
+				}
+			}
+		})
+	}
+
 	return uc.Run(ctx)
+}
+
+// --- teamAskRouter -----------------------------------------------------------
+
+// teamAskRouter implements domain.AskRouter by routing questions to per-bot
+// buffered channels that are drained inside each bot's Execute loop.
+type teamAskRouter struct {
+	mu  sync.RWMutex
+	chs map[string]chan domain.AskRequest
+}
+
+// getOrCreate returns the ask channel for botName, creating it on first use.
+func (r *teamAskRouter) getOrCreate(botName string) chan domain.AskRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ch := r.chs[botName]; ch != nil {
+		return ch
+	}
+	ch := make(chan domain.AskRequest, 10)
+	r.chs[botName] = ch
+	return ch
+}
+
+// Enqueue implements domain.AskRouter.
+func (r *teamAskRouter) Enqueue(botName string, req domain.AskRequest) bool {
+	r.mu.RLock()
+	ch := r.chs[botName]
+	r.mu.RUnlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- req:
+		return true
+	default:
+		return false
+	}
 }
 
 // --- helpers -----------------------------------------------------------------

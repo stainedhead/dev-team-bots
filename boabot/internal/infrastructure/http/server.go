@@ -44,6 +44,7 @@ type Config struct {
 	Tasks           domain.DirectTaskStore
 	Dispatcher      domain.TaskDispatcher
 	Chat            domain.ChatStore
+	AskRouter       domain.AskRouter    // optional; routes mid-task questions to running bots
 	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
 	AllowedWorkDirs []string            // whitelisted base directories for item working directories
 	TaskLogBase     string              // base directory for per-task log directories (optional)
@@ -120,9 +121,10 @@ func (s *Server) Handler() http.Handler {
 	// Skill upload (admin)
 	mux.HandleFunc("POST /api/v1/skills", s.auth(s.adminOnly(s.handleSkillUpload)))
 
-	// Board activity and ask — require auth
+	// Board activity, ask, and per-item messages — require auth
 	mux.HandleFunc("GET /api/v1/board/{id}/activity", s.auth(s.handleBoardActivity))
 	mux.HandleFunc("POST /api/v1/board/{id}/ask", s.auth(s.handleBoardAsk))
+	mux.HandleFunc("GET /api/v1/board/{id}/messages", s.auth(s.handleBoardMessages))
 
 	// Threads — require auth
 	mux.HandleFunc("GET /api/v1/threads", s.auth(s.handleThreadList))
@@ -1097,7 +1099,7 @@ func (s *Server) handleBoardActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Chat == nil || s.cfg.Dispatcher == nil {
+	if s.cfg.Chat == nil {
 		writeError(w, http.StatusServiceUnavailable, "chat not available")
 		return
 	}
@@ -1112,8 +1114,7 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Content  string `json:"content"`
-		ThreadID string `json:"thread_id"`
+		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1123,31 +1124,58 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "content required")
 		return
 	}
+
 	ctx := r.Context()
-	threadID := req.ThreadID
-	if threadID == "" {
-		t, tErr := s.cfg.Chat.CreateThread(ctx, fmt.Sprintf("Item: %s", item.Title), []string{item.AssignedTo})
-		if tErr != nil {
-			writeInternalError(w, "create thread", tErr)
-			return
-		}
-		threadID = t.ID
-	}
-	msg := domain.ChatMessage{
+	threadID := "board-" + id
+
+	// Store the user's question in the item-private thread.
+	userMsg := domain.ChatMessage{
 		ThreadID:  threadID,
 		BotName:   item.AssignedTo,
 		Direction: domain.ChatDirectionOutbound,
 		Content:   req.Content,
 	}
-	_ = s.cfg.Chat.Append(ctx, msg)
-	instruction := fmt.Sprintf("Regarding board item '%s' (ID: %s):\n\n%s", item.Title, item.ID, req.Content)
-	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat, threadID, item.WorkDir)
-	if dispErr != nil {
-		writeInternalError(w, "ask dispatch", dispErr)
+	_ = s.cfg.Chat.Append(ctx, userMsg)
+
+	// Route the question to the running bot for a mid-task reply.
+	if s.cfg.AskRouter != nil {
+		s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
+			Question: fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content),
+			ReplyFn: func(reply string) {
+				botMsg := domain.ChatMessage{
+					ThreadID:  threadID,
+					BotName:   item.AssignedTo,
+					Direction: domain.ChatDirectionInbound,
+					Content:   reply,
+				}
+				_ = s.cfg.Chat.Append(context.Background(), botMsg)
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusCreated, userMsg)
+}
+
+// handleBoardMessages returns the private per-item conversation thread.
+func (s *Server) handleBoardMessages(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
 		return
 	}
-	msg.TaskID = task.ID
-	writeJSON(w, http.StatusCreated, msg)
+	id := r.PathValue("id")
+	msgs, err := s.cfg.Chat.List(r.Context(), "board-"+id)
+	if err != nil {
+		writeInternalError(w, "board messages", err)
+		return
+	}
+	if msgs == nil {
+		msgs = []domain.ChatMessage{}
+	}
+	// Reverse to chronological order (oldest first for conversation display).
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	writeJSON(w, http.StatusOK, msgs)
 }
 
 // ── chat handlers ─────────────────────────────────────────────────────────────
@@ -1157,10 +1185,17 @@ func (s *Server) handleChatList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "chat not available")
 		return
 	}
-	msgs, err := s.cfg.Chat.ListAll(r.Context())
+	all, err := s.cfg.Chat.ListAll(r.Context())
 	if err != nil {
 		writeInternalError(w, "chat list all", err)
 		return
+	}
+	// Exclude board-item private conversations from the global chat screen.
+	msgs := all[:0]
+	for _, m := range all {
+		if !strings.HasPrefix(m.ThreadID, "board-") {
+			msgs = append(msgs, m)
+		}
 	}
 	writeJSON(w, http.StatusOK, msgs)
 }
@@ -1518,6 +1553,11 @@ const kanbanHTML = `<!DOCTYPE html>
     .ctx-output{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;white-space:pre-wrap;font-family:monospace;font-size:.74rem;line-height:1.5;color:#94a3b8;max-height:160px;overflow-y:auto}
     .ctx-ask-row{display:flex;gap:.5rem;padding:.5rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
     .ctx-ask-row input{flex:1;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+    .ask-thread{display:flex;flex-direction:column;gap:.5rem}
+    .ask-msg{max-width:92%;padding:.4rem .6rem;border-radius:.4rem;font-size:.78rem;line-height:1.45}
+    .ask-msg-user{align-self:flex-end;background:#1e3a5f;color:#e2e8f0}
+    .ask-msg-bot{align-self:flex-start;background:#0f1e35;color:#cbd5e1;border:1px solid #1a2744}
+    .ask-msg-label{font-size:.65rem;color:#64748b;margin-bottom:.2rem}
     .ctx-close{background:none;border:none;color:#475569;cursor:pointer;font-size:.9rem;padding:0}
     .ctx-close:hover{color:#e2e8f0}
     .ctx-working{color:#fbbf24;font-size:.75rem;animation:blink 1.5s infinite}
@@ -1764,7 +1804,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
-  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail';
+  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null;
   var taskCtxTask=null;
   var allTasksList=[];
   var dragging=false;
@@ -2429,7 +2469,12 @@ const kanbanHTML = `<!DOCTYPE html>
     loadBoardCtx();
   }
 
+  function stopOutputPoll(){if(outputPollTimer){clearInterval(outputPollTimer);outputPollTimer=null;}}
+  function stopAskPoll(){if(askPollTimer){clearInterval(askPollTimer);askPollTimer=null;}}
+
   function closeBoardCtx(){
+    stopOutputPoll();
+    stopAskPoll();
     var panel=ge('board-ctx');
     panel.style.height='0';
     panel.style.display='none';
@@ -2437,6 +2482,8 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function bctxTab(name){
+    if(name!=='output')stopOutputPoll();
+    if(name!=='ask')stopAskPoll();
     boardCtxTab=name;
     ['detail','output','ask','files'].forEach(function(t){
       var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
@@ -2509,26 +2556,73 @@ const kanbanHTML = `<!DOCTYPE html>
         (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
-      api('GET','/api/v1/board/'+boardCtxItem.id+'/activity',null)
+      function renderOutput(resp){
+        var html='';
+        var output=(resp.task&&resp.task.output)||'';
+        if(!output&&resp.item&&resp.item.last_result)output=resp.item.last_result;
+        if(output){
+          html+='<pre id="output-pre" class="viewer-pre" style="max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">'+esc(output)+'</pre>';
+        } else if(resp.task&&(resp.task.status==='dispatched'||resp.task.status==='pending')){
+          html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
+        } else {
+          html+='<div style="color:#475569">No output yet</div>';
+        }
+        if(resp.task){
+          html+='<div class="ctx-row" style="margin-top:.75rem"><span class="ctx-lbl">Task status</span><span class="ctx-val">'+esc(resp.task.status)+'</span></div>';
+          if(resp.task.dispatched_at)html+='<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(resp.task.dispatched_at)+'</span></div>';
+          if(resp.task.completed_at)html+='<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(resp.task.completed_at)+'</span></div>';
+        }
+        body.innerHTML=html;
+        var pre=ge('output-pre');if(pre)pre.scrollTop=pre.scrollHeight;
+        // Stop polling once the task has completed.
+        if(resp.task&&resp.task.status==='completed')stopOutputPoll();
+        if(resp.item&&!resp.item.active_task_id)stopOutputPoll();
+      }
+      var outputItemID=boardCtxItem.id;
+      api('GET','/api/v1/board/'+outputItemID+'/activity',null)
         .then(function(resp){
-          var html='';
-          if(resp.item&&resp.item.last_result){
-            html+='<pre class="viewer-pre" style="max-height:160px;overflow-y:auto">'+esc(resp.item.last_result)+'</pre>';
-          } else if(resp.task&&resp.task.status==='dispatched'){
-            html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
-          } else {
-            html+='<div style="color:#475569">No output yet</div>';
+          renderOutput(resp);
+          // Start polling only while the item is still in-progress.
+          if(boardCtxItem&&boardCtxItem.active_task_id&&!outputPollTimer){
+            outputPollTimer=setInterval(function(){
+              if(boardCtxTab!=='output'||!boardCtxItem||boardCtxItem.id!==outputItemID){stopOutputPoll();return;}
+              api('GET','/api/v1/board/'+outputItemID+'/activity',null)
+                .then(renderOutput)
+                .catch(function(){});
+            },2000);
           }
-          if(resp.task){
-            html+='<div class="ctx-row" style="margin-top:.75rem"><span class="ctx-lbl">Task status</span><span class="ctx-val">'+esc(resp.task.status)+'</span></div>';
-            if(resp.task.dispatched_at)html+='<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(resp.task.dispatched_at)+'</span></div>';
-            if(resp.task.completed_at)html+='<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(resp.task.completed_at)+'</span></div>';
-          }
-          body.innerHTML=html;
         })
         .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load activity</div>'});
     } else if(boardCtxTab==='ask'){
-      body.innerHTML='<div style="color:#475569;font-size:.75rem">Ask the assigned bot a question about this item. Replies will appear in chat.</div>';
+      body.innerHTML='<div style="color:#475569;font-size:.75rem">Loading conversation&#x2026;</div>';
+      function renderAskMessages(msgs){
+        if(!msgs||!msgs.length){
+          body.innerHTML='<div style="color:#475569;font-size:.75rem">No messages yet. Ask the bot a question below.</div>';
+          return;
+        }
+        var html='<div class="ask-thread">';
+        msgs.forEach(function(m){
+          var isUser=m.direction==='outbound';
+          html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
+            +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
+            +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
+            +'</div>';
+        });
+        html+='</div>';
+        body.innerHTML=html;
+      }
+      var askItemID=boardCtxItem.id;
+      api('GET','/api/v1/board/'+askItemID+'/messages',null)
+        .then(renderAskMessages)
+        .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load messages</div>';});
+      if(!askPollTimer&&boardCtxItem&&boardCtxItem.active_task_id){
+        askPollTimer=setInterval(function(){
+          if(boardCtxTab!=='ask'||!boardCtxItem||boardCtxItem.id!==askItemID){stopAskPoll();return;}
+          api('GET','/api/v1/board/'+askItemID+'/messages',null)
+            .then(renderAskMessages)
+            .catch(function(){});
+        },2000);
+      }
     } else if(boardCtxTab==='files'){
       var it=boardCtxItem;
       var atts=(it.attachments||[]);
@@ -2591,10 +2685,34 @@ const kanbanHTML = `<!DOCTYPE html>
     var content=ge('board-ctx-ask-input').value.trim();
     if(!content)return;
     ge('board-ctx-ask-input').value='';
-    api('POST','/api/v1/board/'+boardCtxItem.id+'/ask',{content:content,thread_id:boardCtxThread||''})
-      .then(function(msg){
-        boardCtxThread=msg.thread_id||boardCtxThread;
-        alert('Question sent! Check the Chat tab for the reply.');
+    api('POST','/api/v1/board/'+boardCtxItem.id+'/ask',{content:content})
+      .then(function(){
+        // Reload messages immediately after sending and start polling for the reply.
+        loadBoardCtx();
+        if(!askPollTimer&&boardCtxItem&&boardCtxItem.active_task_id){
+          var pollID=boardCtxItem.id;
+          askPollTimer=setInterval(function(){
+            if(boardCtxTab!=='ask'||!boardCtxItem||boardCtxItem.id!==pollID){stopAskPoll();return;}
+            api('GET','/api/v1/board/'+pollID+'/messages',null)
+              .then(function(msgs){
+                var body=ge('board-ctx-body');
+                if(!body)return;
+                // Only re-render the thread, not the whole panel.
+                if(!msgs||!msgs.length)return;
+                var html='<div class="ask-thread">';
+                msgs.forEach(function(m){
+                  var isUser=m.direction==='outbound';
+                  html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
+                    +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
+                    +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
+                    +'</div>';
+                });
+                html+='</div>';
+                body.innerHTML=html;
+              })
+              .catch(function(){});
+          },2000);
+        }
       })
       .catch(function(e){alert('Failed: '+e.message)});
   }

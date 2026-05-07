@@ -7,7 +7,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
-// noopMCPClient is a stub MCP client used until MCP integration is wired (M5+).
+// noopMCPClient is a test-only stub retained for internals_test.go.
 type noopMCPClient struct{}
 
 func (n *noopMCPClient) ListTools(_ context.Context) ([]domain.MCPTool, error) {

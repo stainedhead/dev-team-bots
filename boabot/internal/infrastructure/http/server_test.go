@@ -1596,3 +1596,122 @@ func TestBoard_List_FilterByStatus(t *testing.T) {
 		t.Fatalf("expected filter.Status=in-progress, got %q", capturedFilter.Status)
 	}
 }
+
+// ── Pool endpoint ─────────────────────────────────────────────────────────────
+
+// fakeTechLeadPool implements domain.TechLeadPool for testing.
+type fakeTechLeadPool struct {
+	listEntriesFn func(ctx context.Context) ([]*domain.PoolEntry, error)
+}
+
+func (f *fakeTechLeadPool) Allocate(_ context.Context, _ string) (*domain.PoolEntry, error) {
+	return nil, nil
+}
+func (f *fakeTechLeadPool) Deallocate(_ context.Context, _ string) error { return nil }
+func (f *fakeTechLeadPool) Reconcile(_ context.Context) error            { return nil }
+func (f *fakeTechLeadPool) ListEntries(ctx context.Context) ([]*domain.PoolEntry, error) {
+	if f.listEntriesFn != nil {
+		return f.listEntriesFn(ctx)
+	}
+	return nil, nil
+}
+func (f *fakeTechLeadPool) GetByItemID(_ context.Context, _ string) (*domain.PoolEntry, error) {
+	return nil, nil
+}
+
+func TestPool_Endpoint_ReturnsEntries(t *testing.T) {
+	t.Parallel()
+	entries := []*domain.PoolEntry{
+		{InstanceName: "tech-lead-1", Status: domain.PoolEntryStatusAllocated, ItemID: "item-1"},
+		{InstanceName: "tech-lead-2", Status: domain.PoolEntryStatusIdle},
+	}
+	s := httpserver.New(httpserver.Config{
+		Auth:   &fakeAuth{},
+		Board:  &fakeBoardStore{},
+		Team:   &fakeControlPlane{},
+		Users:  &fakeUserStore{},
+		Skills: &fakeSkillRegistry{},
+		DLQ:    &fakeDLQStore{},
+		Pool: &fakeTechLeadPool{listEntriesFn: func(_ context.Context) ([]*domain.PoolEntry, error) {
+			return entries, nil
+		}},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/pool", nil)
+	req.Header.Set("Authorization", authHeader())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var out struct {
+		Pool []domain.PoolEntry `json:"pool"`
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.Pool) != 2 {
+		t.Errorf("expected 2 pool entries, got %d", len(out.Pool))
+	}
+}
+
+func TestPool_Endpoint_NoPool_Returns200Empty(t *testing.T) {
+	t.Parallel()
+	// Pool is nil in config -- authenticated request should return empty pool JSON.
+	s := httpserver.New(httpserver.Config{
+		Auth:   &fakeAuth{},
+		Board:  &fakeBoardStore{},
+		Team:   &fakeControlPlane{},
+		Users:  &fakeUserStore{},
+		Skills: &fakeSkillRegistry{},
+		DLQ:    &fakeDLQStore{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/pool", nil)
+	req.Header.Set("Authorization", authHeader())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestPool_Endpoint_RequiresAuth(t *testing.T) {
+	t.Parallel()
+	s := httpserver.New(httpserver.Config{
+		Auth:   &fakeAuth{},
+		Board:  &fakeBoardStore{},
+		Team:   &fakeControlPlane{},
+		Users:  &fakeUserStore{},
+		Skills: &fakeSkillRegistry{},
+		DLQ:    &fakeDLQStore{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/pool", nil)
+	// No Authorization header.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", resp.StatusCode)
+	}
+}

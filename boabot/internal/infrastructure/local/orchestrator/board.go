@@ -22,9 +22,19 @@ var ErrWorkItemNotFound = errors.New("orchestrator: work item not found")
 // InMemoryBoardStore implements domain.BoardStore with an in-memory map and
 // optional file persistence.
 type InMemoryBoardStore struct {
-	mu          sync.RWMutex
-	items       map[string]domain.WorkItem
-	persistPath string
+	mu               sync.RWMutex
+	items            map[string]domain.WorkItem
+	persistPath      string
+	statusChangeHook func(oldStatus, newStatus domain.WorkItemStatus, item domain.WorkItem)
+}
+
+// SetStatusChangeHook registers a callback that is invoked whenever an
+// Update call changes a work item's status. The hook is called synchronously
+// inside the write lock.
+func (s *InMemoryBoardStore) SetStatusChangeHook(fn func(domain.WorkItemStatus, domain.WorkItemStatus, domain.WorkItem)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusChangeHook = fn
 }
 
 // NewInMemoryBoardStore creates a new InMemoryBoardStore.
@@ -94,15 +104,23 @@ func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (do
 }
 
 // Update replaces an existing WorkItem. Returns ErrWorkItemNotFound if the ID does not exist.
+// If the item's Status differs from the stored value, the registered statusChangeHook is called.
 func (s *InMemoryBoardStore) Update(_ context.Context, item domain.WorkItem) (domain.WorkItem, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.items[item.ID]; !ok {
+	existing, ok := s.items[item.ID]
+	if !ok {
+		s.mu.Unlock()
 		return domain.WorkItem{}, ErrWorkItemNotFound
 	}
+	oldStatus := existing.Status
 	s.items[item.ID] = item
 	s.persist()
+	hook := s.statusChangeHook
+	s.mu.Unlock()
+
+	if hook != nil && oldStatus != item.Status {
+		hook(oldStatus, item.Status, item)
+	}
 	return item, nil
 }
 

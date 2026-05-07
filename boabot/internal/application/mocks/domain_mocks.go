@@ -233,3 +233,60 @@ func (m *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	return []float32{0.1, 0.2, 0.3}, nil
 }
 
+// --- SubTeamManager ---
+
+type SubTeamManager struct {
+	SpawnFn       func(ctx context.Context, botType, name, workDir string) (*domain.SpawnedAgent, error)
+	TerminateFn   func(ctx context.Context, name string) error
+	HeartbeatFn   func(ctx context.Context) error
+	ListAgentsFn  func(ctx context.Context) ([]*domain.SpawnedAgent, error)
+	TearDownAllFn func(ctx context.Context) error
+
+	mu         sync.Mutex
+	SpawnCalls []SpawnCall
+}
+
+type SpawnCall struct {
+	BotType string
+	Name    string
+	WorkDir string
+}
+
+func (m *SubTeamManager) Spawn(ctx context.Context, botType, name, workDir string) (*domain.SpawnedAgent, error) {
+	m.mu.Lock()
+	m.SpawnCalls = append(m.SpawnCalls, SpawnCall{BotType: botType, Name: name, WorkDir: workDir})
+	fn := m.SpawnFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, botType, name, workDir)
+	}
+	return &domain.SpawnedAgent{Name: name, BotType: botType, Status: domain.AgentStatusIdle}, nil
+}
+
+func (m *SubTeamManager) Terminate(ctx context.Context, name string) error {
+	if m.TerminateFn != nil {
+		return m.TerminateFn(ctx, name)
+	}
+	return nil
+}
+
+func (m *SubTeamManager) SendHeartbeat(ctx context.Context) error {
+	if m.HeartbeatFn != nil {
+		return m.HeartbeatFn(ctx)
+	}
+	return nil
+}
+
+func (m *SubTeamManager) ListAgents(ctx context.Context) ([]*domain.SpawnedAgent, error) {
+	if m.ListAgentsFn != nil {
+		return m.ListAgentsFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *SubTeamManager) TearDownAll(ctx context.Context) error {
+	if m.TearDownAllFn != nil {
+		return m.TearDownAllFn(ctx)
+	}
+	return nil
+}

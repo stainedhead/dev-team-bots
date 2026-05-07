@@ -227,3 +227,93 @@ func TestInMemoryBoardStore_List_ReturnsNonNilSliceWhenEmpty(t *testing.T) {
 		t.Error("expected non-nil slice from List on empty store")
 	}
 }
+
+func TestInMemoryBoardStore_StatusChangeHook_CalledOnStatusChange(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryBoardStore("")
+	ctx := context.Background()
+
+	type change struct {
+		old  domain.WorkItemStatus
+		new  domain.WorkItemStatus
+		item domain.WorkItem
+	}
+	changes := make(chan change, 10)
+	store.SetStatusChangeHook(func(old, newStatus domain.WorkItemStatus, item domain.WorkItem) {
+		changes <- change{old, newStatus, item}
+	})
+
+	item := domain.WorkItem{Title: "test", Status: domain.WorkItemStatusBacklog}
+	created, err := store.Create(ctx, item)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Update status to in-progress — hook should fire.
+	created.Status = domain.WorkItemStatusInProgress
+	if _, err := store.Update(ctx, created); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	select {
+	case c := <-changes:
+		if c.old != domain.WorkItemStatusBacklog {
+			t.Errorf("expected old=backlog, got %q", c.old)
+		}
+		if c.new != domain.WorkItemStatusInProgress {
+			t.Errorf("expected new=in-progress, got %q", c.new)
+		}
+		if c.item.ID != created.ID {
+			t.Errorf("expected item ID=%q, got %q", created.ID, c.item.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for status change hook")
+	}
+}
+
+func TestInMemoryBoardStore_StatusChangeHook_NotCalledWhenStatusUnchanged(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryBoardStore("")
+	ctx := context.Background()
+
+	called := make(chan struct{}, 1)
+	store.SetStatusChangeHook(func(_, _ domain.WorkItemStatus, _ domain.WorkItem) {
+		called <- struct{}{}
+	})
+
+	item := domain.WorkItem{Title: "test", Status: domain.WorkItemStatusBacklog}
+	created, err := store.Create(ctx, item)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Update title only — no status change, hook must NOT fire.
+	created.Title = "updated title"
+	if _, err := store.Update(ctx, created); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	select {
+	case <-called:
+		t.Error("hook should not fire when status is unchanged")
+	case <-time.After(50 * time.Millisecond):
+		// Good.
+	}
+}
+
+func TestInMemoryBoardStore_StatusChangeHook_NilHookIsSafe(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryBoardStore("")
+	ctx := context.Background()
+
+	// No hook set — updating status must not panic.
+	item := domain.WorkItem{Title: "test", Status: domain.WorkItemStatusBacklog}
+	created, err := store.Create(ctx, item)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	created.Status = domain.WorkItemStatusInProgress
+	if _, err := store.Update(ctx, created); err != nil {
+		t.Fatalf("Update with nil hook: %v", err)
+	}
+}

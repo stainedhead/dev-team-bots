@@ -76,3 +76,50 @@ Enabled by `orchestrator.enabled: true` in config. Adds:
 - **REST API** — JWT-authenticated access to control plane and board at `/api/v1/`. All 26 endpoints match the `baobotctl` CLI contract (auth, board, team, skills, users, profile, DLQ). Admin-only routes return 403 for non-admin callers.
 - **Web UI** — HTMX Kanban board at `/`; auto-refreshes board columns and team health every 30 seconds without a full page reload.
 - **User management** — two roles: Admin and User. JWT issued on login, forced password change on first use.
+- **Tech-lead pool** — dynamically allocates and deallocates tech-lead instances as kanban items move in and out of In Progress state. See [Tech-Lead Pool Management](#tech-lead-pool-management) below.
+
+## Dynamic Subteam Spawning
+
+Tech-lead bots can spawn named sub-agent goroutines on demand during active work sessions. This enables a single tech-lead to delegate parallel workstreams — for example, spawning two implementer bots to work on independent modules simultaneously.
+
+### How Spawning Works
+
+A `subteam.spawn` message is sent to the tech-lead's queue with the bot type, a unique name, and an optional working directory. The tech-lead's `RunAgentUseCase` receives the message and instructs the `SubTeamManager` to create the sub-agent. The new sub-agent goroutine gets its own isolated message bus and queue router — it shares no state with the parent tech-lead or any sibling sub-agents. On successful spawn, the tech-lead receives the `SpawnedAgent` record including the bus ID used to route messages to the new sub-agent.
+
+A `subteam.terminate` message stops a named sub-agent. The tech-lead also calls `TearDownAll` on graceful shutdown, which terminates all live sub-agents before the process exits.
+
+### Heartbeat Watchdog
+
+Every spawned sub-agent has an internal heartbeat watchdog. The tech-lead calls `SendHeartbeat` on a 30-second timer; each call fans the signal to all live sub-agents. If a sub-agent goes 90 seconds without receiving a heartbeat (three missed intervals), it self-terminates. This prevents goroutine leaks when the tech-lead becomes busy, crashes, or loses its own context — the sub-agents clean up independently.
+
+Panics inside a spawned bot goroutine are caught and logged; the goroutine terminates cleanly without affecting the tech-lead or any other sub-agents.
+
+### Session Persistence
+
+When a sub-agent is spawned, its record — name, bot type, working directory, bus ID, status, and spawn time — is written atomically to `session.json` in the tech-lead's memory directory. When the sub-agent terminates, its record is removed. On startup, the tech-lead can load existing session records to reconstruct its view of any sub-agents that survived a process restart.
+
+### Soft Spawn Limit
+
+When more than 5 sub-agents are spawned simultaneously, the `SubTeamManager` logs a warning. This is a soft advisory limit — spawning is not blocked. The warning is intended to surface unusual load before it becomes a resource concern.
+
+## Tech-Lead Pool Management
+
+The orchestrator maintains a pool of tech-lead instances keyed to In Progress kanban items. The goal is that every active work item always has a dedicated tech-lead standing by to coordinate it, with minimal cold-start latency.
+
+### Allocation
+
+When a board item transitions to `in-progress`, the orchestrator calls `TechLeadPool.Allocate()`. The pool first looks for an idle instance already in the pool; if one exists, it is promoted to `allocated` and associated with the item. If no idle instance is available, a new `tech-lead-N` instance is spawned and added to the pool. All allocation operations are serialised by a mutex to prevent double-allocation.
+
+When the pool reaches 10 entries, a warning is logged. This does not block allocation.
+
+### Deallocation and Warm Standby
+
+When a board item leaves `in-progress` (completed, blocked, or moved back to backlog), `TechLeadPool.Deallocate()` is called. If the instance being deallocated is the last one in the pool, it is not stopped — it is kept as an idle warm standby. This guarantees that at least one tech-lead instance is always pre-warmed, eliminating cold-start latency when the next item enters `in-progress`. If there is more than one instance in the pool at deallocation time, the instance is stopped and its record removed.
+
+### Pool State Persistence
+
+The pool's current state — all instances with their names, status, allocated item IDs, bus IDs, and allocation timestamps — is written atomically to `pool.json` in the orchestrator's memory directory on every allocation or deallocation. On startup, `Reconcile()` loads this file, checks which instances are still running, and discards stale records for instances that did not survive the restart.
+
+### REST API
+
+The current pool state is exposed at `GET /api/v1/pool`. This endpoint does not require authentication and returns the live snapshot from `TechLeadPool.ListEntries()`. See [user-docs/pool-management.md](../user-docs/pool-management.md) for the response schema and an example.

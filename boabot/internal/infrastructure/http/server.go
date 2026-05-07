@@ -44,8 +44,9 @@ type Config struct {
 	Tasks           domain.DirectTaskStore
 	Dispatcher      domain.TaskDispatcher
 	Chat            domain.ChatStore
-	AllowedWorkDirs []string // whitelisted base directories for item working directories
-	TaskLogBase     string   // base directory for per-task log directories (optional)
+	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs []string            // whitelisted base directories for item working directories
+	TaskLogBase     string              // base directory for per-task log directories (optional)
 }
 
 // Server is the orchestrator HTTP server.
@@ -133,6 +134,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/chat", s.auth(s.handleChatList))
 	mux.HandleFunc("GET /api/v1/chat/{bot}", s.auth(s.handleChatBotList))
 	mux.HandleFunc("POST /api/v1/chat/{bot}", s.auth(s.handleChatSend))
+
+	// Tech-lead pool
+	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)
@@ -2769,4 +2773,31 @@ func claimsFromContext(r *http.Request) domainauth.Claims {
 	}
 	claims, _ := v.(domainauth.Claims)
 	return claims
+}
+
+// ── Pool ──────────────────────────────────────────────────────────────────────
+
+// handlePoolList returns the current tech-lead pool entries as JSON.
+// If no Pool is configured (Pool == nil), returns an empty pool array.
+func (s *Server) handlePoolList(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Pool []*domain.PoolEntry `json:"pool"`
+	}
+
+	var entries []*domain.PoolEntry
+	if s.cfg.Pool != nil {
+		var err error
+		entries, err = s.cfg.Pool.ListEntries(r.Context())
+		if err != nil {
+			slog.Error("pool list error", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if entries == nil {
+		entries = []*domain.PoolEntry{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response{Pool: entries})
 }

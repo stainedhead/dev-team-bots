@@ -8,8 +8,8 @@ import (
 )
 
 type ExecuteTaskUseCase struct {
-	provider      domain.ModelProvider
-	chatProvider  domain.ModelProvider // used for chat-source tasks; nil falls back to provider
+	provider     domain.ModelProvider
+	chatProvider domain.ModelProvider // used for chat-source tasks; nil falls back to provider
 	mcp          domain.MCPClient
 	memory       domain.MemoryStore
 	embedder     domain.Embedder

@@ -39,6 +39,11 @@ const (
 
 	// Team query
 	MessageTypeTeamQuery MessageType = "team.query"
+
+	// Sub-team lifecycle
+	MessageTypeSubTeamSpawn     MessageType = "subteam.spawn"
+	MessageTypeSubTeamTerminate MessageType = "subteam.terminate"
+	MessageTypeSubTeamHeartbeat MessageType = "subteam.heartbeat"
 )
 
 type Message struct {
@@ -97,4 +102,16 @@ type DelegatePayload struct {
 type MemoryWritePayload struct {
 	Key   string `json:"key"`
 	Value []byte `json:"value"`
+}
+
+// SubTeamSpawnPayload is the payload for a subteam.spawn message.
+type SubTeamSpawnPayload struct {
+	BotType string `json:"bot_type"`
+	Name    string `json:"name"`
+	WorkDir string `json:"work_dir,omitempty"`
+}
+
+// SubTeamTerminatePayload is the payload for a subteam.terminate message.
+type SubTeamTerminatePayload struct {
+	Name string `json:"name"`
 }

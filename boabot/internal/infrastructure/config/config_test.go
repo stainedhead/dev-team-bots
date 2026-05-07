@@ -151,8 +151,6 @@ tools:
     - shell
   http_allowed_hosts:
     - example.com
-  receive_from:
-    - worker
 budget:
   token_spend_daily: 100000
   tool_calls_hourly: 50

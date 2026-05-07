@@ -89,7 +89,6 @@ type ProviderConfig struct {
 type ToolsConfig struct {
 	AllowedTools     []string `yaml:"allowed_tools"`
 	HTTPAllowedHosts []string `yaml:"http_allowed_hosts"`
-	ReceiveFrom      []string `yaml:"receive_from"`
 }
 
 type BudgetConfig struct {

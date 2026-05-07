@@ -50,6 +50,7 @@ tools:
     - implementer
     - reviewer
     - maintainer
+    - tech-lead
 
 budget:
   token_spend_daily: 1000000

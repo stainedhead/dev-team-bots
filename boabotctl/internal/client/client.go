@@ -74,4 +74,11 @@ type OrchestratorClient interface {
 	MemoryBackup(ctx context.Context) error
 	MemoryRestore(ctx context.Context) error
 	MemoryStatus(ctx context.Context) (domain.MemoryStatusResponse, error)
+
+	// Plugins
+	PluginList(ctx context.Context) ([]domain.Plugin, error)
+	PluginGet(ctx context.Context, id string) (domain.Plugin, error)
+	PluginInstall(ctx context.Context, req domain.InstallPluginRequest) (domain.Plugin, error)
+	PluginRemove(ctx context.Context, id string) error
+	PluginReload(ctx context.Context, id string) error
 }

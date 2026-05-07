@@ -68,6 +68,13 @@ orchestrator:
   enabled: false    # set to true to activate the control plane, Kanban board, REST API, and web UI
   api_port: 8080
   web_port: 8081
+  plugins:
+    install_dir: "./plugins"
+    registries:
+      - name: "official"
+        url: "https://raw.githubusercontent.com/stainedhead/shared-plugins/main"
+        trusted: true
+    auto_update: false
 ```
 
 ## Tools

@@ -2,6 +2,54 @@ package domain
 
 import "time"
 
+// Plugin is a client-side view of an installed plugin.
+type Plugin struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Version     string         `json:"version"`
+	Description string         `json:"description"`
+	Author      string         `json:"author"`
+	Registry    string         `json:"registry,omitempty"`
+	Status      string         `json:"status"`
+	InstalledAt string         `json:"installed_at"`
+	Manifest    PluginManifest `json:"manifest"`
+}
+
+// PluginManifest is the client view of a plugin manifest.
+type PluginManifest struct {
+	Tags        []string          `json:"tags,omitempty"`
+	MinRuntime  string            `json:"min_runtime,omitempty"`
+	Provides    PluginProvides    `json:"provides"`
+	Permissions PluginPermissions `json:"permissions"`
+	Entrypoint  string            `json:"entrypoint"`
+	Checksums   map[string]string `json:"checksums,omitempty"`
+}
+
+// PluginProvides lists what a plugin exposes.
+type PluginProvides struct {
+	Tools []PluginTool `json:"tools,omitempty"`
+}
+
+// PluginTool is one tool provided by a plugin.
+type PluginTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// PluginPermissions declares what a plugin may access.
+type PluginPermissions struct {
+	Network    []string `json:"network,omitempty"`
+	EnvVars    []string `json:"env_vars,omitempty"`
+	Filesystem bool     `json:"filesystem"`
+}
+
+// InstallPluginRequest is the payload for POST /api/v1/plugins.
+type InstallPluginRequest struct {
+	Registry string `json:"registry"`
+	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
+}
+
 // Attachment holds a file uploaded to a WorkItem.
 type Attachment struct {
 	ID          string    `json:"id"`

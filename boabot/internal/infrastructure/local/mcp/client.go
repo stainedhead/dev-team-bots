@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,18 +17,33 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
-const shellTimeout = 5 * time.Minute
+const (
+	shellTimeout  = 5 * time.Minute
+	pluginTimeout = 30 * time.Second
+)
 
 // Client is a local filesystem MCP client that enforces path restrictions.
 type Client struct {
 	allowedDirs []string // absolute, cleaned paths
 	boardStore  domain.BoardStore
+	pluginStore domain.PluginStore
+	installDir  string
 }
 
 // WithBoardStore adds the complete_board_item tool to the client, allowing
 // standalone bots to mark a Kanban item done when they finish independently.
 func WithBoardStore(bs domain.BoardStore) func(*Client) {
 	return func(c *Client) { c.boardStore = bs }
+}
+
+// WithPluginStore adds plugin tool support to the client.
+func WithPluginStore(ps domain.PluginStore) func(*Client) {
+	return func(c *Client) { c.pluginStore = ps }
+}
+
+// WithInstallDir sets the plugin install directory used for entrypoint resolution.
+func WithInstallDir(dir string) func(*Client) {
+	return func(c *Client) { c.installDir = dir }
 }
 
 // NewClient creates a Client restricted to the given directories.
@@ -121,11 +137,46 @@ func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
 			},
 		})
 	}
+
+	// Append active plugin tools, skipping collisions with builtin or earlier plugin tools.
+	if c.pluginStore != nil {
+		plugins, err := c.pluginStore.List(context.Background())
+		if err == nil {
+			seen := make(map[string]string) // tool name → claimant (builtin or plugin name)
+			for _, t := range tools {
+				seen[t.Name] = "builtin"
+			}
+			for _, p := range plugins {
+				if p.Status != domain.PluginStatusActive {
+					continue
+				}
+				for _, t := range p.Manifest.Provides.Tools {
+					if existing, conflict := seen[t.Name]; conflict {
+						slog.Warn("plugin tool name collision, skipping",
+							"tool", t.Name,
+							"plugin", p.Name,
+							"claimed_by", existing)
+						continue
+					}
+					seen[t.Name] = p.Name
+					tools = append(tools, t)
+				}
+			}
+		}
+	}
+
 	return tools, nil
 }
 
 // CallTool dispatches the named tool with the provided arguments.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (domain.MCPToolResult, error) {
+	// Check if the tool belongs to an active plugin before falling through to builtins.
+	if c.pluginStore != nil {
+		if result, handled, err := c.callPluginTool(ctx, name, args); handled {
+			return result, err
+		}
+	}
+
 	switch name {
 	case "read_file":
 		return c.readFile(args)
@@ -142,6 +193,62 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	default:
 		return errResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
+}
+
+// callPluginTool checks if the named tool is provided by an active plugin, and
+// if so, dispatches to the plugin entrypoint subprocess.
+// Returns (result, true, nil/err) if the tool is handled by a plugin,
+// or (zero, false, nil) if the tool is not a plugin tool.
+func (c *Client) callPluginTool(ctx context.Context, name string, args map[string]any) (domain.MCPToolResult, bool, error) {
+	plugins, err := c.pluginStore.List(ctx)
+	if err != nil {
+		return domain.MCPToolResult{}, false, nil
+	}
+
+	for _, p := range plugins {
+		if p.Status != domain.PluginStatusActive {
+			continue
+		}
+		for _, t := range p.Manifest.Provides.Tools {
+			if t.Name != name {
+				continue
+			}
+			// Found the plugin. Run the entrypoint.
+			pluginDir := filepath.Join(c.installDir, p.Name)
+			entrypoint := filepath.Join(pluginDir, p.Manifest.Entrypoint)
+			if _, statErr := os.Stat(entrypoint); os.IsNotExist(statErr) {
+				return errResult(fmt.Sprintf("plugin %q entrypoint not found: %s", p.Name, entrypoint)), true, nil
+			}
+
+			argsJSON, marshalErr := json.Marshal(args)
+			if marshalErr != nil {
+				return errResult(fmt.Sprintf("plugin %q: marshal args: %v", p.Name, marshalErr)), true, nil
+			}
+
+			callCtx, cancel := context.WithTimeout(ctx, pluginTimeout)
+			defer cancel()
+
+			cmd := exec.CommandContext(callCtx, entrypoint)
+			cmd.Stdin = bytes.NewReader(argsJSON)
+
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			runErr := cmd.Run()
+			if runErr != nil {
+				errMsg := fmt.Sprintf("plugin %q exited with error: %v\nstderr: %s", p.Name, runErr, stderr.String())
+				return errResult(errMsg), true, nil
+			}
+
+			var result domain.MCPToolResult
+			if decodeErr := json.NewDecoder(&stdout).Decode(&result); decodeErr != nil {
+				return errResult(fmt.Sprintf("plugin %q: decode output: %v\nstdout: %s", p.Name, decodeErr, stdout.String())), true, nil
+			}
+			return result, true, nil
+		}
+	}
+	return domain.MCPToolResult{}, false, nil
 }
 
 // --- tool implementations ---

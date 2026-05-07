@@ -15,6 +15,7 @@ import (
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+	appplugin "github.com/stainedhead/dev-team-bots/boabot/internal/application/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/pool"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -27,6 +28,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
+	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
@@ -123,6 +125,11 @@ type TeamManager struct {
 
 	// askRouter routes mid-task user questions to running bots.
 	askRouter *teamAskRouter
+
+	// pluginStore and pluginInstallDir are set when the plugin system is wired
+	// (orchestrator mode with Plugins.InstallDir set), and injected into the MCP client.
+	pluginStore      domain.PluginStore
+	pluginInstallDir string
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -515,7 +522,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		taskLogBase := filepath.Join(memPath, "task-logs")
 
-		srv := httpserver.New(httpserver.Config{
+		// Wire plugin system if install_dir is configured.
+		srvCfg := httpserver.Config{
 			Auth:            oAuth,
 			Board:           board,
 			Team:            cp,
@@ -528,7 +536,36 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			AskRouter:       tm.askRouter,
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 			TaskLogBase:     taskLogBase,
-		})
+		}
+		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
+			// Resolve relative paths relative to memory dir.
+			if !filepath.IsAbs(pluginInstallDir) {
+				pluginInstallDir = filepath.Join(memPath, pluginInstallDir)
+			}
+			if ps, psErr := localplugin.NewLocalPluginStore(pluginInstallDir); psErr == nil {
+				// Build config registries.
+				cfgRegs := make([]domain.PluginRegistry, 0, len(botCfg.Orchestrator.Plugins.Registries))
+				for _, r := range botCfg.Orchestrator.Plugins.Registries {
+					cfgRegs = append(cfgRegs, domain.PluginRegistry{Name: r.Name, URL: r.URL, Trusted: r.Trusted})
+				}
+				rm := httpserver.NewHTTPRegistryManager(pluginInstallDir, cfgRegs)
+				installUC := appplugin.NewInstallUseCase(ps, rm)
+				manageUC := appplugin.NewManageUseCase(ps)
+				registryUC := appplugin.NewRegistryUseCase(rm)
+				srvCfg.Plugins = ps
+				srvCfg.RegistryMgr = rm
+				srvCfg.PluginInstall = installUC
+				srvCfg.PluginManage = manageUC
+				srvCfg.PluginRegistry = registryUC
+				// Store install dir for MCP client wiring below.
+				tm.pluginStore = ps
+				tm.pluginInstallDir = pluginInstallDir
+			} else {
+				slog.Warn("plugin store unavailable", "err", psErr)
+			}
+		}
+
+		srv := httpserver.New(srvCfg)
 
 		httpSrv := &http.Server{
 			Addr:    fmt.Sprintf(":%d", botCfg.Orchestrator.APIPort),
@@ -606,6 +643,10 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	var mcpOpts []func(*localmcp.Client)
 	if entry.Type != "tech-lead" && tm.sharedBoard != nil {
 		mcpOpts = append(mcpOpts, localmcp.WithBoardStore(tm.sharedBoard))
+	}
+	if tm.pluginStore != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithPluginStore(tm.pluginStore))
+		mcpOpts = append(mcpOpts, localmcp.WithInstallDir(tm.pluginInstallDir))
 	}
 	mcpClient := localmcp.NewClient(tm.cfg.AllowedWorkDirs, mcpOpts...)
 

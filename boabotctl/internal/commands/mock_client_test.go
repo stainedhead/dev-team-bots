@@ -71,6 +71,22 @@ type mockClient struct {
 	memoryStatusResp domain.MemoryStatusResponse
 	memoryStatusErr  error
 
+	// Plugins
+	pluginListResp    []domain.Plugin
+	pluginListErr     error
+	pluginGetResp     domain.Plugin
+	pluginGetErr      error
+	pluginInstallResp domain.Plugin
+	pluginInstallErr  error
+	pluginRemoveErr   error
+	pluginReloadErr   error
+
+	// recorded plugin calls
+	lastPluginGetID      string
+	lastPluginInstallReq domain.InstallPluginRequest
+	lastPluginRemoveID   string
+	lastPluginReloadID   string
+
 	// Board extras
 	boardActivityResp     domain.ActivityResponse
 	boardActivityErr      error
@@ -273,6 +289,27 @@ func (m *mockClient) ChatSend(_ context.Context, _, _, _ string) (domain.ChatMes
 	return m.chatSendResp, m.chatSendErr
 }
 
+// Plugin methods on mockClient.
+func (m *mockClient) PluginList(_ context.Context) ([]domain.Plugin, error) {
+	return m.pluginListResp, m.pluginListErr
+}
+func (m *mockClient) PluginGet(_ context.Context, id string) (domain.Plugin, error) {
+	m.lastPluginGetID = id
+	return m.pluginGetResp, m.pluginGetErr
+}
+func (m *mockClient) PluginInstall(_ context.Context, req domain.InstallPluginRequest) (domain.Plugin, error) {
+	m.lastPluginInstallReq = req
+	return m.pluginInstallResp, m.pluginInstallErr
+}
+func (m *mockClient) PluginRemove(_ context.Context, id string) error {
+	m.lastPluginRemoveID = id
+	return m.pluginRemoveErr
+}
+func (m *mockClient) PluginReload(_ context.Context, id string) error {
+	m.lastPluginReloadID = id
+	return m.pluginReloadErr
+}
+
 // errClient is a simple client that returns an error for all calls.
 type errClient struct{ err error }
 
@@ -364,3 +401,12 @@ func (e *errClient) ThreadMessages(_ context.Context, _ string) ([]domain.ChatMe
 func (e *errClient) ChatSend(_ context.Context, _, _, _ string) (domain.ChatMessage, error) {
 	return domain.ChatMessage{}, e.err
 }
+func (e *errClient) PluginList(_ context.Context) ([]domain.Plugin, error) { return nil, e.err }
+func (e *errClient) PluginGet(_ context.Context, _ string) (domain.Plugin, error) {
+	return domain.Plugin{}, e.err
+}
+func (e *errClient) PluginInstall(_ context.Context, _ domain.InstallPluginRequest) (domain.Plugin, error) {
+	return domain.Plugin{}, e.err
+}
+func (e *errClient) PluginRemove(_ context.Context, _ string) error { return e.err }
+func (e *errClient) PluginReload(_ context.Context, _ string) error { return e.err }

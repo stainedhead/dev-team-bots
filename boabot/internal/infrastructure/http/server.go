@@ -33,6 +33,31 @@ type AuthProvider interface {
 	VerifyPassword(ctx context.Context, username, password string) error
 }
 
+// PluginInstaller is the subset of the install use case required by the server.
+type PluginInstaller interface {
+	Install(ctx context.Context, registryName, name, version, actor string) (domain.Plugin, error)
+}
+
+// PluginManager is the subset of the manage use case required by the server.
+type PluginManager interface {
+	List(ctx context.Context) ([]domain.Plugin, error)
+	Get(ctx context.Context, id string) (domain.Plugin, error)
+	Approve(ctx context.Context, id, actor string) error
+	Reject(ctx context.Context, id, actor string) error
+	Enable(ctx context.Context, id, actor string) error
+	Disable(ctx context.Context, id, actor string) error
+	Reload(ctx context.Context, id, actor string) error
+	Remove(ctx context.Context, id, actor string) error
+}
+
+// PluginRegistryUseCase is the subset of the registry use case required by the server.
+type PluginRegistryUseCase interface {
+	List(ctx context.Context) ([]domain.PluginRegistry, error)
+	Add(ctx context.Context, reg domain.PluginRegistry) error
+	Remove(ctx context.Context, name string) error
+	FetchIndex(ctx context.Context, name string, force bool) (domain.RegistryIndex, error)
+}
+
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
 	Auth            AuthProvider
@@ -48,6 +73,12 @@ type Config struct {
 	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
 	AllowedWorkDirs []string            // whitelisted base directories for item working directories
 	TaskLogBase     string              // base directory for per-task log directories (optional)
+	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
+	Plugins        domain.PluginStore
+	RegistryMgr    domain.RegistryManager
+	PluginInstall  PluginInstaller
+	PluginManage   PluginManager
+	PluginRegistry PluginRegistryUseCase
 }
 
 // Server is the orchestrator HTTP server.
@@ -139,6 +170,24 @@ func (s *Server) Handler() http.Handler {
 
 	// Tech-lead pool
 	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
+
+	// Plugin registry & management (optional — registered only if plugin store is configured)
+	if s.cfg.Plugins != nil {
+		mux.HandleFunc("GET /api/v1/registries", s.handleRegistriesList)
+		mux.HandleFunc("POST /api/v1/registries", s.auth(s.adminOnly(s.handleRegistriesAdd)))
+		mux.HandleFunc("DELETE /api/v1/registries/{name}", s.auth(s.adminOnly(s.handleRegistriesRemove)))
+		mux.HandleFunc("GET /api/v1/registries/{name}/index", s.auth(s.adminOnly(s.handleRegistriesFetchIndex)))
+
+		mux.HandleFunc("GET /api/v1/plugins", s.handlePluginsList)
+		mux.HandleFunc("GET /api/v1/plugins/{id}", s.handlePluginsGet)
+		mux.HandleFunc("POST /api/v1/plugins", s.auth(s.adminOnly(s.handlePluginsInstall)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/approve", s.auth(s.adminOnly(s.handlePluginsApprove)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/reject", s.auth(s.adminOnly(s.handlePluginsReject)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/enable", s.auth(s.adminOnly(s.handlePluginsEnable)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/disable", s.auth(s.adminOnly(s.handlePluginsDisable)))
+		mux.HandleFunc("POST /api/v1/plugins/{id}/reload", s.auth(s.adminOnly(s.handlePluginsReload)))
+		mux.HandleFunc("DELETE /api/v1/plugins/{id}", s.auth(s.adminOnly(s.handlePluginsRemove)))
+	}
 
 	// Kanban web UI
 	mux.HandleFunc("GET /", s.handleKanbanUI)
@@ -1615,7 +1664,7 @@ const kanbanHTML = `<!DOCTYPE html>
       <button class="tab on" onclick="tab('board')">Board</button>
       <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
       <button class="tab" onclick="tab('chat')" id="t-chat">Chat</button>
-      <button class="tab" onclick="tab('skills')" id="t-skills">Skills</button>
+      <button class="tab" onclick="tab('plugins')" id="t-plugins">Plugins &amp; Skills</button>
       <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
       <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>
     </div>
@@ -1701,9 +1750,61 @@ const kanbanHTML = `<!DOCTYPE html>
       <select id="chat-bot-sel" style="display:none"></select>
     </div>
 
-    <!-- Skills -->
-    <div class="pane" id="pane-skills">
-      <div class="sec-hdr"><div class="sec-title">Skills</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button><button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button></div></div>
+    <!-- Plugins & Skills -->
+    <div class="pane" id="pane-plugins">
+
+      <!-- Registry Browser -->
+      <div class="sec-hdr">
+        <div class="sec-title">Registry Browser</div>
+        <div class="sec-acts">
+          <select id="registry-select" onchange="loadRegistryIndex()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
+          <input type="text" id="registry-search" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc" />
+          <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadRegistries()">Refresh</button>
+        </div>
+      </div>
+      <div id="registry-cards" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;"><div class="empty-state">Select a registry above</div></div>
+
+      <!-- Add Registry Modal -->
+      <div id="add-registry-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+        <div style="background:#fff;padding:24px;border-radius:8px;min-width:400px">
+          <h3 style="margin-top:0">Add Registry</h3>
+          <div style="margin-bottom:12px"><label>Name<br/><input id="reg-name" type="text" style="width:100%;box-sizing:border-box;padding:6px" /></label></div>
+          <div style="margin-bottom:12px"><label>URL (https://)<br/><input id="reg-url" type="text" style="width:100%;box-sizing:border-box;padding:6px" placeholder="https://..." /></label></div>
+          <div style="margin-bottom:16px"><label><input id="reg-trusted" type="checkbox" /> Trusted registry</label></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" onclick="addRegistry()">Add</button>
+            <button class="btn btn-secondary btn-sm" onclick="ge('add-registry-modal').style.display='none'">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <hr style="margin:12px 0"/>
+
+      <!-- Installed Plugins -->
+      <div class="sec-hdr">
+        <div class="sec-title">Installed Plugins</div>
+        <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadPlugins()">Refresh</button></div>
+      </div>
+      <div id="plugins-body"><div class="empty-state">Loading…</div></div>
+
+      <!-- Plugin Detail Side Panel -->
+      <div id="plugin-detail-panel" style="display:none;position:fixed;top:0;right:0;width:400px;height:100%;background:#fff;box-shadow:-2px 0 8px rgba(0,0,0,0.15);overflow:auto;padding:20px;z-index:500">
+        <button onclick="ge('plugin-detail-panel').style.display='none'" style="float:right;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
+        <h3 id="plugin-detail-name" style="margin-top:0"></h3>
+        <div id="plugin-detail-content"></div>
+      </div>
+
+      <hr style="margin:12px 0"/>
+
+      <!-- Uploaded Skills (Legacy) -->
+      <div class="sec-hdr">
+        <div class="sec-title">Manually Uploaded Skills (Legacy)</div>
+        <div class="sec-acts">
+          <button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button>
+        </div>
+      </div>
       <input type="file" id="skill-upload-inp" accept=".md,.zip" style="display:none" onchange="uploadSkill(this)"/>
       <div id="skills-body"><div class="empty-state">Loading…</div></div>
     </div>
@@ -1874,7 +1975,7 @@ const kanbanHTML = `<!DOCTYPE html>
     closeTaskCtx();
     if(name==='tasks')loadTasks();
     if(name==='chat'){loadThreads();loadChat()}
-    if(name==='skills')loadSkills();
+    if(name==='plugins'){loadPlugins();loadRegistries();}
     if(name==='dlq')loadDLQ();
     if(name==='users')loadUsers();
   }
@@ -2096,6 +2197,143 @@ const kanbanHTML = `<!DOCTYPE html>
     api('POST','/api/v1/board',body)
       .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir-sel').value='';ge('ni-workdir-txt').value='';ge('ni-workdir-txt').style.display='none';loadBoard()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
+  // ── Plugins & Registry ──────────────────────────────────────────────────────
+  var registryData=[];
+
+  function loadRegistries(){
+    api('GET','/api/v1/registries',null).then(function(regs){
+      registryData=regs||[];
+      var sel=ge('registry-select');
+      if(!sel)return;
+      var prev=sel.value;
+      sel.innerHTML='<option value="">-- select registry --</option>';
+      regs.forEach(function(r){
+        var opt=document.createElement('option');
+        opt.value=r.name;opt.textContent=r.name+(r.trusted?' (trusted)':'');
+        sel.appendChild(opt);
+      });
+      if(prev)sel.value=prev;
+    }).catch(function(){});
+  }
+
+  function loadRegistryIndex(){
+    var name=ge('registry-select').value;
+    if(!name){ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';return;}
+    ge('registry-cards').innerHTML='<div class="empty-state">Loading…</div>';
+    api('GET','/api/v1/registries/'+encodeURIComponent(name)+'/index',null).then(function(idx){
+      renderRegistryCards(idx.plugins||[]);
+    }).catch(function(e){ge('registry-cards').innerHTML='<div class="empty-state">Error: '+e.message+'</div>';});
+  }
+
+  function renderRegistryCards(plugins){
+    var q=(ge('registry-search').value||'').toLowerCase();
+    var filtered=plugins.filter(function(p){return !q||p.name.toLowerCase().includes(q)||p.description.toLowerCase().includes(q);});
+    if(!filtered.length){ge('registry-cards').innerHTML='<div class="empty-state">No plugins found</div>';return;}
+    ge('registry-cards').innerHTML=filtered.map(function(p){
+      return '<div style="background:#f9f9f9;border:1px solid #ddd;border-radius:6px;padding:14px;min-width:220px;max-width:260px">'+
+        '<div style="font-weight:600;margin-bottom:4px">'+esc(p.name)+'</div>'+
+        '<div style="font-size:12px;color:#666;margin-bottom:8px">'+esc(p.latest_version)+'</div>'+
+        '<div style="font-size:13px;margin-bottom:10px">'+esc(p.description)+'</div>'+
+        (p.tags&&p.tags.length?'<div style="font-size:11px;color:#888;margin-bottom:8px">'+p.tags.map(function(t){return '<span style="background:#e8e8e8;padding:2px 6px;border-radius:10px;margin-right:4px">'+esc(t)+'</span>'}).join('')+'</div>':'')+
+        '<button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>'+
+        '</div>';
+    }).join('');
+  }
+
+  function filterRegistryCards(){
+    var name=ge('registry-select').value;
+    if(name)loadRegistryIndex();
+  }
+
+  function showAddRegistryModal(){
+    ge('add-registry-modal').style.display='flex';
+  }
+
+  function addRegistry(){
+    var name=ge('reg-name').value.trim();
+    var url=ge('reg-url').value.trim();
+    var trusted=ge('reg-trusted').checked;
+    if(!name||!url){alert('Name and URL are required');return;}
+    api('POST','/api/v1/registries',{name:name,url:url,trusted:trusted}).then(function(){
+      ge('add-registry-modal').style.display='none';
+      ge('reg-name').value='';ge('reg-url').value='';ge('reg-trusted').checked=false;
+      loadRegistries();
+    }).catch(function(e){alert('Error: '+e.message);});
+  }
+
+  function installPlugin(registry,name,version){
+    if(!token){alert('Login required');return;}
+    api('POST','/api/v1/plugins',{registry:registry,name:name,version:version}).then(function(p){
+      alert('Plugin "'+name+'" installation initiated (status: '+p.status+')');
+      loadPlugins();
+    }).catch(function(e){alert('Install failed: '+e.message);});
+  }
+
+  function loadPlugins(){
+    api('GET','/api/v1/plugins',null).then(function(plugins){
+      renderPluginsTable(plugins||[]);
+    }).catch(function(){ge('plugins-body').innerHTML='<div class="empty-state">Not available</div>';});
+  }
+
+  function renderPluginsTable(plugins){
+    var el=ge('plugins-body');
+    if(!plugins.length){el.innerHTML='<div class="empty-state">No plugins installed</div>';return;}
+    var rows=plugins.map(function(p){
+      var acts='';
+      if(p.status==='staged'){acts+='<button class="btn btn-primary btn-sm" onclick="pluginAction(\'approve\',\''+p.id+'\')">Approve</button> <button class="btn btn-danger btn-sm" onclick="pluginAction(\'reject\',\''+p.id+'\')">Reject</button> ';}
+      if(p.status==='active'){acts+='<button class="btn btn-secondary btn-sm" onclick="pluginAction(\'disable\',\''+p.id+'\')">Disable</button> ';}
+      if(p.status==='disabled'){acts+='<button class="btn btn-primary btn-sm" onclick="pluginAction(\'enable\',\''+p.id+'\')">Enable</button> ';}
+      if(p.status==='active'||p.status==='disabled'){acts+='<button class="btn btn-secondary btn-sm" onclick="pluginAction(\'reload\',\''+p.id+'\')">Reload</button> ';}
+      acts+='<button class="btn btn-danger btn-sm" onclick="pluginAction(\'remove\',\''+p.id+'\')">Remove</button>';
+      return '<tr>'+
+        '<td><a href="#" onclick="showPluginDetail(\''+p.id+'\');return false" style="text-decoration:none;font-weight:500">'+esc(p.name)+'</a></td>'+
+        '<td>'+esc(p.version)+'</td>'+
+        '<td>'+esc(p.registry||'—')+'</td>'+
+        '<td><span class="badge" style="background:'+statusColor(p.status)+'">'+esc(p.status)+'</span></td>'+
+        '<td>'+esc(p.installed_at?p.installed_at.substring(0,10):'—')+'</td>'+
+        '<td>'+acts+'</td>'+
+        '</tr>';
+    }).join('');
+    el.innerHTML='<table class="tbl"><thead><tr><th>NAME</th><th>VERSION</th><th>REGISTRY</th><th>STATUS</th><th>INSTALLED</th><th>ACTIONS</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }
+
+  function statusColor(s){
+    var m={'active':'#22863a','staged':'#e36209','disabled':'#666','rejected':'#cb2431','update_available':'#0366d6','checksum_fail':'#cb2431'};
+    return m[s]||'#888';
+  }
+
+  function pluginAction(action,id){
+    var method=action==='remove'?'DELETE':'POST';
+    var path='/api/v1/plugins/'+id+(action!=='remove'?'/'+action:'');
+    api(method,path,null).then(function(){loadPlugins();}).catch(function(e){alert('Error: '+e.message);});
+  }
+
+  function showPluginDetail(id){
+    api('GET','/api/v1/plugins/'+id,null).then(function(p){
+      ge('plugin-detail-name').textContent=p.name+' '+p.version;
+      var m=p.manifest||{};
+      var tools=(m.provides&&m.provides.tools)||[];
+      var perms=m.permissions||{};
+      ge('plugin-detail-content').innerHTML=
+        '<p><b>Author:</b> '+esc(m.author||'—')+'</p>'+
+        '<p><b>Description:</b> '+esc(m.description||'—')+'</p>'+
+        '<p><b>Status:</b> <span style="color:'+statusColor(p.status)+'">'+esc(p.status)+'</span></p>'+
+        '<p><b>Registry:</b> '+esc(p.registry||'—')+'</p>'+
+        '<p><b>Entrypoint:</b> '+esc(m.entrypoint||'—')+'</p>'+
+        (m.homepage?'<p><b>Homepage:</b> <a href="'+esc(m.homepage)+'" target="_blank">'+esc(m.homepage)+'</a></p>':'')+
+        '<hr/><b>Tools provided:</b>'+
+        (tools.length?'<ul>'+tools.map(function(t){return '<li><b>'+esc(t.name)+'</b> — '+esc(t.description||'')+'</li>';}).join('')+'</ul>':'<p>None</p>')+
+        '<hr/><b>Permissions:</b>'+
+        '<ul>'+
+        (perms.filesystem?'<li>Filesystem access</li>':'')+
+        ((perms.network||[]).map(function(n){return '<li>Network: '+esc(n)+'</li>';}).join(''))+
+        ((perms.env_vars||[]).map(function(e){return '<li>Env var: '+esc(e)+'</li>';}).join(''))+
+        '</ul>'+
+        (m.checksums?'<hr/><b>Checksums:</b><pre style="font-size:11px;overflow:auto">'+esc(JSON.stringify(m.checksums,null,2))+'</pre>':'');
+      ge('plugin-detail-panel').style.display='block';
+    }).catch(function(e){alert('Error: '+e.message);});
   }
 
   // ── Skills ───────────────────────────────────────────────────────────────────
@@ -2860,7 +3098,7 @@ const kanbanHTML = `<!DOCTYPE html>
     loadBoard(); loadTeam(); loadThreads();
     if(activeTab==='tasks')loadTasks();
     if(activeTab==='chat')loadChat();
-    if(activeTab==='skills')loadSkills();
+    if(activeTab==='plugins'){loadPlugins();loadRegistries();}
     if(activeTab==='dlq')loadDLQ();
     if(activeTab==='users')loadUsers();
     if(boardCtxItem){
@@ -2927,6 +3165,237 @@ func claimsFromContext(r *http.Request) domainauth.Claims {
 	}
 	claims, _ := v.(domainauth.Claims)
 	return claims
+}
+
+// ── plugin registry handlers ──────────────────────────────────────────────────
+
+func (s *Server) handleRegistriesList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeJSON(w, http.StatusOK, []domain.PluginRegistry{})
+		return
+	}
+	regs, err := s.cfg.PluginRegistry.List(r.Context())
+	if err != nil {
+		writeInternalError(w, "registries list", err)
+		return
+	}
+	if regs == nil {
+		regs = []domain.PluginRegistry{}
+	}
+	writeJSON(w, http.StatusOK, regs)
+}
+
+func (s *Server) handleRegistriesAdd(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	var req domain.AddRegistryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !strings.HasPrefix(req.URL, "https://") {
+		writeError(w, http.StatusBadRequest, "registry URL must use https://")
+		return
+	}
+	reg := domain.PluginRegistry(req) //nolint:gocritic
+	if err := s.cfg.PluginRegistry.Add(r.Context(), reg); err != nil {
+		writeInternalError(w, "registries add", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, reg)
+}
+
+func (s *Server) handleRegistriesRemove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.cfg.PluginRegistry.Remove(r.Context(), name); err != nil {
+		writeInternalError(w, "registries remove", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRegistriesFetchIndex(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginRegistry == nil {
+		writeError(w, http.StatusNotImplemented, "plugin registry not configured")
+		return
+	}
+	name := r.PathValue("name")
+	force := r.URL.Query().Get("force") == "true"
+	idx, err := s.cfg.PluginRegistry.FetchIndex(r.Context(), name, force)
+	if err != nil {
+		writeInternalError(w, "registries fetch index", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, idx)
+}
+
+// ── plugin management handlers ────────────────────────────────────────────────
+
+func (s *Server) handlePluginsList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeJSON(w, http.StatusOK, []domain.Plugin{})
+		return
+	}
+	plugins, err := s.cfg.PluginManage.List(r.Context())
+	if err != nil {
+		writeInternalError(w, "plugins list", err)
+		return
+	}
+	if plugins == nil {
+		plugins = []domain.Plugin{}
+	}
+	writeJSON(w, http.StatusOK, plugins)
+}
+
+func (s *Server) handlePluginsGet(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	id := r.PathValue("id")
+	p, err := s.cfg.PluginManage.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handlePluginsInstall(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginInstall == nil {
+		writeError(w, http.StatusNotImplemented, "plugin installer not configured")
+		return
+	}
+	var req domain.InstallPluginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	p, err := s.cfg.PluginInstall.Install(r.Context(), req.Registry, req.Name, req.Version, actor)
+	if err != nil {
+		writeInternalError(w, "plugins install", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handlePluginsApprove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Approve(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins approve", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsReject(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Reject(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins reject", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsEnable(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Enable(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins enable", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsDisable(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Disable(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins disable", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsReload(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Reload(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins reload", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePluginsRemove(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PluginManage == nil {
+		writeError(w, http.StatusNotImplemented, "plugin manager not configured")
+		return
+	}
+	id := r.PathValue("id")
+	claims := claimsFromContext(r)
+	actor := claims.Subject
+	if actor == "" {
+		actor = "system"
+	}
+	if err := s.cfg.PluginManage.Remove(r.Context(), id, actor); err != nil {
+		writeInternalError(w, "plugins remove", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Pool ──────────────────────────────────────────────────────────────────────

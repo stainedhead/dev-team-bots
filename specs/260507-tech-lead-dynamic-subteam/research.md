@@ -20,7 +20,7 @@ The following questions are derived from the PRD's dependencies and open risks. 
 
 5. **Atomic file writes on the target platform:** ✅ Answered — `InMemoryBoardStore.persist()` already uses `os.WriteFile(path+".tmp") + os.Rename(tmp, path)`. This pattern is proven in the codebase and is atomic on Linux/macOS (both use POSIX `rename(2)`). ECS uses Linux — no constraint. Pool state file and session file will use the identical pattern.
 
-6. **Tech-lead tool registry:** Open — the spec lists `spawn_agent` and `terminate_agent` as new tools registered in the "tech-lead bot tool handler", but no specific file path has been identified. Need to find how individual bot types register their tools (the handler that maps tool call names to functions for the tech-lead personality). Likely lives in a bot-specific config or runtime file under `boabot-team/bots/tech-lead/` or wired in `boabot/internal/application/run_agent.go`. Must be confirmed before P5f.1 implementation begins.
+6. **Tech-lead tool registry:** ✅ Answered — `spawn_agent` and `terminate_agent` are **not** LLM function-call tools. The `codeagent` provider runs `claude` CLI as a subprocess; tool injection via MCP server is out of scope. Instead, they are implemented as new `MessageType` values (`spawn.agent`, `terminate.agent`) that the tech-lead's `RunAgentUseCase.handle()` switch handles in `boabot/internal/application/run_agent.go`. A `SubTeamManager` is injected into `RunAgentUseCase` during wiring in `boabot/internal/application/team/team_manager.go` (in `startBot()`, detecting `entry.Type == "tech-lead"`). The tech-lead's model output triggers spawning via the message dispatch system — the orchestrator or operator sends a `spawn.agent` message to the tech-lead's queue.
 
 ---
 

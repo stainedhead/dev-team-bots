@@ -163,7 +163,8 @@ Two related gaps exist in the current system:
 - `boabot/internal/infrastructure/local/queue/queue.go` — add `Deregister` method to `Router` for session teardown; per-session `*Router` instances require no structural change (each is already independent)
 - `boabot/internal/infrastructure/local/orchestrator/board.go` (`InMemoryBoardStore`) — emit internal status-change events when item transitions to/from `in_progress`
 - `boabot/internal/infrastructure/http/server.go` — add `/api/v1/pool` endpoint; extend team roster response with `status` and `item_id` fields
-- Tech-lead bot tool handler (file path to be confirmed during Phase 2 research — see Research Q6)
+- `boabot/internal/application/run_agent.go` — add `WithSubTeamManager()` setter; handle `spawn.agent` and `terminate.agent` message types in the `handle()` switch
+- `boabot/internal/application/team/team_manager.go` — wire `SubTeamManager` into tech-lead type bots in `startBot()`; add `MessageTypeSubTeamSpawn` and `MessageTypeSubTeamTerminate` to handled message types
 
 ### Dependencies
 

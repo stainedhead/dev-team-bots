@@ -37,6 +37,7 @@ tools:
     - api.github.com
   receive_from:
     - orchestrator
+    - tech-lead
 
 budget:
   token_spend_daily: 1000000

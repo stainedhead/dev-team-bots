@@ -36,6 +36,10 @@ tools:
     - api.github.com
   receive_from:
     - orchestrator
+    - architect
+    - implementer
+    - reviewer
+    - maintainer
 
 budget:
   token_spend_daily: 2000000

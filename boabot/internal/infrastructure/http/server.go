@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Work directory roots (public read — UI needs these before login)
 	mux.HandleFunc("GET /api/v1/workdirs", s.handleWorkDirList)
+	mux.HandleFunc("GET /api/v1/files", s.auth(s.handleListFiles))
 
 	// Board — read endpoints are public; write endpoints require auth
 	mux.HandleFunc("GET /api/v1/board", s.handleBoardList)
@@ -286,6 +287,39 @@ func isAllowedWorkDir(p string, roots []string) bool {
 
 func (s *Server) handleWorkDirList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.cfg.AllowedWorkDirs)
+}
+
+func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		writeError(w, http.StatusBadRequest, "dir required")
+		return
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if !isAllowedWorkDir(abs, s.cfg.AllowedWorkDirs) {
+		writeError(w, http.StatusForbidden, "path not within an allowed work directory")
+		return
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "directory not found")
+		return
+	}
+	type fileEntry struct {
+		Name  string `json:"name"`
+		IsDir bool   `json:"is_dir"`
+	}
+	items := make([]fileEntry, 0, len(entries))
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			items = append(items, fileEntry{Name: e.Name(), IsDir: e.IsDir()})
+		}
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 // ── board handlers ────────────────────────────────────────────────────────────
@@ -1569,6 +1603,13 @@ const kanbanHTML = `<!DOCTYPE html>
     .pill-off{background:#991b1b;color:#fecaca}
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
+    /* ── Command / file mention popup ── */
+    .mp-pop{position:fixed;z-index:9999;background:#0f1829;border:1px solid #253a5e;border-radius:.4rem;overflow-y:auto;max-height:230px;min-width:320px;max-width:540px;box-shadow:0 6px 24px rgba(0,0,0,.65);display:none}
+    .mp-item{display:flex;align-items:baseline;padding:.28rem .65rem;cursor:pointer;gap:.6rem;line-height:1.4}
+    .mp-item:hover,.mp-sel{background:#1e3a5f}
+    .mp-name{color:#e2e8f0;font-family:monospace;font-size:.74rem;flex-shrink:0;white-space:nowrap}
+    .mp-dir{color:#60a5fa}
+    .mp-desc{color:#64748b;font-size:.67rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:right}
     .acts{display:flex;gap:.3rem;align-items:center}
     .empty-state{text-align:center;padding:3rem;color:#1e2d4a;font-style:italic;font-size:.8rem}
 
@@ -1740,7 +1781,7 @@ const kanbanHTML = `<!DOCTYPE html>
         </div>
         <div class="ctx-body" id="board-ctx-body"></div>
         <div class="ctx-ask-row" id="board-ctx-ask" style="display:none">
-          <input id="board-ctx-ask-input" placeholder="Ask the assigned bot&#x2026;" onkeydown="if(event.key==='Enter')boardAsk()"/>
+          <input id="board-ctx-ask-input" placeholder="Ask the assigned bot&#x2026;"/>
           <button class="btn btn-primary btn-sm" onclick="boardAsk()">Ask</button>
         </div>
       </div>
@@ -2791,12 +2832,194 @@ const kanbanHTML = `<!DOCTYPE html>
     Promise.all(promises).then(function(){startFastPoll();loadChat()});
   }
 
+  // ── Command & file mention popup ─────────────────────────────────────────────
+  var mpMode=null,mpEl=null,mpPos=0,mpText='',mpItems=[],mpIdx=0,mpWorkDir='',mpPop=null;
+  var pluginCmds=[];
+
+  function mpInit(){
+    if(mpPop)return;
+    mpPop=document.createElement('div');
+    mpPop.className='mp-pop';
+    document.body.appendChild(mpPop);
+    document.addEventListener('mousedown',function(e){if(mpPop&&!mpPop.contains(e.target))mpClose();});
+  }
+
+  function mpClose(){
+    mpMode=null;mpEl=null;mpItems=[];mpIdx=0;
+    if(mpPop)mpPop.style.display='none';
+  }
+
+  function mpPosition(){
+    if(!mpEl||!mpPop)return;
+    var r=mpEl.getBoundingClientRect();
+    var left=Math.max(4,r.left);
+    if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
+    mpPop.style.left=left+'px';
+    if(window.innerHeight-r.bottom<240&&r.top>240){
+      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
+    } else {
+      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
+    }
+    mpPop.style.display='block';
+  }
+
+  function mpRender(items){
+    mpItems=items;mpIdx=0;
+    if(!items.length){if(mpPop)mpPop.style.display='none';return;}
+    if(!mpPop)mpInit();
+    mpPop.innerHTML='';
+    items.forEach(function(it,i){
+      var el=document.createElement('div');
+      el.className='mp-item'+(i===0?' mp-sel':'');
+      el.innerHTML='<span class="mp-name'+(it.isDir?' mp-dir':'')+'">'+esc(it.label)+(it.isDir?'/':'')+'</span>'
+        +(it.desc?'<span class="mp-desc">'+esc(it.desc)+'</span>':'');
+      el.addEventListener('mousedown',function(e){e.preventDefault();mpPick(i);});
+      mpPop.appendChild(el);
+    });
+    mpPosition();
+  }
+
+  function mpMove(d){
+    if(!mpItems.length)return;
+    var els=mpPop.querySelectorAll('.mp-item');
+    if(els[mpIdx])els[mpIdx].classList.remove('mp-sel');
+    mpIdx=(mpIdx+d+mpItems.length)%mpItems.length;
+    if(els[mpIdx]){els[mpIdx].classList.add('mp-sel');els[mpIdx].scrollIntoView({block:'nearest'});}
+  }
+
+  function mpPick(idx){
+    if(idx==null)idx=mpIdx;
+    var it=mpItems[idx];if(!it||!mpEl)return;
+    var v=mpEl.value;
+    var after=v.slice(mpPos+1+mpText.length);
+    var before=v.slice(0,mpPos);
+    if(mpMode==='file'&&it.isDir){
+      var newText=it.path+'/';
+      mpText=newText;
+      mpEl.value=before+'@'+newText+after;
+      mpEl.selectionStart=mpEl.selectionEnd=mpPos+1+newText.length;
+      mpLoadFile(newText);mpEl.focus();
+      return;
+    }
+    var trigChar=mpMode==='cmd'?'/':'@';
+    var insert=trigChar+it.path;
+    mpEl.value=before+insert+' '+after;
+    mpEl.selectionStart=mpEl.selectionEnd=before.length+insert.length+1;
+    mpClose();mpEl.focus();
+  }
+
+  function mpLoadCmd(text){
+    var q=text.toLowerCase();
+    var list=q?pluginCmds.filter(function(c){
+      return c.name.toLowerCase().indexOf(q)>=0||c.desc.toLowerCase().indexOf(q)>=0;
+    }):pluginCmds;
+    mpRender(list.slice(0,24).map(function(c){return{label:c.name,path:c.name,desc:c.desc,isDir:false};}));
+  }
+
+  function mpLoadFile(text){
+    if(!mpWorkDir){mpClose();return;}
+    var lastSlash=text.lastIndexOf('/');
+    var dirPart=lastSlash>=0?text.slice(0,lastSlash+1):'';
+    var filterPart=lastSlash>=0?text.slice(lastSlash+1):text;
+    var reqDir=mpWorkDir.replace(/\/+$/,'')+(dirPart?'/'+dirPart.replace(/^\/+/,'').replace(/\/+$/,''):'');
+    api('GET','/api/v1/files?dir='+encodeURIComponent(reqDir),null)
+      .then(function(entries){
+        if(!entries)entries=[];
+        var q=filterPart.toLowerCase();
+        if(q)entries=entries.filter(function(e){return e.name.toLowerCase().indexOf(q)===0;});
+        entries.sort(function(a,b){return(b.is_dir-a.is_dir)||a.name.localeCompare(b.name);});
+        mpRender(entries.slice(0,20).map(function(e){
+          return{label:e.name,path:dirPart+e.name,desc:e.is_dir?'directory':'',isDir:e.is_dir};
+        }));
+      })
+      .catch(function(){mpClose();});
+  }
+
+  function mpOnInput(el,workDirFn){
+    var v=el.value;
+    var cursor=typeof el.selectionStart==='number'?el.selectionStart:v.length;
+    if(mpMode&&mpEl===el){
+      if(cursor<=mpPos){mpClose();return;}
+      mpText=v.slice(mpPos+1,cursor);
+      if(mpMode==='cmd')mpLoadCmd(mpText);else mpLoadFile(mpText);
+      return;
+    }
+    if(cursor<1)return;
+    var ch=v[cursor-1];
+    if(ch!=='/'&&ch!=='@')return;
+    var prevCh=cursor>1?v[cursor-2]:'';
+    if(prevCh&&!/[\s\n\r\t]/.test(prevCh))return;
+    if(ch==='/'){
+      if(!pluginCmds.length)return;
+      mpMode='cmd';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir='';
+      if(!mpPop)mpInit();mpLoadCmd('');
+    } else {
+      var wd=typeof workDirFn==='function'?workDirFn():'';
+      if(!wd)return;
+      mpMode='file';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir=wd;
+      if(!mpPop)mpInit();mpLoadFile('');
+    }
+  }
+
+  function mpOnKeydown(e){
+    if(!mpMode||!mpPop||mpPop.style.display==='none'||mpEl!==e.target)return;
+    if(e.key==='ArrowDown'){e.preventDefault();mpMove(1);}
+    else if(e.key==='ArrowUp'){e.preventDefault();mpMove(-1);}
+    else if(e.key==='Tab'){
+      e.preventDefault();e.stopImmediatePropagation();
+      if(mpItems.length)mpPick();else mpClose();
+    } else if(e.key==='Enter'&&mpItems.length){
+      e.preventDefault();e.stopImmediatePropagation();mpPick();
+    } else if(e.key==='Escape'){e.preventDefault();mpClose();}
+  }
+
+  function attachMention(el,workDirFn){
+    if(!el)return;
+    el.addEventListener('input',function(){mpOnInput(el,workDirFn);});
+    el.addEventListener('keydown',mpOnKeydown);
+    el.addEventListener('blur',function(){setTimeout(mpClose,160);});
+  }
+
+  function loadPluginCmds(){
+    api('GET','/api/v1/plugins',null)
+      .then(function(plugins){
+        pluginCmds=[];
+        (plugins||[]).forEach(function(p){
+          if(p.status==='active'&&p.manifest&&p.manifest.provides&&p.manifest.provides.tools){
+            p.manifest.provides.tools.forEach(function(t){
+              pluginCmds.push({name:p.name+':'+t.name,desc:t.description||''});
+            });
+          }
+        });
+      }).catch(function(){});
+  }
+
   // Enter sends; Shift+Enter inserts newline.
   document.addEventListener('DOMContentLoaded',function(){
+    mpInit();loadPluginCmds();
+    function getAtWorkDir(){
+      var sel=ge('at-workdir-sel'),txt=ge('at-workdir-txt');
+      var base=sel?sel.value:'';
+      var sub=txt&&txt.style.display!=='none'?txt.value.trim():'';
+      return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
+    }
+    var bCtxDir=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
+    // Register mention keydown handlers FIRST so mpOnKeydown fires before send handlers.
+    attachMention(ge('chat-input'),bCtxDir);
+    attachMention(ge('board-ctx-ask-input'),bCtxDir);
+    attachMention(ge('at-title'),getAtWorkDir);
+    attachMention(ge('at-instr'),getAtWorkDir);
+    attachMention(ge('bctx-desc'),bCtxDir);
+    // Ask input: Enter triggers boardAsk only when mention popup is not active.
+    var askIn=ge('board-ctx-ask-input');
+    if(askIn)askIn.addEventListener('keydown',function(e){
+      if(e.key==='Enter'&&(!mpMode||!mpItems.length))boardAsk();
+    });
+    // Chat: Enter sends; Shift+Enter newline.
     var ta=ge('chat-input');
     if(ta){
       ta.addEventListener('keydown',function(e){
-        if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}
+        if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
       });
     }
   });

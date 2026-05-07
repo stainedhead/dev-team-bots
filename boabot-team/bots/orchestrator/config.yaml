@@ -52,9 +52,6 @@ tools:
     - maintainer
     - tech-lead
 
-budget:
-  token_spend_daily: 1000000
-  tool_calls_hourly: 500
 
 context:
   threshold_tokens: 150000

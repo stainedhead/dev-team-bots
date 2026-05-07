@@ -41,9 +41,6 @@ tools:
     - reviewer
     - maintainer
 
-budget:
-  token_spend_daily: 2000000
-  tool_calls_hourly: 1000
 
 context:
   threshold_tokens: 200000

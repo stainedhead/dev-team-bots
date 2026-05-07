@@ -96,10 +96,12 @@ type TeamManager struct {
 	// Used by startBot to pre-register the full team in the orchestrator control plane.
 	teamEntries []BotEntry
 
-	// sharedChatStore and sharedTaskStore are created once in Run and used by all
-	// bots so that any bot's reply surfaces in the orchestrator chat interface.
+	// sharedChatStore, sharedTaskStore and sharedBoard are created once in Run
+	// and used by all bots so that any bot's reply surfaces in the orchestrator
+	// chat interface and board state is kept consistent.
 	sharedChatStore domain.ChatStore
 	sharedTaskStore domain.DirectTaskStore
+	sharedBoard     domain.BoardStore
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -167,7 +169,8 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	orchestratorMemPath := filepath.Join(tm.cfg.MemoryRoot, orchestratorName)
 	_ = os.MkdirAll(orchestratorMemPath, 0o755)
 	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
-	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore()
+	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore(filepath.Join(orchestratorMemPath, "tasks.json"))
+	tm.sharedBoard = orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
 
 	// Start each enabled bot in its own goroutine.
 	started := 0
@@ -434,11 +437,11 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		if adminPassword == "" {
 			adminPassword = "admin"
 		}
-		oAuth, oAuthErr := orchestratorlocal.NewInMemoryAuthProvider(adminPassword, botCfg.Orchestrator.JWTSecret)
+		oAuth, oAuthErr := orchestratorlocal.NewInMemoryAuthProvider(adminPassword, botCfg.Orchestrator.JWTSecret, filepath.Join(memPath, "users.json"))
 		if oAuthErr != nil {
 			return fmt.Errorf("create orchestrator auth for %q: %w", entry.Name, oAuthErr)
 		}
-		board := orchestratorlocal.NewInMemoryBoardStore()
+		board := tm.sharedBoard
 		cp := orchestratorlocal.NewInMemoryControlPlane()
 
 		// Pre-register every enabled team member so the dashboard shows the
@@ -598,6 +601,27 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			}
 			if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil {
 				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
+			}
+
+			// Mark the task as completed.
+			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
+				now := time.Now().UTC()
+				task.Status = domain.DirectTaskStatusCompleted
+				task.CompletedAt = &now
+				task.Output = p.Output
+				_, _ = sharedTasks.Update(handlerCtx, task)
+
+				// If this was a board-triggered task, update the board item.
+				if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
+					items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
+					if listErr == nil && len(items) > 0 {
+						item := items[0]
+						item.LastResult = p.Output
+						item.LastResultAt = &now
+						item.ActiveTaskID = "" // clear the working badge
+						_, _ = tm.sharedBoard.Update(handlerCtx, item)
+					}
+				}
 			}
 		})
 	}

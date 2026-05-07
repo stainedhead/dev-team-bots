@@ -11,7 +11,7 @@ import (
 
 func TestInMemoryDirectTaskStore_Create(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	task := domain.DirectTask{
@@ -39,7 +39,7 @@ func TestInMemoryDirectTaskStore_Create(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Create_SetsTimestamps(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	before := time.Now()
@@ -60,7 +60,7 @@ func TestInMemoryDirectTaskStore_Create_SetsTimestamps(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Create_UniqueIDs(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	ids := make(map[string]bool)
@@ -79,7 +79,7 @@ func TestInMemoryDirectTaskStore_Create_UniqueIDs(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Get(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	task := domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending}
@@ -96,7 +96,7 @@ func TestInMemoryDirectTaskStore_Get(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Get_NotFound(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	_, err := store.Get(ctx, "nonexistent-id")
@@ -107,7 +107,7 @@ func TestInMemoryDirectTaskStore_Get_NotFound(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Update(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	task := domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending}
@@ -130,7 +130,7 @@ func TestInMemoryDirectTaskStore_Update(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_Update_NotFound(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	task := domain.DirectTask{ID: "nonexistent", BotName: "dev-1", Status: domain.DirectTaskStatusPending}
@@ -142,7 +142,7 @@ func TestInMemoryDirectTaskStore_Update_NotFound(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_List_FilterByBotName(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending})
@@ -165,7 +165,7 @@ func TestInMemoryDirectTaskStore_List_FilterByBotName(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_List_EmptyBotName_ReturnsAll(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending})
@@ -182,7 +182,7 @@ func TestInMemoryDirectTaskStore_List_EmptyBotName_ReturnsAll(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_List_ReturnsNonNilSliceWhenEmpty(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	items, err := store.List(ctx, "dev-1")
@@ -196,7 +196,7 @@ func TestInMemoryDirectTaskStore_List_ReturnsNonNilSliceWhenEmpty(t *testing.T) 
 
 func TestInMemoryDirectTaskStore_ListAll(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending})
@@ -214,7 +214,7 @@ func TestInMemoryDirectTaskStore_ListAll(t *testing.T) {
 
 func TestInMemoryDirectTaskStore_ListAll_ReturnsNonNilSliceWhenEmpty(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	items, err := store.ListAll(ctx)
@@ -228,7 +228,7 @@ func TestInMemoryDirectTaskStore_ListAll_ReturnsNonNilSliceWhenEmpty(t *testing.
 
 func TestInMemoryDirectTaskStore_ListAll_SortedNewestFirst(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	ctx := context.Background()
 
 	// Create tasks with distinct timestamps by setting CreatedAt explicitly.

@@ -94,8 +94,13 @@ func (s *Server) Handler() http.Handler {
 
 	// Direct tasks — require auth
 	mux.HandleFunc("GET /api/v1/tasks", s.auth(s.handleTaskList))
+	mux.HandleFunc("GET /api/v1/tasks/{id}", s.auth(s.handleTaskGet))
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
+
+	// Board activity and ask — require auth
+	mux.HandleFunc("GET /api/v1/board/{id}/activity", s.auth(s.handleBoardActivity))
+	mux.HandleFunc("POST /api/v1/board/{id}/ask", s.auth(s.handleBoardAsk))
 
 	// Threads — require auth
 	mux.HandleFunc("GET /api/v1/threads", s.auth(s.handleThreadList))
@@ -692,6 +697,94 @@ func (s *Server) handleBotTaskList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, filtered)
 }
 
+func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Tasks == nil {
+		writeError(w, http.StatusServiceUnavailable, "tasks not available")
+		return
+	}
+	id := r.PathValue("id")
+	task, err := s.cfg.Tasks.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleBoardActivity(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	item, err := s.cfg.Board.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	type activityResponse struct {
+		Item domain.WorkItem    `json:"item"`
+		Task *domain.DirectTask `json:"task,omitempty"`
+	}
+	resp := activityResponse{Item: item}
+	if item.ActiveTaskID != "" && s.cfg.Tasks != nil {
+		if task, taskErr := s.cfg.Tasks.Get(r.Context(), item.ActiveTaskID); taskErr == nil {
+			resp.Task = &task
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil || s.cfg.Dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	id := r.PathValue("id")
+	item, err := s.cfg.Board.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	if item.AssignedTo == "" {
+		writeError(w, http.StatusBadRequest, "item has no assigned bot")
+		return
+	}
+	var req struct {
+		Content  string `json:"content"`
+		ThreadID string `json:"thread_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Content == "" {
+		writeError(w, http.StatusBadRequest, "content required")
+		return
+	}
+	ctx := r.Context()
+	threadID := req.ThreadID
+	if threadID == "" {
+		t, tErr := s.cfg.Chat.CreateThread(ctx, fmt.Sprintf("Item: %s", item.Title), []string{item.AssignedTo})
+		if tErr != nil {
+			writeInternalError(w, "create thread", tErr)
+			return
+		}
+		threadID = t.ID
+	}
+	msg := domain.ChatMessage{
+		ThreadID:  threadID,
+		BotName:   item.AssignedTo,
+		Direction: domain.ChatDirectionOutbound,
+		Content:   req.Content,
+	}
+	_ = s.cfg.Chat.Append(ctx, msg)
+	instruction := fmt.Sprintf("Regarding board item '%s' (ID: %s):\n\n%s", item.Title, item.ID, req.Content)
+	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat)
+	if dispErr != nil {
+		writeInternalError(w, "ask dispatch", dispErr)
+		return
+	}
+	msg.TaskID = task.ID
+	writeJSON(w, http.StatusCreated, msg)
+}
+
 // ── chat handlers ─────────────────────────────────────────────────────────────
 
 func (s *Server) handleChatList(w http.ResponseWriter, r *http.Request) {
@@ -1046,6 +1139,24 @@ const kanbanHTML = `<!DOCTYPE html>
     /* ── Board card badge ── */
     .card-working{font-size:.65rem;color:#fbbf24;margin-top:.2rem;animation:blink 1.5s infinite}
 
+    /* ── Context panel ── */
+    .ctx-panel{background:#070d1a;border-top:2px solid #1a2744;overflow:hidden;transition:height .2s;display:flex;flex-direction:column}
+    .ctx-hdr{display:flex;align-items:center;gap:.75rem;padding:.5rem 1rem;border-bottom:1px solid #1a2744;flex-shrink:0}
+    .ctx-title{font-size:.82rem;color:#e2e8f0;font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ctx-tabs{display:flex;gap:.25rem}
+    .ctx-tab{background:none;border:none;color:#64748b;cursor:pointer;font-size:.72rem;padding:.2rem .5rem;border-radius:.25rem}
+    .ctx-tab.on{background:#1e3a5f;color:#93c5fd}
+    .ctx-body{flex:1;overflow-y:auto;padding:.75rem 1rem;font-size:.78rem;color:#cbd5e1}
+    .ctx-row{display:flex;gap:.5rem;margin-bottom:.4rem}
+    .ctx-lbl{color:#475569;min-width:80px;flex-shrink:0}
+    .ctx-val{color:#e2e8f0;word-break:break-word}
+    .ctx-output{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;white-space:pre-wrap;font-family:monospace;font-size:.74rem;line-height:1.5;color:#94a3b8;max-height:160px;overflow-y:auto}
+    .ctx-ask-row{display:flex;gap:.5rem;padding:.5rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
+    .ctx-ask-row input{flex:1;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+    .ctx-close{background:none;border:none;color:#475569;cursor:pointer;font-size:.9rem;padding:0}
+    .ctx-close:hover{color:#e2e8f0}
+    .ctx-working{color:#fbbf24;font-size:.75rem;animation:blink 1.5s infinite}
+
     /* ── Scrollbars ── */
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
@@ -1088,8 +1199,8 @@ const kanbanHTML = `<!DOCTYPE html>
     </div>
 
     <!-- Board -->
-    <div class="pane on" id="pane-board">
-      <div class="board">
+    <div class="pane on" id="pane-board" style="display:flex;flex-direction:column;overflow:hidden">
+      <div class="board" id="board" style="flex:1;overflow:auto;min-height:0">
         <div class="col" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
           <div class="col-body" id="b-backlog"><div class="nil">No items</div></div>
@@ -1107,12 +1218,35 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="col-body" id="b-done"><div class="nil">No items</div></div>
         </div>
       </div>
+      <div class="ctx-panel" id="board-ctx" style="height:0">
+        <div class="ctx-hdr">
+          <span class="ctx-title" id="board-ctx-title">Select an item</span>
+          <div class="ctx-tabs">
+            <button class="ctx-tab on" id="bctx-t-detail" onclick="bctxTab('detail')">Details</button>
+            <button class="ctx-tab" id="bctx-t-output" onclick="bctxTab('output')">Output</button>
+            <button class="ctx-tab" id="bctx-t-ask" onclick="bctxTab('ask')">Ask</button>
+          </div>
+          <button class="ctx-close" onclick="closeBoardCtx()">&#x2715;</button>
+        </div>
+        <div class="ctx-body" id="board-ctx-body"></div>
+        <div class="ctx-ask-row" id="board-ctx-ask" style="display:none">
+          <input id="board-ctx-ask-input" placeholder="Ask the assigned bot&#x2026;" onkeydown="if(event.key==='Enter')boardAsk()"/>
+          <button class="btn btn-primary btn-sm" onclick="boardAsk()">Ask</button>
+        </div>
+      </div>
     </div>
 
     <!-- Tasks -->
-    <div class="pane" id="pane-tasks">
+    <div class="pane" id="pane-tasks" style="display:flex;flex-direction:column;overflow:hidden">
       <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
-      <div id="tasks-body"><div class="empty-state">Loading…</div></div>
+      <div id="tasks-body" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
+      <div class="ctx-panel" id="task-ctx" style="height:0">
+        <div class="ctx-hdr">
+          <span class="ctx-title" id="task-ctx-title">Select a task</span>
+          <button class="ctx-close" onclick="closeTaskCtx()">&#x2715;</button>
+        </div>
+        <div class="ctx-body" id="task-ctx-body"></div>
+      </div>
     </div>
 
     <!-- Chat -->
@@ -1163,8 +1297,8 @@ const kanbanHTML = `<!DOCTYPE html>
 <!-- Login -->
 <dialog id="login-dlg">
   <h2>Sign In</h2>
-  <div class="fg"><label class="fl">Username</label><input class="fi" id="login-u" type="text" autocomplete="username"/></div>
-  <div class="fg"><label class="fl">Password</label><input class="fi" id="login-p" type="password" autocomplete="current-password"/></div>
+  <div class="fg"><label class="fl">Username</label><input class="fi" id="login-u" type="text" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>
+  <div class="fg"><label class="fl">Password</label><input class="fi" id="login-p" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>
   <div class="errmsg" id="login-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('login-dlg')">Cancel</button><button class="btn btn-primary" onclick="doLogin()">Sign in</button></div>
 </dialog>
@@ -1229,6 +1363,10 @@ const kanbanHTML = `<!DOCTYPE html>
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
+  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail';
+  var taskCtxTask=null;
+  var allTasksList=[];
+  var dragging=false;
 
   // ── Util ────────────────────────────────────────────────────────────────────
   function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -1329,8 +1467,9 @@ const kanbanHTML = `<!DOCTYPE html>
         (it.assigned_to?'<span class="card-who">'+esc(it.assigned_to)+'</span>':'')+
         '<span class="card-age">'+ago(it.updated_at)+'</span>'+
       '</div>';
-    d.addEventListener('dragstart',function(ev){dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
-    d.addEventListener('dragend',function(){d.classList.remove('dragging')});
+    d.addEventListener('dragstart',function(ev){dragging=true;dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
+    d.addEventListener('dragend',function(){dragging=false;d.classList.remove('dragging')});
+    d.onclick=(function(item){return function(){if(!dragging)openBoardCtx(item)}})(it);
     return d;
   }
 
@@ -1592,13 +1731,22 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!token){el.innerHTML='<div class="empty-state">Sign in to view tasks</div>';return}
     api('GET','/api/v1/tasks')
       .then(function(tasks){
+        allTasksList=tasks||[];
         if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">No direct tasks</div>';return}
         var rows=tasks.map(function(t){
-          var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':'pill-off';
-          var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'…':'');
-          return'<tr><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'—')+'</td><td>'+(t.dispatched_at?ago(t.dispatched_at):'—')+'</td><td>'+ago(t.created_at)+'</td></tr>';
+          var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
+          var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'&#x2026;':'');
+          return'<tr data-tid="'+esc(t.id)+'"><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+(t.dispatched_at?ago(t.dispatched_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
         }).join('');
         el.innerHTML='<table><thead><tr><th>Bot</th><th>Instruction</th><th>Status</th><th>Scheduled At</th><th>Dispatched At</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
+        document.querySelectorAll('#tasks-body tr[data-tid]').forEach(function(tr){
+          tr.style.cursor='pointer';
+          tr.onclick=function(){
+            var tid=tr.getAttribute('data-tid');
+            var task=allTasksList.find(function(t){return t.id===tid});
+            if(task)openTaskCtx(task);
+          };
+        });
       })
       .catch(function(){el.innerHTML='<div class="empty-state">Failed to load tasks</div>'});
   }
@@ -1792,6 +1940,119 @@ const kanbanHTML = `<!DOCTYPE html>
     }
   });
 
+  // ── Board context panel ───────────────────────────────────────────────────────
+  function openBoardCtx(item){
+    boardCtxItem=item;
+    boardCtxThread=null;
+    var panel=ge('board-ctx');
+    panel.style.height='280px';
+    ge('board-ctx-title').textContent=item.title;
+    bctxTab(boardCtxTab);
+    loadBoardCtx();
+  }
+
+  function closeBoardCtx(){
+    ge('board-ctx').style.height='0';
+    boardCtxItem=null;
+  }
+
+  function bctxTab(name){
+    boardCtxTab=name;
+    ['detail','output','ask'].forEach(function(t){
+      var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
+    });
+    ge('board-ctx-ask').style.display=name==='ask'?'flex':'none';
+    if(boardCtxItem)loadBoardCtx();
+  }
+
+  function loadBoardCtx(){
+    if(!boardCtxItem)return;
+    var body=ge('board-ctx-body');
+    if(boardCtxTab==='detail'){
+      var it=boardCtxItem;
+      body.innerHTML=
+        '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
+        '<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+(it.assigned_to||'&#x2014;')+'</span></div>'+
+        '<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+(it.description?esc(it.description):'&#x2014;')+'</span></div>'+
+        '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
+        (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'');
+    } else if(boardCtxTab==='output'){
+      body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
+      api('GET','/api/v1/board/'+boardCtxItem.id+'/activity',null)
+        .then(function(resp){
+          var html='';
+          if(resp.item&&resp.item.last_result){
+            html+='<div class="ctx-output">'+esc(resp.item.last_result)+'</div>';
+          } else if(resp.task&&resp.task.status==='dispatched'){
+            html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
+          } else {
+            html+='<div style="color:#475569">No output yet</div>';
+          }
+          if(resp.task){
+            html+='<div class="ctx-row" style="margin-top:.75rem"><span class="ctx-lbl">Task status</span><span class="ctx-val">'+esc(resp.task.status)+'</span></div>';
+            if(resp.task.dispatched_at)html+='<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(resp.task.dispatched_at)+'</span></div>';
+            if(resp.task.completed_at)html+='<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(resp.task.completed_at)+'</span></div>';
+          }
+          body.innerHTML=html;
+        })
+        .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load activity</div>'});
+    } else if(boardCtxTab==='ask'){
+      body.innerHTML='<div style="color:#475569;font-size:.75rem">Ask the assigned bot a question about this item. Replies will appear in chat.</div>';
+    }
+  }
+
+  function boardAsk(){
+    if(!boardCtxItem||!token)return;
+    var content=ge('board-ctx-ask-input').value.trim();
+    if(!content)return;
+    ge('board-ctx-ask-input').value='';
+    api('POST','/api/v1/board/'+boardCtxItem.id+'/ask',{content:content,thread_id:boardCtxThread||''})
+      .then(function(msg){
+        boardCtxThread=msg.thread_id||boardCtxThread;
+        alert('Question sent! Check the Chat tab for the reply.');
+      })
+      .catch(function(e){alert('Failed: '+e.message)});
+  }
+
+  // ── Task context panel ────────────────────────────────────────────────────────
+  function openTaskCtx(task){
+    taskCtxTask=task;
+    var panel=ge('task-ctx');
+    panel.style.height='260px';
+    ge('task-ctx-title').textContent='Task: '+esc(task.bot_name);
+    loadTaskCtx();
+  }
+
+  function closeTaskCtx(){
+    ge('task-ctx').style.height='0';
+    taskCtxTask=null;
+  }
+
+  function loadTaskCtx(){
+    if(!taskCtxTask)return;
+    var body=ge('task-ctx-body');
+    var t=taskCtxTask;
+    var html=
+      '<div class="ctx-row"><span class="ctx-lbl">Bot</span><span class="ctx-val">'+esc(t.bot_name)+'</span></div>'+
+      '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(t.status)+'</span></div>'+
+      '<div class="ctx-row"><span class="ctx-lbl">Source</span><span class="ctx-val">'+(t.source||'&#x2014;')+'</span></div>'+
+      '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(t.created_at)+'</span></div>'+
+      (t.dispatched_at?'<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(t.dispatched_at)+'</span></div>':'')+
+      (t.completed_at?'<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(t.completed_at)+'</span></div>':'')+
+      '<div class="ctx-row"><span class="ctx-lbl">Instruction</span><span class="ctx-val">'+esc(t.instruction)+'</span></div>';
+    if(t.output){
+      html+='<div class="ctx-row" style="margin-top:.5rem"><span class="ctx-lbl">Output</span></div><div class="ctx-output">'+esc(t.output)+'</div>';
+    } else if(t.status==='dispatched'){
+      html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
+    }
+    body.innerHTML=html;
+  }
+
+  function openTaskCtxById(id){
+    var task=allTasksList.find(function(t){return t.id===id});
+    if(task)openTaskCtx(task);
+  }
+
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function refreshAll(){
     loadBoard(); loadTeam(); loadThreads();
@@ -1800,6 +2061,13 @@ const kanbanHTML = `<!DOCTYPE html>
     if(activeTab==='skills')loadSkills();
     if(activeTab==='dlq')loadDLQ();
     if(activeTab==='users')loadUsers();
+    if(boardCtxItem){
+      var cur=allItems.find(function(x){return x.id===boardCtxItem.id});
+      if(cur){boardCtxItem=cur;if(boardCtxTab==='output')loadBoardCtx();}
+    }
+    if(taskCtxTask){
+      api('GET','/api/v1/tasks/'+taskCtxTask.id,null).then(function(t){taskCtxTask=t;loadTaskCtx();}).catch(function(){});
+    }
   }
 
   function startTick(){

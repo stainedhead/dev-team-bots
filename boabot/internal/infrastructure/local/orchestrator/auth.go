@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -28,18 +31,26 @@ type inMemoryUser struct {
 	passwordHash string
 }
 
+// persistedAuthUser is the on-disk representation of a user including the bcrypt hash.
+type persistedAuthUser struct {
+	domain.User
+	PasswordHash string `json:"password_hash"`
+}
+
 // InMemoryAuthProvider implements both httpserver.AuthProvider and domain.UserStore
 // using an in-memory map. It is safe for concurrent use.
 type InMemoryAuthProvider struct {
-	mu        sync.RWMutex
-	users     map[string]*inMemoryUser
-	jwtSecret []byte
+	mu          sync.RWMutex
+	users       map[string]*inMemoryUser
+	jwtSecret   []byte
+	persistPath string
 }
 
 // NewInMemoryAuthProvider creates an InMemoryAuthProvider with an initial admin
 // user hashed with bcrypt. If jwtSecret is empty a random 32-byte hex secret is
-// generated.
-func NewInMemoryAuthProvider(adminPassword, jwtSecret string) (*InMemoryAuthProvider, error) {
+// generated. If persistPath is non-empty, existing users are loaded from that
+// file and every mutation is written back atomically.
+func NewInMemoryAuthProvider(adminPassword, jwtSecret, persistPath string) (*InMemoryAuthProvider, error) {
 	secret := []byte(jwtSecret)
 	if len(secret) == 0 {
 		b := make([]byte, 32)
@@ -66,10 +77,67 @@ func NewInMemoryAuthProvider(adminPassword, jwtSecret string) (*InMemoryAuthProv
 	}
 
 	p := &InMemoryAuthProvider{
-		users:     map[string]*inMemoryUser{"admin": admin},
-		jwtSecret: secret,
+		users:       make(map[string]*inMemoryUser),
+		jwtSecret:   secret,
+		persistPath: persistPath,
+	}
+
+	// Load persisted users; if none exist, seed with the admin account.
+	if persistPath != "" {
+		p.loadFromDisk()
+	}
+	if _, exists := p.users["admin"]; !exists {
+		p.users["admin"] = admin
+		p.persist()
 	}
 	return p, nil
+}
+
+// loadFromDisk reads persisted user state from disk. Caller must not hold lock.
+func (p *InMemoryAuthProvider) loadFromDisk() {
+	data, err := os.ReadFile(p.persistPath)
+	if err != nil {
+		return
+	}
+	var records []persistedAuthUser
+	if err := json.Unmarshal(data, &records); err != nil {
+		return
+	}
+	for _, r := range records {
+		rec := &inMemoryUser{
+			User:         r.User,
+			passwordHash: r.PasswordHash,
+		}
+		rec.User.PasswordHash = ""
+		p.users[r.Username] = rec
+	}
+}
+
+// persist writes all users (including password hashes) to disk atomically.
+// Caller must hold the write lock.
+func (p *InMemoryAuthProvider) persist() {
+	if p.persistPath == "" {
+		return
+	}
+	records := make([]persistedAuthUser, 0, len(p.users))
+	for _, u := range p.users {
+		records = append(records, persistedAuthUser{
+			User:         u.User,
+			PasswordHash: u.passwordHash,
+		})
+	}
+	data, err := json.Marshal(records)
+	if err != nil {
+		return
+	}
+	tmp := p.persistPath + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(p.persistPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil { // 0o600: owner-only, contains hashes
+		return
+	}
+	_ = os.Rename(tmp, p.persistPath)
 }
 
 // ── httpserver.AuthProvider ────────────────────────────────────────────────────
@@ -145,6 +213,7 @@ func (p *InMemoryAuthProvider) SetPassword(_ context.Context, username, newPassw
 	}
 	u.passwordHash = string(hash)
 	u.MustChangePassword = false
+	p.persist()
 	return nil
 }
 
@@ -183,6 +252,7 @@ func (p *InMemoryAuthProvider) Create(_ context.Context, user domain.User) (doma
 		passwordHash: user.PasswordHash,
 	}
 	p.users[user.Username] = rec
+	p.persist()
 
 	result := storedUser
 	result.PasswordHash = ""
@@ -203,6 +273,7 @@ func (p *InMemoryAuthProvider) Update(_ context.Context, user domain.User) (doma
 	user.PasswordHash = ""
 	existing.User = user
 	p.users[user.Username] = existing
+	p.persist()
 
 	result := existing.User
 	result.PasswordHash = ""
@@ -213,6 +284,7 @@ func (p *InMemoryAuthProvider) Update(_ context.Context, user domain.User) (doma
 func (p *InMemoryAuthProvider) Delete(_ context.Context, username string) error {
 	p.mu.Lock()
 	delete(p.users, username)
+	p.persist()
 	p.mu.Unlock()
 	return nil
 }

@@ -53,7 +53,7 @@ func (m *mockQueue) getSent() []sentMsg {
 
 func TestLocalTaskDispatcher_Dispatch_Immediate(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	q := &mockQueue{}
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
@@ -101,7 +101,7 @@ func TestLocalTaskDispatcher_Dispatch_Immediate(t *testing.T) {
 
 func TestLocalTaskDispatcher_Dispatch_ImmediateForPastScheduledAt(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	q := &mockQueue{}
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
@@ -122,7 +122,7 @@ func TestLocalTaskDispatcher_Dispatch_ImmediateForPastScheduledAt(t *testing.T) 
 
 func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	q := &mockQueue{}
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
@@ -167,7 +167,7 @@ func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 
 func TestLocalTaskDispatcher_Dispatch_MessageContainsInstruction(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	q := &mockQueue{}
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
@@ -196,7 +196,7 @@ func TestLocalTaskDispatcher_Dispatch_MessageContainsInstruction(t *testing.T) {
 
 func TestLocalTaskDispatcher_Dispatch_StoreIsUpdated(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryDirectTaskStore()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
 	q := &mockQueue{}
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()

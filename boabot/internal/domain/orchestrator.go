@@ -48,6 +48,8 @@ type WorkItem struct {
 	Status         WorkItemStatus `json:"status"`
 	AssignedTo     string         `json:"assigned_to"`
 	ActiveTaskID   string         `json:"active_task_id,omitempty"`
+	LastResult     string         `json:"last_result,omitempty"`
+	LastResultAt   *time.Time     `json:"last_result_at,omitempty"`
 	CreatedBy      string         `json:"created_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
@@ -63,8 +65,9 @@ const (
 )
 
 type WorkItemFilter struct {
-	AssignedTo string
-	Status     WorkItemStatus
+	AssignedTo   string
+	Status       WorkItemStatus
+	ActiveTaskID string // if non-empty, only items where ActiveTaskID matches
 }
 
 // UserStore manages human operator accounts.

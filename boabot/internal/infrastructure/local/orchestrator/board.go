@@ -6,7 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -16,17 +19,62 @@ import (
 // ErrWorkItemNotFound is returned when a work item ID does not exist in the store.
 var ErrWorkItemNotFound = errors.New("orchestrator: work item not found")
 
-// InMemoryBoardStore implements domain.BoardStore with an in-memory map.
+// InMemoryBoardStore implements domain.BoardStore with an in-memory map and
+// optional file persistence.
 type InMemoryBoardStore struct {
-	mu    sync.RWMutex
-	items map[string]domain.WorkItem
+	mu          sync.RWMutex
+	items       map[string]domain.WorkItem
+	persistPath string
 }
 
 // NewInMemoryBoardStore creates a new InMemoryBoardStore.
-func NewInMemoryBoardStore() *InMemoryBoardStore {
-	return &InMemoryBoardStore{
-		items: make(map[string]domain.WorkItem),
+// If persistPath is non-empty, existing data is loaded from that file and every
+// mutation is written back atomically.
+func NewInMemoryBoardStore(persistPath string) *InMemoryBoardStore {
+	s := &InMemoryBoardStore{
+		items:       make(map[string]domain.WorkItem),
+		persistPath: persistPath,
 	}
+	if persistPath != "" {
+		s.loadFromDisk()
+	}
+	return s
+}
+
+func (s *InMemoryBoardStore) loadFromDisk() {
+	data, err := os.ReadFile(s.persistPath)
+	if err != nil {
+		return
+	}
+	var items []domain.WorkItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		return
+	}
+	for _, it := range items {
+		s.items[it.ID] = it
+	}
+}
+
+func (s *InMemoryBoardStore) persist() {
+	if s.persistPath == "" {
+		return
+	}
+	items := make([]domain.WorkItem, 0, len(s.items))
+	for _, it := range s.items {
+		items = append(items, it)
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return
+	}
+	tmp := s.persistPath + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, s.persistPath)
 }
 
 // Create stores a new WorkItem with a generated ID and sets UpdatedAt.
@@ -40,6 +88,7 @@ func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (do
 
 	s.mu.Lock()
 	s.items[id] = item
+	s.persist()
 	s.mu.Unlock()
 	return item, nil
 }
@@ -53,6 +102,7 @@ func (s *InMemoryBoardStore) Update(_ context.Context, item domain.WorkItem) (do
 		return domain.WorkItem{}, ErrWorkItemNotFound
 	}
 	s.items[item.ID] = item
+	s.persist()
 	return item, nil
 }
 
@@ -81,12 +131,15 @@ func (s *InMemoryBoardStore) List(_ context.Context, filter domain.WorkItemFilte
 		if filter.AssignedTo != "" && item.AssignedTo != filter.AssignedTo {
 			continue
 		}
+		if filter.ActiveTaskID != "" && item.ActiveTaskID != filter.ActiveTaskID {
+			continue
+		}
 		result = append(result, item)
 	}
 	return result, nil
 }
 
-// newID generates a random 8-byte hex string for use as an item ID.
+// newID generates a random 8-byte hex string for use as an ID.
 func newID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {

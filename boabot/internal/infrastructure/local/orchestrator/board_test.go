@@ -11,7 +11,7 @@ import (
 
 func TestInMemoryBoardStore_Create(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	item := domain.WorkItem{
@@ -37,7 +37,7 @@ func TestInMemoryBoardStore_Create(t *testing.T) {
 
 func TestInMemoryBoardStore_Create_SetsUpdatedAt(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	before := time.Now()
@@ -55,7 +55,7 @@ func TestInMemoryBoardStore_Create_SetsUpdatedAt(t *testing.T) {
 
 func TestInMemoryBoardStore_Create_UniqueIDs(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	ids := make(map[string]bool)
@@ -74,7 +74,7 @@ func TestInMemoryBoardStore_Create_UniqueIDs(t *testing.T) {
 
 func TestInMemoryBoardStore_Get(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	item := domain.WorkItem{Title: "get me", Status: domain.WorkItemStatusBacklog}
@@ -91,7 +91,7 @@ func TestInMemoryBoardStore_Get(t *testing.T) {
 
 func TestInMemoryBoardStore_Get_NotFound(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	_, err := store.Get(ctx, "nonexistent-id")
@@ -102,7 +102,7 @@ func TestInMemoryBoardStore_Get_NotFound(t *testing.T) {
 
 func TestInMemoryBoardStore_Update(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	item := domain.WorkItem{Title: "original", Status: domain.WorkItemStatusBacklog}
@@ -124,7 +124,7 @@ func TestInMemoryBoardStore_Update(t *testing.T) {
 
 func TestInMemoryBoardStore_Update_NotFound(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	item := domain.WorkItem{ID: "nonexistent", Title: "x", Status: domain.WorkItemStatusBacklog}
@@ -136,7 +136,7 @@ func TestInMemoryBoardStore_Update_NotFound(t *testing.T) {
 
 func TestInMemoryBoardStore_List_NoFilter(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	for range 3 {
@@ -154,7 +154,7 @@ func TestInMemoryBoardStore_List_NoFilter(t *testing.T) {
 
 func TestInMemoryBoardStore_List_FilterByStatus(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.WorkItem{Title: "backlog", Status: domain.WorkItemStatusBacklog})
@@ -175,7 +175,7 @@ func TestInMemoryBoardStore_List_FilterByStatus(t *testing.T) {
 
 func TestInMemoryBoardStore_List_FilterByAssignedTo(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.WorkItem{Title: "alice item", Status: domain.WorkItemStatusBacklog, AssignedTo: "alice"})
@@ -195,7 +195,7 @@ func TestInMemoryBoardStore_List_FilterByAssignedTo(t *testing.T) {
 
 func TestInMemoryBoardStore_List_FilterByStatusAndAssignedTo(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	_, _ = store.Create(ctx, domain.WorkItem{Title: "alice backlog", Status: domain.WorkItemStatusBacklog, AssignedTo: "alice"})
@@ -216,7 +216,7 @@ func TestInMemoryBoardStore_List_FilterByStatusAndAssignedTo(t *testing.T) {
 
 func TestInMemoryBoardStore_List_ReturnsNonNilSliceWhenEmpty(t *testing.T) {
 	t.Parallel()
-	store := orchestrator.NewInMemoryBoardStore()
+	store := orchestrator.NewInMemoryBoardStore("")
 	ctx := context.Background()
 
 	items, err := store.List(ctx, domain.WorkItemFilter{})

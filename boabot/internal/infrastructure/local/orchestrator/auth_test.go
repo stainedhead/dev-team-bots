@@ -12,7 +12,7 @@ import (
 
 func TestNewInMemoryAuthProvider_CreatesAdminUser(t *testing.T) {
 	t.Parallel()
-	auth, err := orchestrator.NewInMemoryAuthProvider("adminpass", "")
+	auth, err := orchestrator.NewInMemoryAuthProvider("adminpass", "", "")
 	if err != nil {
 		t.Fatalf("NewInMemoryAuthProvider: %v", err)
 	}
@@ -32,8 +32,8 @@ func TestNewInMemoryAuthProvider_CreatesAdminUser(t *testing.T) {
 
 func TestNewInMemoryAuthProvider_GeneratesJWTSecretWhenEmpty(t *testing.T) {
 	t.Parallel()
-	auth1, err1 := orchestrator.NewInMemoryAuthProvider("pass", "")
-	auth2, err2 := orchestrator.NewInMemoryAuthProvider("pass", "")
+	auth1, err1 := orchestrator.NewInMemoryAuthProvider("pass", "", "")
+	auth2, err2 := orchestrator.NewInMemoryAuthProvider("pass", "", "")
 	if err1 != nil || err2 != nil {
 		t.Fatalf("NewInMemoryAuthProvider errors: %v, %v", err1, err2)
 	}
@@ -55,7 +55,7 @@ func TestNewInMemoryAuthProvider_GeneratesJWTSecretWhenEmpty(t *testing.T) {
 
 func TestInMemoryAuthProvider_Login_Success(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret", "")
 
 	tok, err := auth.Login("admin", "mypassword")
 	if err != nil {
@@ -68,7 +68,7 @@ func TestInMemoryAuthProvider_Login_Success(t *testing.T) {
 
 func TestInMemoryAuthProvider_Login_WrongPassword(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret", "")
 
 	_, err := auth.Login("admin", "wrongpassword")
 	if err == nil {
@@ -81,7 +81,7 @@ func TestInMemoryAuthProvider_Login_WrongPassword(t *testing.T) {
 
 func TestInMemoryAuthProvider_Login_UserNotFound(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret", "")
 
 	_, err := auth.Login("nonexistent", "any")
 	if err == nil {
@@ -94,7 +94,7 @@ func TestInMemoryAuthProvider_Login_UserNotFound(t *testing.T) {
 
 func TestInMemoryAuthProvider_Login_DisabledUser(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("mypassword", "supersecret", "")
 	ctx := context.Background()
 
 	// Create a user and disable them
@@ -119,7 +119,7 @@ func TestInMemoryAuthProvider_Login_DisabledUser(t *testing.T) {
 
 func TestInMemoryAuthProvider_ValidateToken_Success(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret123")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret123", "")
 
 	tok, _ := auth.Login("admin", "pass")
 	claims, err := auth.ValidateToken(tok.AccessToken)
@@ -136,7 +136,7 @@ func TestInMemoryAuthProvider_ValidateToken_Success(t *testing.T) {
 
 func TestInMemoryAuthProvider_ValidateToken_Invalid(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret123")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret123", "")
 
 	_, err := auth.ValidateToken("not-a-valid-jwt")
 	if err == nil {
@@ -149,7 +149,7 @@ func TestInMemoryAuthProvider_ValidateToken_Invalid(t *testing.T) {
 
 func TestInMemoryAuthProvider_SetPassword(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("initial", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("initial", "secret", "")
 	ctx := context.Background()
 
 	if err := auth.SetPassword(ctx, "admin", "newpassword"); err != nil {
@@ -171,7 +171,7 @@ func TestInMemoryAuthProvider_SetPassword(t *testing.T) {
 
 func TestInMemoryAuthProvider_VerifyPassword_Success(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("thepassword", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("thepassword", "secret", "")
 	ctx := context.Background()
 
 	if err := auth.VerifyPassword(ctx, "admin", "thepassword"); err != nil {
@@ -181,7 +181,7 @@ func TestInMemoryAuthProvider_VerifyPassword_Success(t *testing.T) {
 
 func TestInMemoryAuthProvider_VerifyPassword_Wrong(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("thepassword", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("thepassword", "secret", "")
 	ctx := context.Background()
 
 	err := auth.VerifyPassword(ctx, "admin", "wrongpassword")
@@ -192,7 +192,7 @@ func TestInMemoryAuthProvider_VerifyPassword_Wrong(t *testing.T) {
 
 func TestInMemoryAuthProvider_VerifyPassword_NotFound(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("pass", "secret", "")
 	ctx := context.Background()
 
 	err := auth.VerifyPassword(ctx, "nobody", "any")
@@ -205,7 +205,7 @@ func TestInMemoryAuthProvider_VerifyPassword_NotFound(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Create(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	user := orchestratorTestUser("alice", "user")
@@ -223,7 +223,7 @@ func TestInMemoryAuthProvider_UserStore_Create(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Create_SetsCreatedAt(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	user := orchestratorTestUser("bob", "user")
@@ -241,7 +241,7 @@ func TestInMemoryAuthProvider_UserStore_Create_SetsCreatedAt(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Get_NoPasswordHash(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	got, err := auth.Get(ctx, "admin")
@@ -255,7 +255,7 @@ func TestInMemoryAuthProvider_UserStore_Get_NoPasswordHash(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Get_NotFound(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	_, err := auth.Get(ctx, "nobody")
@@ -266,7 +266,7 @@ func TestInMemoryAuthProvider_UserStore_Get_NotFound(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Update(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	user, _ := auth.Get(ctx, "admin")
@@ -282,7 +282,7 @@ func TestInMemoryAuthProvider_UserStore_Update(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_Delete(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	_, _ = auth.Create(ctx, orchestratorTestUser("todelete", "user"))
@@ -298,7 +298,7 @@ func TestInMemoryAuthProvider_UserStore_Delete(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_List(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	// admin already exists; add another
@@ -315,7 +315,7 @@ func TestInMemoryAuthProvider_UserStore_List(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_List_NoPasswordHashes(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	users, err := auth.List(ctx)
@@ -331,7 +331,7 @@ func TestInMemoryAuthProvider_UserStore_List_NoPasswordHashes(t *testing.T) {
 
 func TestInMemoryAuthProvider_UserStore_List_SortedByUsername(t *testing.T) {
 	t.Parallel()
-	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret")
+	auth, _ := orchestrator.NewInMemoryAuthProvider("adminpass", "secret", "")
 	ctx := context.Background()
 
 	_, _ = auth.Create(ctx, orchestratorTestUser("zed", "user"))

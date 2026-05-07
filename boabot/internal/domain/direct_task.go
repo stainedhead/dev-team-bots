@@ -26,6 +26,8 @@ type DirectTask struct {
 	Status       DirectTaskStatus `json:"status"`
 	ScheduledAt  *time.Time       `json:"scheduled_at,omitempty"`
 	DispatchedAt *time.Time       `json:"dispatched_at,omitempty"`
+	CompletedAt  *time.Time       `json:"completed_at,omitempty"`
+	Output       string           `json:"output,omitempty"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
@@ -40,6 +42,8 @@ const (
 	DirectTaskStatusDispatched DirectTaskStatus = "dispatched"
 	// DirectTaskStatusFailed means the task could not be dispatched.
 	DirectTaskStatusFailed DirectTaskStatus = "failed"
+	// DirectTaskStatusCompleted means the task has been completed and output is available.
+	DirectTaskStatusCompleted DirectTaskStatus = "completed"
 )
 
 // DirectTaskStore persists and retrieves direct tasks.
@@ -49,6 +53,8 @@ type DirectTaskStore interface {
 	Get(ctx context.Context, id string) (DirectTask, error)
 	List(ctx context.Context, botName string) ([]DirectTask, error)
 	ListAll(ctx context.Context) ([]DirectTask, error)
+	// ListBySource returns all tasks with the given source, newest-first.
+	ListBySource(ctx context.Context, source DirectTaskSource) ([]DirectTask, error)
 }
 
 // TaskDispatcher assigns immediate or scheduled tasks to bots.

@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -13,17 +16,62 @@ import (
 // ErrDirectTaskNotFound is returned when a task ID does not exist in the store.
 var ErrDirectTaskNotFound = errors.New("orchestrator: direct task not found")
 
-// InMemoryDirectTaskStore implements domain.DirectTaskStore with an in-memory map.
+// InMemoryDirectTaskStore implements domain.DirectTaskStore with an in-memory
+// map and optional file persistence.
 type InMemoryDirectTaskStore struct {
-	mu    sync.RWMutex
-	tasks map[string]domain.DirectTask
+	mu          sync.RWMutex
+	tasks       map[string]domain.DirectTask
+	persistPath string
 }
 
 // NewInMemoryDirectTaskStore creates a new InMemoryDirectTaskStore.
-func NewInMemoryDirectTaskStore() *InMemoryDirectTaskStore {
-	return &InMemoryDirectTaskStore{
-		tasks: make(map[string]domain.DirectTask),
+// If persistPath is non-empty, existing data is loaded from that file and every
+// mutation is written back atomically.
+func NewInMemoryDirectTaskStore(persistPath string) *InMemoryDirectTaskStore {
+	s := &InMemoryDirectTaskStore{
+		tasks:       make(map[string]domain.DirectTask),
+		persistPath: persistPath,
 	}
+	if persistPath != "" {
+		s.loadFromDisk()
+	}
+	return s
+}
+
+func (s *InMemoryDirectTaskStore) loadFromDisk() {
+	data, err := os.ReadFile(s.persistPath)
+	if err != nil {
+		return
+	}
+	var tasks []domain.DirectTask
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		return
+	}
+	for _, t := range tasks {
+		s.tasks[t.ID] = t
+	}
+}
+
+func (s *InMemoryDirectTaskStore) persist() {
+	if s.persistPath == "" {
+		return
+	}
+	tasks := make([]domain.DirectTask, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		tasks = append(tasks, t)
+	}
+	data, err := json.Marshal(tasks)
+	if err != nil {
+		return
+	}
+	tmp := s.persistPath + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, s.persistPath)
 }
 
 // Create stores a new DirectTask with a generated ID and sets CreatedAt/UpdatedAt.
@@ -39,6 +87,7 @@ func (s *InMemoryDirectTaskStore) Create(_ context.Context, task domain.DirectTa
 
 	s.mu.Lock()
 	s.tasks[id] = task
+	s.persist()
 	s.mu.Unlock()
 	return task, nil
 }
@@ -53,6 +102,7 @@ func (s *InMemoryDirectTaskStore) Update(_ context.Context, task domain.DirectTa
 	}
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[task.ID] = task
+	s.persist()
 	return task, nil
 }
 
@@ -68,8 +118,8 @@ func (s *InMemoryDirectTaskStore) Get(_ context.Context, id string) (domain.Dire
 	return task, nil
 }
 
-// List returns all tasks for the given botName. If botName is empty, all tasks are returned.
-// Always returns a non-nil slice.
+// List returns all tasks for the given botName, newest-first.
+// If botName is empty, all tasks are returned.
 func (s *InMemoryDirectTaskStore) List(_ context.Context, botName string) ([]domain.DirectTask, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -81,11 +131,13 @@ func (s *InMemoryDirectTaskStore) List(_ context.Context, botName string) ([]dom
 		}
 		result = append(result, task)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
 	return result, nil
 }
 
-// ListAll returns all tasks sorted newest first (by CreatedAt descending).
-// Always returns a non-nil slice.
+// ListAll returns all tasks sorted newest-first. Always returns a non-nil slice.
 func (s *InMemoryDirectTaskStore) ListAll(_ context.Context) ([]domain.DirectTask, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -93,6 +145,23 @@ func (s *InMemoryDirectTaskStore) ListAll(_ context.Context) ([]domain.DirectTas
 	result := make([]domain.DirectTask, 0, len(s.tasks))
 	for _, task := range s.tasks {
 		result = append(result, task)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+// ListBySource returns all tasks with the given source, sorted newest-first.
+func (s *InMemoryDirectTaskStore) ListBySource(_ context.Context, source domain.DirectTaskSource) ([]domain.DirectTask, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]domain.DirectTask, 0)
+	for _, task := range s.tasks {
+		if task.Source == source {
+			result = append(result, task)
+		}
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.After(result[j].CreatedAt)

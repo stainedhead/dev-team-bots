@@ -65,6 +65,10 @@ func (f *fakeDirectTaskStore) ListAll(ctx context.Context) ([]domain.DirectTask,
 	}, nil
 }
 
+func (f *fakeDirectTaskStore) ListBySource(_ context.Context, _ domain.DirectTaskSource) ([]domain.DirectTask, error) {
+	return []domain.DirectTask{}, nil
+}
+
 type fakeTaskDispatcher struct {
 	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource) (domain.DirectTask, error)
 }

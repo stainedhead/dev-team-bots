@@ -573,3 +573,48 @@ func (c *HTTPClient) ChatSend(ctx context.Context, botName, content, threadID st
 	var out domain.ChatMessage
 	return out, decodeJSON(resp, &out)
 }
+
+// ── Plugins ───────────────────────────────────────────────────────────────────
+
+func (c *HTTPClient) PluginList(ctx context.Context) ([]domain.Plugin, error) {
+	resp, err := c.do(ctx, http.MethodGet, "plugins", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Plugin
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) PluginGet(ctx context.Context, id string) (domain.Plugin, error) {
+	resp, err := c.do(ctx, http.MethodGet, "plugins/"+id, nil)
+	if err != nil {
+		return domain.Plugin{}, err
+	}
+	var out domain.Plugin
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) PluginInstall(ctx context.Context, req domain.InstallPluginRequest) (domain.Plugin, error) {
+	resp, err := c.do(ctx, http.MethodPost, "plugins", req)
+	if err != nil {
+		return domain.Plugin{}, err
+	}
+	var out domain.Plugin
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) PluginRemove(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "plugins/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
+func (c *HTTPClient) PluginReload(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodPost, "plugins/"+id+"/reload", nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}

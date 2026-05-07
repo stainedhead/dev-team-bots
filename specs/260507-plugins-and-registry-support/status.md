@@ -16,7 +16,7 @@
 | 3 | MCP Client Integration | ✅ Done | |
 | 4 | Admin UI | ✅ Done | Plugins & Skills tab added |
 | 5 | Default Registry Wiring | ✅ Done | Team manager wired |
-| 6 | boabotctl Plugin Subcommands | 🔄 In Progress | |
+| 6 | boabotctl Plugin Subcommands | ✅ Done | |
 
 ---
 

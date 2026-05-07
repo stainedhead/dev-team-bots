@@ -41,6 +41,7 @@ func newRootCmd() *cobra.Command {
 		commands.NewProfileCmd(c, os.Stdout),
 		commands.NewDLQCmd(c, os.Stdout),
 		commands.NewMemoryCmd(c, os.Stdout),
+		commands.NewPluginCmd(c, os.Stdout),
 		commands.NewConfigCmd(),
 	)
 

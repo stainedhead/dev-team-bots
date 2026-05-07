@@ -148,3 +148,21 @@ func TestManageUseCase_Remove_CallsStore(t *testing.T) {
 		t.Errorf("expected Remove called with xyz, got %q", calledID)
 	}
 }
+
+func TestManageUseCase_Update_CallsStore(t *testing.T) {
+	var calledID string
+	store := &mocks.PluginStore{
+		UpdateFn: func(_ context.Context, id string, _ domain.PluginManifest, _ []byte) error {
+			calledID = id
+			return nil
+		},
+	}
+	uc := plugin.NewManageUseCase(store)
+	manifest := domain.PluginManifest{Name: "new-version", Version: "2.0.0"}
+	if err := uc.Update(context.Background(), "xyz", manifest, []byte("data"), "admin"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if calledID != "xyz" {
+		t.Errorf("expected Update called with xyz, got %q", calledID)
+	}
+}

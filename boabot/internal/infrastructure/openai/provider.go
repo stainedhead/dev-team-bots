@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
+
+var thinkTagRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // Provider implements domain.ModelProvider against any OpenAI-compatible chat
 // completions endpoint (e.g. Ollama at http://localhost:11434/v1).
@@ -38,20 +41,24 @@ func NewProvider(endpoint, modelID string) (*Provider, error) {
 
 // Invoke sends a chat completion request and returns the first choice.
 func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
-	messages := buildMessages(req)
-
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 4096
 	}
 
-	body, err := json.Marshal(map[string]any{
+	bodyMap := map[string]any{
 		"model":       p.modelID,
-		"messages":    messages,
+		"messages":    buildMessages(req),
 		"max_tokens":  maxTokens,
 		"temperature": req.Temperature,
 		"stream":      false,
-	})
+	}
+	if len(req.Tools) > 0 {
+		bodyMap["tools"] = buildToolDefinitions(req.Tools)
+		bodyMap["tool_choice"] = "auto"
+	}
+
+	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		return domain.InvokeResponse{}, fmt.Errorf("openai provider: marshal request: %w", err)
 	}
@@ -75,7 +82,9 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"` // qwen3/deepseek thinking models
+				ToolCalls        []rawToolCall `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -91,9 +100,14 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 		return domain.InvokeResponse{}, errors.New("openai provider: response contained no choices")
 	}
 
+	choice := result.Choices[0]
+	toolCalls := parseToolCalls(choice.Message.ToolCalls)
+	content := extractContent(choice.Message.Content, choice.Message.ReasoningContent)
+
 	return domain.InvokeResponse{
-		Content:    result.Choices[0].Message.Content,
-		StopReason: result.Choices[0].FinishReason,
+		Content:    content,
+		ToolCalls:  toolCalls,
+		StopReason: choice.FinishReason,
 		Usage: domain.TokenUsage{
 			InputTokens:  result.Usage.PromptTokens,
 			OutputTokens: result.Usage.CompletionTokens,
@@ -101,13 +115,100 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 	}, nil
 }
 
-func buildMessages(req domain.InvokeRequest) []map[string]string {
-	msgs := make([]map[string]string, 0, len(req.Messages)+1)
+// rawToolCall is the wire format returned by the OpenAI API.
+type rawToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"` // JSON-encoded string
+	} `json:"function"`
+}
+
+// parseToolCalls converts raw OpenAI tool calls to domain.ToolCall values.
+func parseToolCalls(raw []rawToolCall) []domain.ToolCall {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]domain.ToolCall, 0, len(raw))
+	for _, tc := range raw {
+		var args map[string]any
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		out = append(out, domain.ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: args,
+		})
+	}
+	return out
+}
+
+// buildToolDefinitions converts domain.MCPTool values to the OpenAI tool format.
+func buildToolDefinitions(tools []domain.MCPTool) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  t.InputSchema,
+			},
+		})
+	}
+	return out
+}
+
+// buildMessages converts domain.ProviderMessage values to the OpenAI wire format.
+// Assistant messages with ToolCalls are serialised with a tool_calls array.
+// Tool result messages (role "tool") include tool_call_id and content.
+func buildMessages(req domain.InvokeRequest) []map[string]any {
+	msgs := make([]map[string]any, 0, len(req.Messages)+1)
 	if req.SystemPrompt != "" {
-		msgs = append(msgs, map[string]string{"role": "system", "content": req.SystemPrompt})
+		msgs = append(msgs, map[string]any{"role": "system", "content": req.SystemPrompt})
 	}
 	for _, m := range req.Messages {
-		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+		switch {
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			rawCalls := make([]map[string]any, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Args)
+				rawCalls = append(rawCalls, map[string]any{
+					"id":   tc.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      tc.Name,
+						"arguments": string(argsJSON),
+					},
+				})
+			}
+			msgs = append(msgs, map[string]any{
+				"role":       "assistant",
+				"content":    nil,
+				"tool_calls": rawCalls,
+			})
+		case m.Role == "tool":
+			msgs = append(msgs, map[string]any{
+				"role":         "tool",
+				"tool_call_id": m.ToolCallID,
+				"content":      m.Content,
+			})
+		default:
+			msgs = append(msgs, map[string]any{"role": m.Role, "content": m.Content})
+		}
 	}
 	return msgs
+}
+
+// extractContent strips <think> blocks from content and falls back to
+// reasoningContent when the visible content is empty (thinking-only responses).
+func extractContent(content, reasoningContent string) string {
+	stripped := strings.TrimSpace(thinkTagRE.ReplaceAllString(content, ""))
+	if stripped != "" {
+		return stripped
+	}
+	if reasoningContent != "" {
+		return reasoningContent
+	}
+	return content
 }

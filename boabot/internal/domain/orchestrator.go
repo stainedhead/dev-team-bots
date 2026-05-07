@@ -111,3 +111,18 @@ const (
 	UserRoleAdmin UserRole = "admin"
 	UserRoleUser  UserRole = "user"
 )
+
+// AskRequest is a mid-task question directed at a bot that is actively running
+// a board item. The bot answers between tool-call iterations and calls ReplyFn
+// exactly once with its reply.
+type AskRequest struct {
+	Question string
+	ReplyFn  func(reply string)
+}
+
+// AskRouter routes mid-task user questions to the bot handling a board item.
+type AskRouter interface {
+	// Enqueue sends an ask to the named bot. Returns false if the bot is
+	// unavailable or its buffer is full.
+	Enqueue(botName string, req AskRequest) bool
+}

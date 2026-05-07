@@ -153,7 +153,7 @@ func (c *HTTPClient) BoardUpdate(ctx context.Context, id string, req domain.Upda
 }
 
 func (c *HTTPClient) BoardAssign(ctx context.Context, id, botName string) (domain.WorkItem, error) {
-	body := map[string]string{"bot_id": botName}
+	body := map[string]string{"bot_name": botName}
 	resp, err := c.do(ctx, http.MethodPost, "board/"+id+"/assign", body)
 	if err != nil {
 		return domain.WorkItem{}, err

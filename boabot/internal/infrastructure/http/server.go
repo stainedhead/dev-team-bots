@@ -463,13 +463,18 @@ func (s *Server) handleBoardAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		BotID string `json:"bot_id"`
+		BotName string `json:"bot_name"`
+		BotID   string `json:"bot_id"` // legacy alias
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	existing.AssignedTo = req.BotID
+	name := req.BotName
+	if name == "" {
+		name = req.BotID
+	}
+	existing.AssignedTo = name
 	existing.UpdatedAt = time.Now().UTC()
 	updated, err := s.cfg.Board.Update(r.Context(), existing)
 	if err != nil {

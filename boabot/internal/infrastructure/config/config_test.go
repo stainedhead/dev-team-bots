@@ -149,8 +149,6 @@ models:
 tools:
   allowed_tools:
     - shell
-  http_allowed_hosts:
-    - example.com
 budget:
   token_spend_daily: 100000
   tool_calls_hourly: 50

@@ -28,6 +28,22 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 - [`user-docs/subteam-spawning.md`](user-docs/subteam-spawning.md) — tech-lead subteam spawning
 - [`user-docs/pool-management.md`](user-docs/pool-management.md) — orchestrator tech-lead pool
 
+### Plugin Registry
+
+- [`user-docs/plugins-getting-started.md`](user-docs/plugins-getting-started.md) — install your first plugin
+- [`user-docs/plugins-configuration.md`](user-docs/plugins-configuration.md) — config reference for the plugin system
+- [`user-docs/plugins-api.md`](user-docs/plugins-api.md) — REST API reference (all 14 endpoints)
+- [`user-docs/plugins-manifest.md`](user-docs/plugins-manifest.md) — `plugin.yaml` format reference
+
+## Plugin Registry
+
+Admins can install versioned capability packages from one or more HTTPS-hosted registries. Each plugin provides MCP tools that are dynamically available to all bots.
+
+- Default registry: `stainedhead/shared-plugins` (trusted).
+- Trusted-registry plugins activate immediately after checksum verification; untrusted-registry plugins require admin approval.
+- Install, approve, reload, and remove plugins via the admin UI or `boabotctl plugin` commands.
+- Plugin archives are extracted atomically with SHA-256 checksum verification, zip-slip protection, and a 50 MB size cap.
+
 ## Development
 
 See [`AGENTS.md`](AGENTS.md) for package structure and [`CLAUDE.md`](CLAUDE.md) for Claude Code guidance.

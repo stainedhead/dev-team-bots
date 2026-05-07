@@ -98,6 +98,32 @@ Module-specific decisions. For system-level decisions see root [`docs/architectu
 
 ---
 
+## ADR-B012 — Static file registry protocol rather than a hosted service
+
+**Decision:** Plugin registries are static HTTPS file catalogs. A registry is any HTTPS origin that serves an `index.json` file at its root. Manifests and archive download URLs are absolute HTTPS links embedded in `index.json`. The boabot runtime fetches these directly using stdlib `net/http`; no registry server software or database is required to host a registry.
+
+**Rationale:** A hosted registry service would add operational complexity (servers to run, databases to maintain, APIs to version) with no benefit at current scale. A GitHub repository with raw file access serves as a fully functional first-party registry at zero additional cost. The static protocol is also compatible with S3, GitHub Pages, and any CDN. The only requirement is anonymous HTTPS access, which is universally available.
+
+**Trust model is in the client, not the server.** Each registry carries a `trusted` flag in the local configuration. This means the same registry URL can be trusted by one operator and untrusted by another without any server-side change. The trust decision is entirely local and does not require the registry to signal its own trustworthiness.
+
+**Rejected:** Hosted registry service with search, ratings, and version management (operational overhead exceeds benefit for current scale); private/authenticated registries (unnecessary complexity; operator deployments that need privacy can self-host on a private HTTPS origin and restrict network access at the infrastructure level).
+
+---
+
+## ADR-B013 — In-memory index cache in the RegistryManager adapter, not the application layer
+
+**Decision:** The 5-minute TTL cache for registry indexes is held inside `HTTPRegistryManager` (infrastructure layer), not in a cache managed by the application use case.
+
+**Rationale:** The application use case (`InstallUseCase`, `RegistryUseCase`) is stateless by design — it orchestrates interfaces without retaining mutable state. Placing the cache in the application layer would require the use case to hold a map, protected by a mutex, and to manage TTL expiry logic — none of which is business logic. The `RegistryManager` interface already abstracts the concept of "fetch the index for this registry", and whether that fetch goes to the network or memory is purely an infrastructure concern.
+
+Keeping the cache in the adapter also means test doubles (`mocks.MockRegistryManager`) return whatever the test configures without needing to worry about cache state.
+
+**`force` parameter.** `FetchIndex(ctx, url, force bool)` is the mechanism by which the application or admin can bypass the cache — for example, on "reload" actions in the admin UI. This pushes the cache-invalidation decision to the caller without exposing cache internals.
+
+**Rejected:** Application-layer cache (mixes infrastructure state into business logic; complicates unit testing); no cache at all (every install hits the network; slow user experience and fragile under registry unavailability); Redis or shared cache (unnecessary external dependency for a single-process runtime).
+
+---
+
 ## ADR-B011 — Orchestrator pool management via board hook rather than polling
 
 **Decision:** `TechLeadPool.Allocate` and `TechLeadPool.Deallocate` are called directly from the orchestrator's board mutation path when an item transitions into or out of `in-progress`. The pool does not poll the board for state changes.

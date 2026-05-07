@@ -257,6 +257,61 @@ Field types follow `domain.PoolEntry`. `Status` values: `idle`, `allocated`, `te
 
 If the pool is not configured (nil), the endpoint returns `{"pool": []}` with status 200.
 
+## Plugin System Architecture
+
+### New Packages
+
+| Package | Purpose |
+|---|---|
+| `internal/domain/plugin.go` | All plugin domain types and interfaces: `Plugin`, `PluginStatus`, `PluginManifest`, `PluginProvides`, `PluginPermissions`, `PluginRegistry`, `RegistryIndex`, `RegistryEntry`, `InstallPluginRequest`, `AddRegistryRequest`, `PluginStore` (interface), `RegistryManager` (interface) |
+| `internal/application/plugin/install.go` | `InstallUseCase` — orchestrates the full install path: look up registry → fetch index → locate entry → fetch manifest → fetch archive → delegate to `PluginStore.Install` → emit audit log |
+| `internal/application/plugin/manage.go` | `ManageUseCase` — wraps all post-install lifecycle operations (List, Get, Approve, Reject, Enable, Disable, Reload, Remove) with audit logging |
+| `internal/application/plugin/registry.go` | Registry management use case: List, Add, Remove, FetchIndex — thin orchestration over `RegistryManager` |
+| `internal/infrastructure/local/plugin/store.go` | `LocalPluginStore` — filesystem-backed `PluginStore`. Manages an in-memory index (`map[string]domain.Plugin`) protected by `sync.RWMutex`. On startup, scans `install_dir` for subdirectories containing `status.json` and `plugin.yaml`; skips corrupt or missing files without crashing. |
+| `internal/infrastructure/local/plugin/installer.go` | `Extract` — atomic tar.gz extraction: verify SHA-256 → extract to `<plugin-name>-tmp` → rename to `<plugin-name>`. Enforces zip-slip protection (path prefix check per member) and 50 MB total size cap. Cleanup on any error deletes the temp directory. |
+| `internal/infrastructure/http/registry_client.go` | `HTTPRegistryManager` — implements `domain.RegistryManager`. Fetches `<registry-url>/index.json` with a 10s timeout, caching results in a `map[string]cachedIndex` (5-min TTL). Fetches manifests (YAML or JSON, auto-detected) and archives. Persists runtime-added registries to `install_dir/registries.json`. |
+
+### Modified Packages
+
+| Package | Change |
+|---|---|
+| `internal/infrastructure/local/mcp/client.go` | `ListTools` now appends active plugin tools to the built-in tool list, detecting and skipping name collisions with a warning. `CallTool` checks the plugin store first; if the named tool belongs to an active plugin, the plugin's entrypoint is executed as a subprocess with args passed as JSON on stdin. Subprocess timeout: 30s. |
+| `internal/infrastructure/http/server.go` | Registers 14 plugin/registry endpoints (4 registry + 10 plugin) when `Config.Plugins` is non-nil. All write operations require admin role. Read endpoints (`GET /api/v1/plugins`, `GET /api/v1/plugins/{id}`, `GET /api/v1/registries`) do not require auth. |
+| `internal/infrastructure/config/config.go` | Added `PluginsConfig` struct under `OrchestratorConfig.Plugins`: `install_dir` (string), `registries` (list of `PluginRegistryConfig`), `auto_update` (bool). |
+
+### install_dir Layout
+
+```
+<install_dir>/
+  registries.json         # runtime-added registries (written by HTTPRegistryManager)
+  <plugin-name>/
+    plugin.yaml           # manifest, stored as JSON (despite .yaml extension)
+    status.json           # Plugin struct minus Manifest (id, name, version, registry, status, installed_at)
+    run.sh                # or whatever entrypoint is declared in plugin.yaml
+    ... (other plugin files)
+  <plugin-name>-tmp/      # transient: present only during extraction; always cleaned up
+```
+
+### Atomic Install Strategy
+
+1. SHA-256 checksum of the raw archive bytes is verified against `manifest.Checksums["sha256"]` before touching the filesystem.
+2. A temporary directory `<install_dir>/<plugin-name>-tmp` is created.
+3. The `.tar.gz` is extracted into the temp directory. Size and zip-slip checks run per-member.
+4. On success, `os.Rename` atomically moves the temp directory to `<install_dir>/<plugin-name>`.
+5. On any failure, `os.RemoveAll(tmpDir)` cleans up. No partial state remains.
+
+### Registry Index Cache
+
+`HTTPRegistryManager` holds a `map[string]cachedIndex` protected by `sync.RWMutex`. Each cached entry records the `RegistryIndex` value and the `fetchedAt` time. On `FetchIndex(ctx, url, force=false)`, the cache is checked first; if the entry is younger than 5 minutes it is returned without a network call. `force=true` bypasses the cache and always fetches from the network.
+
+The cache lives in the `HTTPRegistryManager` instance (infrastructure layer) rather than the application use case, keeping the use case stateless and enabling the cache to serve concurrent callers without application-layer locking.
+
+### MCP Client Plugin Dispatch
+
+The MCP client (`internal/infrastructure/local/mcp/client.go`) holds optional references to a `domain.PluginStore` and an `installDir` string, injected via functional options (`WithPluginStore`, `WithInstallDir`). Both are nil by default, preserving backward compatibility for bots that do not use the plugin system.
+
+On each `CallTool` call, if `pluginStore` is set, `callPluginTool` scans active plugins for the named tool before falling through to builtins. The plugin entrypoint is executed with `exec.CommandContext` with a 30-second timeout; arguments are passed as a JSON object on stdin; the result is read from stdout as a `domain.MCPToolResult` JSON object. Non-zero exit or decode failure returns an `MCPToolResult` with `IsError: true`.
+
 ## Key Design Decisions
 
 See [`architectural-decision-record.md`](architectural-decision-record.md) for module-specific ADRs. See root [`docs/architectural-decision-record.md`](../../docs/architectural-decision-record.md) for system-level decisions.

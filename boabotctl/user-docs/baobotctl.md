@@ -83,3 +83,128 @@ baobotctl profile get               View own profile
 baobotctl profile set-name <name>   Update display name
 baobotctl profile set-pwd           Change own password (interactive)
 ```
+
+## baobotctl plugin  (Admin only)
+
+Manage installed plugins. All `plugin` subcommands communicate with the orchestrator REST API.
+
+```
+baobotctl plugin list
+baobotctl plugin info <name>
+baobotctl plugin install <name> [--version <v>] [--registry <r>]
+baobotctl plugin remove <name>
+baobotctl plugin reload <name>
+```
+
+### plugin list
+
+List all installed plugins as a table.
+
+```
+baobotctl plugin list
+```
+
+Example output:
+
+```
+NAME            VERSION  REGISTRY        STATUS   INSTALLED
+github-tools    1.2.0    shared-plugins  active   2026-05-07
+data-fetcher    0.9.1    community       staged   2026-05-06
+old-util        0.5.0    —               disabled 2026-04-01
+```
+
+Columns:
+
+| Column | Description |
+|---|---|
+| NAME | Plugin name |
+| VERSION | Installed version |
+| REGISTRY | Registry the plugin was installed from (`—` if unknown) |
+| STATUS | Current lifecycle status (`active`, `staged`, `disabled`, etc.) |
+| INSTALLED | Installation date (YYYY-MM-DD) |
+
+### plugin info \<name\>
+
+Print full manifest detail for an installed plugin.
+
+```
+baobotctl plugin info github-tools
+```
+
+Example output:
+
+```
+Name:        github-tools
+Version:     1.2.0
+Status:      active
+Registry:    shared-plugins
+Installed:   2026-05-07T12:00:00Z
+Entrypoint:  run.sh
+Tools:
+  - github_list_prs: List open pull requests for a repository
+  - github_get_pr: Get details for a specific pull request
+Permissions:
+  network: api.github.com
+  env_vars: GITHUB_TOKEN
+```
+
+If the plugin is not found, the command exits with a non-zero code and prints:
+
+```
+plugin "github-tools" not found
+```
+
+### plugin install \<name\>
+
+Install a plugin from a registry. By default, installs the latest version from the first registry that lists the plugin.
+
+```
+baobotctl plugin install github-tools
+baobotctl plugin install github-tools --version 1.1.0
+baobotctl plugin install github-tools --registry shared-plugins
+```
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--version <v>` | Pin to a specific version (default: latest) |
+| `--registry <r>` | Registry name to install from (default: first matching registry) |
+
+Example output:
+
+```
+Plugin "github-tools" installation initiated (status: active, id: 550e8400-e29b-41d4-a716-446655440000)
+```
+
+If the plugin comes from an untrusted registry, the status will be `staged` rather than `active`. Use the admin UI to approve it.
+
+### plugin remove \<name\>
+
+Remove an installed plugin. The plugin directory is deleted and its tools are no longer available.
+
+```
+baobotctl plugin remove github-tools
+```
+
+Example output:
+
+```
+Plugin "github-tools" removed
+```
+
+### plugin reload \<name\>
+
+Reload a plugin's manifest from disk without restarting the boabot process. Use this after manually editing `plugin.yaml` on disk.
+
+```
+baobotctl plugin reload github-tools
+```
+
+Example output:
+
+```
+Plugin "github-tools" reloaded
+```
+
+If the entrypoint file is missing after reload, the plugin is moved to `disabled` status and an error is returned.

@@ -1452,12 +1452,12 @@ const kanbanHTML = `<!DOCTYPE html>
     .empty-state{text-align:center;padding:3rem;color:#1e2d4a;font-style:italic;font-size:.8rem}
 
     /* ── Dialogs ── */
-    dialog{background:#0f1829;color:#e2e8f0;border:1px solid #1a2744;border-radius:.625rem;padding:1.375rem;min-width:330px;box-shadow:0 20px 60px #000a}
+    dialog{background:#0f1829;color:#e2e8f0;border:1px solid #1a2744;border-radius:.625rem;padding:1.375rem;min-width:min(560px,95vw);box-shadow:0 20px 60px #000a}
     dialog::backdrop{background:#000b}
     dialog h2{font-size:.95rem;font-weight:600;margin-bottom:1rem}
     .fg{margin-bottom:.75rem}
     .fl{display:block;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:.3rem}
-    .fi{width:100%;padding:.45rem .6rem;background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem}
+    .fi{width:100%;padding:.6rem .75rem;background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.9rem}
     .fi:focus{outline:none;border-color:#3b82f6}
     textarea.fi{resize:vertical;min-height:72px}
     select.fi{cursor:pointer}
@@ -1510,7 +1510,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .ctx-body{flex:1;overflow-y:auto;padding:.75rem 1rem;font-size:.78rem;color:#cbd5e1}
     .ctx-row{display:flex;gap:.5rem;margin-bottom:.4rem}
     .ctx-lbl{color:#475569;min-width:80px;flex-shrink:0}
-    .ctx-val{color:#e2e8f0;word-break:break-word}
+    .ctx-val{color:#e2e8f0;word-break:break-word;flex:1;min-width:0}
     .ctx-output{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;white-space:pre-wrap;font-family:monospace;font-size:.74rem;line-height:1.5;color:#94a3b8;max-height:160px;overflow-y:auto}
     .ctx-ask-row{display:flex;gap:.5rem;padding:.5rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
     .ctx-ask-row input{flex:1;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
@@ -2419,7 +2419,7 @@ const kanbanHTML = `<!DOCTYPE html>
     boardCtxThread=null;
     var panel=ge('board-ctx');
     panel.style.display='flex';
-    panel.style.height='280px';
+    panel.style.height='520px';
     ge('board-ctx-title').textContent=item.title;
     bctxTab(boardCtxTab);
     loadBoardCtx();
@@ -2454,18 +2454,28 @@ const kanbanHTML = `<!DOCTYPE html>
       // Work dir row — picker if allowed dirs are configured, else free-text
       var workdirInput='';
       if(allWorkDirs.length>0){
-        workdirInput='<select id="bctx-workdir" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem">'+
+        var wdRoot='',wdSub='';
+        if(it.work_dir){
+          for(var wi=0;wi<allWorkDirs.length;wi++){
+            if(it.work_dir===allWorkDirs[wi]){wdRoot=allWorkDirs[wi];break;}
+            if(it.work_dir.indexOf(allWorkDirs[wi]+'/')===0){wdRoot=allWorkDirs[wi];wdSub=it.work_dir.slice(allWorkDirs[wi].length+1);break;}
+          }
+        }
+        workdirInput='<div style="flex:1;display:flex;flex-direction:column;gap:.3rem">'+
+          '<select id="bctx-workdir" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem" onchange="ge(\'bctx-workdir-sub\').style.display=this.value?\'block\':\'none\'">'+
           '<option value="">— none —</option>';
-        allWorkDirs.forEach(function(d){workdirInput+='<option value="'+esc(d)+'"'+(it.work_dir===d?' selected':'')+'>'+esc(d)+'</option>'});
-        workdirInput+='</select>';
+        allWorkDirs.forEach(function(d){workdirInput+='<option value="'+esc(d)+'"'+(wdRoot===d?' selected':'')+'>'+esc(d)+'</option>'});
+        workdirInput+='</select>'+
+          '<input id="bctx-workdir-sub" type="text" placeholder="sub/path/within/root (optional)" value="'+esc(wdSub)+'" style="width:100%;display:'+(wdRoot?'block':'none')+';background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>'+
+          '</div>';
       } else {
-        workdirInput='<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem"/>';
+        workdirInput='<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>';
       }
 
       // Bot selector for backlog editing
       var botRow='<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+
         (canEdit
-          ? '<select id="bctx-bot" style="background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem;max-width:140px">'+
+          ? '<select id="bctx-bot" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem">'+
             '<option value="">Unassigned</option>'+
             allBots.map(function(b){return'<option value="'+esc(b.name)+'"'+(it.assigned_to===b.name?' selected':'')+'>'+esc(b.name)+'</option>'}).join('')+
             '</select>'
@@ -2475,7 +2485,7 @@ const kanbanHTML = `<!DOCTYPE html>
       // Description — editable in backlog
       var descRow='<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+
         (canEdit
-          ? '<textarea id="bctx-desc" style="flex:1;width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem;resize:vertical;min-height:3rem">'+esc(it.description||'')+'</textarea>'
+          ? '<textarea id="bctx-desc" style="flex:1;width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem;resize:vertical;min-height:10rem">'+esc(it.description||'')+'</textarea>'
           : (it.description?esc(it.description):'&#x2014;'))+
         '</span></div>';
 
@@ -2544,7 +2554,9 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function saveBoardWorkDir(){
     if(!boardCtxItem||!token)return;
-    var val=(ge('bctx-workdir')||{}).value||'';
+    var root=(ge('bctx-workdir')||{}).value||'';
+    var sub=((ge('bctx-workdir-sub')||{}).value||'').trim();
+    var val=root?(sub?root+'/'+sub:root):'';
     api('PATCH','/api/v1/board/'+boardCtxItem.id,{work_dir:val})
       .then(function(item){boardCtxItem=item;loadBoard();})
       .catch(function(e){alert('Failed to save: '+e.message)});

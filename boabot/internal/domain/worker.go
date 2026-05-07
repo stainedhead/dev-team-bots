@@ -11,6 +11,7 @@ type Task struct {
 	BoardItemID string
 	Instruction string
 	Source      string
+	WorkDir     string // optional; directory the bot should work in
 }
 
 type TaskResult struct {

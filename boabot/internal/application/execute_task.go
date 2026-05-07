@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -20,6 +21,7 @@ type ExecuteTaskUseCase struct {
 	soulPrompt   string
 	progressFn   func(taskID, line string)
 	askCh        <-chan domain.AskRequest
+	rulesTracker domain.RulesTracker
 }
 
 func NewExecuteTaskUseCase(
@@ -58,10 +60,27 @@ func (u *ExecuteTaskUseCase) WithAskChannel(ch <-chan domain.AskRequest) {
 	u.askCh = ch
 }
 
+// WithRulesTracker registers a RulesTracker that loads AGENTS.md / CLAUDE.md
+// files from the task work directory and any subdirectories accessed during
+// execution, injecting them as context messages in the conversation.
+func (u *ExecuteTaskUseCase) WithRulesTracker(rt domain.RulesTracker) {
+	u.rulesTracker = rt
+}
+
 func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (domain.TaskResult, error) {
 	msgCtx, err := u.buildContext(ctx, task)
 	if err != nil {
 		return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("build context: %w", err)
+	}
+
+	// Pre-load rules from the task work directory.
+	if u.rulesTracker != nil {
+		u.rulesTracker.Reset()
+		if task.WorkDir != "" {
+			if update := u.rulesTracker.UpdateForDir(ctx, task.WorkDir); update.HasChanges() {
+				msgCtx += "\n\n" + formatRulesMessage(update)
+			}
+		}
 	}
 
 	provider := u.provider
@@ -99,6 +118,7 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 		})
 
 		// Execute each tool call and append the results.
+		var rulesUpdates []domain.RulesUpdate
 		for _, tc := range resp.ToolCalls {
 			result, callErr := u.mcp.CallTool(ctx, tc.Name, tc.Args)
 			content := toolResultContent(result, callErr)
@@ -111,6 +131,16 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 			if u.progressFn != nil {
 				u.progressFn(task.ID, formatProgressLine(tc, result, callErr))
 			}
+			if u.rulesTracker != nil {
+				if dir := dirForToolCall(tc.Name, tc.Args); dir != "" {
+					rulesUpdates = append(rulesUpdates, u.rulesTracker.UpdateForDir(ctx, dir))
+				}
+			}
+		}
+
+		// Inject any rules context changes as a user message before the next invocation.
+		if msg := buildRulesUpdateMessage(rulesUpdates); msg != "" {
+			messages = append(messages, domain.ProviderMessage{Role: "user", Content: msg})
 		}
 
 		// Answer any mid-task user questions before the next model invocation.
@@ -193,6 +223,48 @@ func argSummaryFor(tc domain.ToolCall) string {
 		}
 	}
 	return ""
+}
+
+// dirForToolCall extracts the relevant directory from a tool call's arguments.
+// Returns "" if the tool does not operate on a filesystem path.
+func dirForToolCall(toolName string, args map[string]any) string {
+	switch toolName {
+	case "read_file", "write_file", "create_dir", "list_dir":
+		if p, ok := args["path"].(string); ok && p != "" {
+			return filepath.Dir(filepath.Clean(p))
+		}
+	case "run_shell":
+		if d, ok := args["working_dir"].(string); ok && d != "" {
+			return filepath.Clean(d)
+		}
+	}
+	return ""
+}
+
+// formatRulesMessage formats a single RulesUpdate into a user-visible context block.
+func formatRulesMessage(u domain.RulesUpdate) string {
+	var sb strings.Builder
+	for _, e := range u.Remove {
+		fmt.Fprintf(&sb, "[RULES ENDED: %s/%s — no longer in scope]\n", e.Dir, e.File)
+	}
+	for _, e := range u.Add {
+		fmt.Fprintf(&sb, "[RULES: %s/%s]\n%s\n[/RULES]\n", e.Dir, e.File, e.Content)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// buildRulesUpdateMessage combines multiple RulesUpdates (one per tool call in an
+// iteration) into a single user message, or returns "" if there are no changes.
+func buildRulesUpdateMessage(updates []domain.RulesUpdate) string {
+	combined := domain.RulesUpdate{}
+	for _, u := range updates {
+		combined.Remove = append(combined.Remove, u.Remove...)
+		combined.Add = append(combined.Add, u.Add...)
+	}
+	if !combined.HasChanges() {
+		return ""
+	}
+	return formatRulesMessage(combined)
 }
 
 func (u *ExecuteTaskUseCase) buildContext(ctx context.Context, task domain.Task) (string, error) {

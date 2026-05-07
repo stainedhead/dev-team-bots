@@ -336,6 +336,9 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.Status = domain.WorkItemStatus(*req.Status)
+		if existing.Status != domain.WorkItemStatusInProgress {
+			existing.ActiveTaskID = ""
+		}
 	}
 	if req.AssignedTo != nil {
 		existing.AssignedTo = *req.AssignedTo
@@ -1930,7 +1933,14 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function loadBoard(){
     api('GET','/api/v1/board',null)
-      .then(function(items){allItems=items||[];renderBoard();renderRoster()})
+      .then(function(items){
+        allItems=items||[];
+        if(boardCtxItem){
+          var fresh=allItems.find(function(x){return x.id===boardCtxItem.id});
+          if(fresh){var prev=boardCtxItem.status;boardCtxItem=fresh;if(fresh.status!==prev)loadBoardCtx();}
+        }
+        renderBoard();renderRoster();
+      })
       .catch(function(){});
   }
 
@@ -1939,7 +1949,7 @@ const kanbanHTML = `<!DOCTYPE html>
     var el=ge('roster');
     if(!allBots.length){el.innerHTML='<div class="nil" style="padding:1rem;font-size:.7rem">No bots registered</div>';return}
     var active={};
-    allItems.forEach(function(it){if(it.status!=='done'&&it.assigned_to)active[it.assigned_to]=(active[it.assigned_to]||0)+1});
+    allItems.forEach(function(it){if(it.active_task_id&&it.assigned_to)active[it.assigned_to]=(active[it.assigned_to]||0)+1});
     el.innerHTML='';
     allBots.forEach(function(b){
       var on=b.status==='active',n=active[b.name]||0;
@@ -2502,31 +2512,35 @@ const kanbanHTML = `<!DOCTYPE html>
       var isBacklog=it.status==='backlog';
       var canEdit=token&&(isBacklog);
 
-      // Work dir row — picker if allowed dirs are configured, else free-text
+      // Work dir row — editable picker in backlog; read-only elsewhere
       var workdirInput='';
-      if(allWorkDirs.length>0){
-        var wdRoot='',wdSub='';
-        if(it.work_dir){
-          for(var wi=0;wi<allWorkDirs.length;wi++){
-            if(it.work_dir===allWorkDirs[wi]){wdRoot=allWorkDirs[wi];break;}
-            if(it.work_dir.indexOf(allWorkDirs[wi]+'/')===0){wdRoot=allWorkDirs[wi];wdSub=it.work_dir.slice(allWorkDirs[wi].length+1);break;}
+      if(canEdit){
+        if(allWorkDirs.length>0){
+          var wdRoot='',wdSub='';
+          if(it.work_dir){
+            for(var wi=0;wi<allWorkDirs.length;wi++){
+              if(it.work_dir===allWorkDirs[wi]){wdRoot=allWorkDirs[wi];break;}
+              if(it.work_dir.indexOf(allWorkDirs[wi]+'/')===0){wdRoot=allWorkDirs[wi];wdSub=it.work_dir.slice(allWorkDirs[wi].length+1);break;}
+            }
           }
+          workdirInput='<div style="flex:1;display:flex;flex-direction:column;gap:.3rem">'+
+            '<select id="bctx-workdir" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem" onchange="ge(\'bctx-workdir-sub\').style.display=this.value?\'block\':\'none\';onBctxChange()">'+
+            '<option value="">— none —</option>';
+          allWorkDirs.forEach(function(d){workdirInput+='<option value="'+esc(d)+'"'+(wdRoot===d?' selected':'')+'>'+esc(d)+'</option>'});
+          workdirInput+='</select>'+
+            '<input id="bctx-workdir-sub" type="text" placeholder="sub/path/within/root (optional)" value="'+esc(wdSub)+'" oninput="onBctxChange()" style="width:100%;display:'+(wdRoot?'block':'none')+';background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>'+
+            '</div>';
+        } else {
+          workdirInput='<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" oninput="onBctxChange()" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>';
         }
-        workdirInput='<div style="flex:1;display:flex;flex-direction:column;gap:.3rem">'+
-          '<select id="bctx-workdir" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem" onchange="ge(\'bctx-workdir-sub\').style.display=this.value?\'block\':\'none\'">'+
-          '<option value="">— none —</option>';
-        allWorkDirs.forEach(function(d){workdirInput+='<option value="'+esc(d)+'"'+(wdRoot===d?' selected':'')+'>'+esc(d)+'</option>'});
-        workdirInput+='</select>'+
-          '<input id="bctx-workdir-sub" type="text" placeholder="sub/path/within/root (optional)" value="'+esc(wdSub)+'" style="width:100%;display:'+(wdRoot?'block':'none')+';background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>'+
-          '</div>';
       } else {
-        workdirInput='<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem"/>';
+        workdirInput='<span>'+esc(it.work_dir||'&#x2014;')+'</span>';
       }
 
       // Bot selector for backlog editing
       var botRow='<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+
         (canEdit
-          ? '<select id="bctx-bot" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem">'+
+          ? '<select id="bctx-bot" onchange="onBctxChange()" style="width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem">'+
             '<option value="">Unassigned</option>'+
             allBots.map(function(b){return'<option value="'+esc(b.name)+'"'+(it.assigned_to===b.name?' selected':'')+'>'+esc(b.name)+'</option>'}).join('')+
             '</select>'
@@ -2536,7 +2550,7 @@ const kanbanHTML = `<!DOCTYPE html>
       // Description — editable in backlog
       var descRow='<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+
         (canEdit
-          ? '<textarea id="bctx-desc" style="flex:1;width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem;resize:vertical;min-height:10rem">'+esc(it.description||'')+'</textarea>'
+          ? '<textarea id="bctx-desc" oninput="onBctxChange()" style="flex:1;width:100%;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.85rem;padding:.45rem .6rem;resize:vertical;min-height:10rem">'+esc(it.description||'')+'</textarea>'
           : (it.description?esc(it.description):'&#x2014;'))+
         '</span></div>';
 
@@ -2546,13 +2560,12 @@ const kanbanHTML = `<!DOCTYPE html>
         descRow+
         '<div class="ctx-row"><span class="ctx-lbl">Work dir</span><span class="ctx-val" style="display:flex;align-items:center;gap:.5rem">'+
           workdirInput+
-          '<button class="btn btn-secondary btn-sm" onclick="saveBoardWorkDir()">Save</button>'+
         '</span></div>'+
         (it.work_dir?'<div style="font-size:.7rem;color:#475569;padding:.1rem 0 .4rem 0">Attachments will be written to this directory.</div>':'')+
         '<div class="ctx-row"><span class="ctx-lbl">Attachments</span><span class="ctx-val"><a href="#" onclick="bctxTab(\'files\');return false" style="color:#60a5fa">'+attCount+' file'+(attCount!==1?'s':'')+'</a></span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
-        (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
-        (canEdit?'<div style="margin-top:.75rem"><button class="btn btn-primary btn-sm" onclick="saveBoardBacklogEdits()">Save changes</button></div>':'')+
+        (it.active_task_id&&it.status==='in-progress'?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
+        (canEdit?'<div style="margin-top:.75rem"><button id="bctx-save-btn" class="btn btn-primary btn-sm" disabled onclick="saveBoardAllEdits()" style="opacity:.4;cursor:not-allowed">Save changes</button></div>':'')+
         (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
@@ -2667,6 +2680,29 @@ const kanbanHTML = `<!DOCTYPE html>
     var bot=(ge('bctx-bot')||{}).value;
     if(desc!==undefined)update.description=desc;
     if(bot!==undefined)update.assigned_to=bot;
+    api('PATCH','/api/v1/board/'+boardCtxItem.id,update)
+      .then(function(item){boardCtxItem=item;loadBoard();loadBoardCtx();})
+      .catch(function(e){alert('Failed to save: '+e.message)});
+  }
+
+  function onBctxChange(){
+    var btn=ge('bctx-save-btn');
+    if(!btn)return;
+    btn.disabled=false;
+    btn.style.opacity='1';
+    btn.style.cursor='pointer';
+  }
+
+  function saveBoardAllEdits(){
+    if(!boardCtxItem||!token)return;
+    var update={};
+    var desc=(ge('bctx-desc')||{}).value;
+    var bot=(ge('bctx-bot')||{}).value;
+    if(desc!==undefined)update.description=desc;
+    if(bot!==undefined)update.assigned_to=bot;
+    var root=(ge('bctx-workdir')||{}).value||'';
+    var sub=((ge('bctx-workdir-sub')||{}).value||'').trim();
+    update.work_dir=root?(sub?root+'/'+sub:root):'';
     api('PATCH','/api/v1/board/'+boardCtxItem.id,update)
       .then(function(item){boardCtxItem=item;loadBoard();loadBoardCtx();})
       .catch(function(e){alert('Failed to save: '+e.message)});

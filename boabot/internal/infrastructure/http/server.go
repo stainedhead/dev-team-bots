@@ -1203,7 +1203,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
     /* ── Panes ── */
     .pane{display:none;flex:1;overflow:auto;padding:1.25rem}
-    .pane.on{display:flex;flex-direction:column}
+    .pane.on{display:flex;flex-direction:column;overflow:hidden}
 
     /* ── Board ── */
     .board{display:flex;gap:.875rem;flex:1;align-items:flex-start;min-height:0}
@@ -1362,7 +1362,7 @@ const kanbanHTML = `<!DOCTYPE html>
     </div>
 
     <!-- Board -->
-    <div class="pane on" id="pane-board" style="display:flex;flex-direction:column;overflow:hidden">
+    <div class="pane on" id="pane-board" style="overflow:hidden">
       <div class="board" id="board" style="flex:1;overflow:auto;min-height:0">
         <div class="col" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
@@ -1401,7 +1401,7 @@ const kanbanHTML = `<!DOCTYPE html>
     </div>
 
     <!-- Tasks -->
-    <div class="pane" id="pane-tasks" style="display:flex;flex-direction:column;overflow:hidden">
+    <div class="pane" id="pane-tasks" style="overflow:hidden">
       <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
       <div id="tasks-body" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
       <div class="ctx-panel" id="task-ctx" style="display:none">

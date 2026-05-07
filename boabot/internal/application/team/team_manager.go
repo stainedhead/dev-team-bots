@@ -623,14 +623,19 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 				task.Output = p.Output
 				_, _ = sharedTasks.Update(handlerCtx, task)
 
-				// If this was a board-triggered task, update the board item.
+				// If this was a board-triggered task, update the board item status.
 				if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
 					items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
 					if listErr == nil && len(items) > 0 {
 						item := items[0]
 						item.LastResult = p.Output
 						item.LastResultAt = &now
-						item.ActiveTaskID = "" // clear the working badge
+						item.ActiveTaskID = ""
+						if p.Success {
+							item.Status = domain.WorkItemStatusDone
+						} else {
+							item.Status = domain.WorkItemStatusBlocked
+						}
 						_, _ = tm.sharedBoard.Update(handlerCtx, item)
 					}
 				}

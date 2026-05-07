@@ -351,6 +351,34 @@ func TestRouter_SendToFullBuffer(t *testing.T) {
 	}
 }
 
+// TestRouter_Deregister verifies that Deregister removes the channel and closes it.
+func TestRouter_Deregister(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	_ = r.Register("alice", 10)
+
+	// alice is registered; SendTo should succeed.
+	if err := r.SendTo(context.Background(), "alice", newMsg("pre", "bob", "alice")); err != nil {
+		t.Fatalf("SendTo before Deregister: %v", err)
+	}
+
+	// Deregister alice.
+	r.Deregister("alice")
+
+	// After deregistration, sending to alice should fail.
+	if err := r.SendTo(context.Background(), "alice", newMsg("post", "bob", "alice")); err == nil {
+		t.Fatal("expected error after Deregister, got nil")
+	}
+}
+
+// TestRouter_Deregister_NoOp verifies that Deregister is a no-op for unknown names.
+func TestRouter_Deregister_NoOp(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	// Should not panic.
+	r.Deregister("nobody")
+}
+
 // TestQueue_DefaultBufferSize verifies that Register with bufferSize 0 uses the default.
 func TestQueue_DefaultBufferSize(t *testing.T) {
 	t.Parallel()

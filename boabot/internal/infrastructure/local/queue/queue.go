@@ -62,6 +62,17 @@ func (r *Router) QueueFor(botName string) *Queue {
 	return &Queue{router: r, name: botName, ch: ch}
 }
 
+// Deregister removes the channel for botName and closes it.
+// No-op if botName is not registered.
+func (r *Router) Deregister(botName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ch, ok := r.channels[botName]; ok {
+		close(ch)
+		delete(r.channels, botName)
+	}
+}
+
 // SendTo delivers msg directly to the channel of the named bot.
 // It is a convenience wrapper used by TeamManager.Shutdown.
 func (r *Router) SendTo(_ context.Context, botName string, msg domain.Message) error {

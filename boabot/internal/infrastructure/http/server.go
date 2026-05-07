@@ -1563,10 +1563,10 @@ const kanbanHTML = `<!DOCTYPE html>
     td{padding:.55rem .65rem;border-bottom:1px solid #0f1829;vertical-align:middle}
     tr:hover td{background:#0d1424}
     .pill{display:inline-block;padding:.1rem .45rem;border-radius:9999px;font-size:.62rem;font-weight:600;white-space:nowrap}
-    .pill-ok{background:#14532d;color:#86efac}
-    .pill-warn{background:#78350f;color:#fde68a}
-    .pill-info{background:#7c2d12;color:#fdba74}
-    .pill-off{background:#450a0a;color:#fca5a5}
+    .pill-ok{background:#166534;color:#bbf7d0}
+    .pill-warn{background:#854d0e;color:#fef08a}
+    .pill-info{background:#c2410c;color:#ffedd5}
+    .pill-off{background:#991b1b;color:#fecaca}
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
     .acts{display:flex;gap:.3rem;align-items:center}
@@ -3270,6 +3270,7 @@ func (s *Server) handleKanbanUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(kanbanHTML))
 }

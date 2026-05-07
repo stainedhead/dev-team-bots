@@ -1472,6 +1472,12 @@ const kanbanHTML = `<!DOCTYPE html>
     .btn-warn{background:#78350f;color:#fde68a}
     .btn-sm{padding:.15rem .45rem;font-size:.68rem}
 
+    /* ── Pre-login locked state ── */
+    body.locked .tab{opacity:.3;pointer-events:none;cursor:not-allowed}
+    body.locked .btn:not(#btn-login){opacity:.3;pointer-events:none;cursor:not-allowed}
+    body.locked #btn-login{background:#16a34a!important;color:#fff!important;border-color:#15803d!important}
+    body.locked #btn-login:hover{filter:brightness(1.12)}
+
     /* ── App shell ── */
     .shell{display:flex;flex:1;overflow:hidden}
 
@@ -1635,7 +1641,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .viewer-pre{margin:0;font-size:.78rem;color:#94a3b8;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,monospace}
   </style>
 </head>
-<body>
+<body class="locked">
 <header>
   <div class="logo">BaoBot <span>Control</span></div>
   <div class="hdr-mid">
@@ -1956,6 +1962,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function updateAuthUI(){
     var on=!!token,admin=myRole==='admin';
+    document.body.classList.toggle('locked',!on);
     ge('btn-login').style.display=on?'none':'inline-block';
     ge('uinfo').style.display=on?'inline-flex':'none';
     ge('btn-new').style.display=on?'inline-block':'none';

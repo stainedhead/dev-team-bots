@@ -15,7 +15,10 @@ import (
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/pool"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
 	httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
@@ -102,6 +105,9 @@ type TeamManager struct {
 	sharedTaskStore domain.DirectTaskStore
 	sharedBoard     domain.BoardStore
 
+	// techLeadPool manages the pool of tech-lead instances (orchestrator mode only).
+	techLeadPool *pool.Pool
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
@@ -169,7 +175,31 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	_ = os.MkdirAll(orchestratorMemPath, 0o755)
 	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
 	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore(filepath.Join(orchestratorMemPath, "tasks.json"))
-	tm.sharedBoard = orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
+	sharedBoard := orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
+	tm.sharedBoard = sharedBoard
+
+	// Wire the TechLeadPool with a board status-change hook.
+	psf := infrastructure.NewPoolStateFile(filepath.Join(orchestratorMemPath, "pool.json"))
+	techLeadPool := pool.New(pool.Config{
+		BotsDir:    tm.cfg.BotsDir,
+		MemoryRoot: tm.cfg.MemoryRoot,
+	}, psf)
+	if err := techLeadPool.Reconcile(ctx); err != nil {
+		slog.Warn("tech-lead pool reconcile failed", "err", err)
+	}
+	sharedBoard.SetStatusChangeHook(func(old, newStatus domain.WorkItemStatus, item domain.WorkItem) {
+		switch {
+		case newStatus == domain.WorkItemStatusInProgress:
+			if _, allocErr := techLeadPool.Allocate(ctx, item.ID); allocErr != nil {
+				slog.Error("tech-lead pool allocate failed", "item", item.ID, "err", allocErr)
+			}
+		case old == domain.WorkItemStatusInProgress:
+			if deallocErr := techLeadPool.Deallocate(ctx, item.ID); deallocErr != nil {
+				slog.Warn("tech-lead pool deallocate failed", "item", item.ID, "err", deallocErr)
+			}
+		}
+	})
+	tm.techLeadPool = techLeadPool
 
 	// Start each enabled bot in its own goroutine.
 	started := 0
@@ -581,6 +611,22 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		nil, // no channel monitors for now
 		orchestratorName,
 	)
+
+	// Wire SubTeamManager for tech-lead bots.
+	if entry.Type == "tech-lead" {
+		sm := subteam.New(subteam.Config{
+			BotsDir:    tm.cfg.BotsDir,
+			MemoryRoot: tm.cfg.MemoryRoot,
+		})
+		sf := infrastructure.NewSessionFile(filepath.Join(memPath, "session.json"))
+		sm.WithSessionFile(sf)
+		uc.WithSubTeamManager(sm)
+		defer func() {
+			if tearErr := sm.TearDownAll(context.Background()); tearErr != nil {
+				slog.Warn("subteam teardown error", "bot", entry.Name, "err", tearErr)
+			}
+		}()
+	}
 
 	// Register result handler on every bot so any bot's reply surfaces in chat.
 	sharedChat := tm.sharedChatStore

@@ -655,6 +655,310 @@ func TestRunAgent_TaskResultHandler_CalledOnTaskResult(t *testing.T) {
 	}
 }
 
+// TestRunAgent_SubTeamSpawn_CallsManager verifies that a subteam.spawn message
+// causes SubTeamManager.Spawn to be called with the correct arguments.
+func TestRunAgent_SubTeamSpawn_CallsManager(t *testing.T) {
+	spawnPayload, _ := json.Marshal(domain.SubTeamSpawnPayload{
+		BotType: "tech-lead",
+		Name:    "tech-lead-1",
+		WorkDir: "/tmp/work",
+	})
+
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamSpawn,
+				From:    "orchestrator",
+				Payload: spawnPayload,
+			},
+			ReceiptHandle: "receipt-spawn",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	spawned := make(chan mocks.SpawnCall, 1)
+	sm := &mocks.SubTeamManager{
+		SpawnFn: func(_ context.Context, botType, name, workDir string) (*domain.SpawnedAgent, error) {
+			spawned <- mocks.SpawnCall{BotType: botType, Name: name, WorkDir: workDir}
+			return &domain.SpawnedAgent{Name: name}, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case call := <-spawned:
+		if call.BotType != "tech-lead" {
+			t.Errorf("expected BotType=tech-lead, got %q", call.BotType)
+		}
+		if call.Name != "tech-lead-1" {
+			t.Errorf("expected Name=tech-lead-1, got %q", call.Name)
+		}
+		if call.WorkDir != "/tmp/work" {
+			t.Errorf("expected WorkDir=/tmp/work, got %q", call.WorkDir)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SubTeamManager.Spawn to be called")
+	}
+
+	select {
+	case rh := <-deleted:
+		if rh != "receipt-spawn" {
+			t.Errorf("expected receipt-spawn, got %q", rh)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message to be deleted")
+	}
+}
+
+// TestRunAgent_SubTeamTerminate_CallsManager verifies that a subteam.terminate
+// message causes SubTeamManager.Terminate to be called.
+func TestRunAgent_SubTeamTerminate_CallsManager(t *testing.T) {
+	termPayload, _ := json.Marshal(domain.SubTeamTerminatePayload{Name: "tech-lead-1"})
+
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamTerminate,
+				From:    "orchestrator",
+				Payload: termPayload,
+			},
+			ReceiptHandle: "receipt-term",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	terminated := make(chan string, 1)
+	sm := &mocks.SubTeamManager{
+		TerminateFn: func(_ context.Context, name string) error {
+			terminated <- name
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case name := <-terminated:
+		if name != "tech-lead-1" {
+			t.Errorf("expected tech-lead-1, got %q", name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SubTeamManager.Terminate to be called")
+	}
+
+	select {
+	case <-deleted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message to be deleted")
+	}
+}
+
+// TestRunAgent_SubTeamHeartbeat_DeletesMessage verifies that a subteam.heartbeat
+// message is processed (deleted) without error.
+func TestRunAgent_SubTeamHeartbeat_DeletesMessage(t *testing.T) {
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type: domain.MessageTypeSubTeamHeartbeat,
+				From: "orchestrator",
+			},
+			ReceiptHandle: "receipt-hb",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case rh := <-deleted:
+		if rh != "receipt-hb" {
+			t.Errorf("expected receipt-hb, got %q", rh)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for heartbeat message to be deleted")
+	}
+}
+
+// TestRunAgent_SubTeamSpawn_InvalidPayload_Graceful verifies that a subteam.spawn
+// message with invalid JSON payload is dropped without panicking.
+func TestRunAgent_SubTeamSpawn_InvalidPayload_Graceful(t *testing.T) {
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamSpawn,
+				From:    "orchestrator",
+				Payload: []byte("not-json"),
+			},
+			ReceiptHandle: "receipt-bad-spawn",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sm := &mocks.SubTeamManager{}
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK — bad message deleted, no panic.
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bad spawn message to be deleted")
+	}
+}
+
+// TestRunAgent_SubTeamSpawn_NoManager_Graceful verifies that a subteam.spawn
+// message when no SubTeamManager is registered is dropped without panic.
+func TestRunAgent_SubTeamSpawn_NoManager_Graceful(t *testing.T) {
+	spawnPayload, _ := json.Marshal(domain.SubTeamSpawnPayload{
+		BotType: "tech-lead",
+		Name:    "tech-lead-1",
+	})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamSpawn,
+				From:    "orchestrator",
+				Payload: spawnPayload,
+			},
+			ReceiptHandle: "receipt-no-mgr",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// No sub team manager set.
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK — deleted without panicking.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
 // TestRunAgent_Poll_OrchestratorPresence verifies that receiving an
 // orchestrator presence message triggers re-registration.
 func TestRunAgent_Poll_OrchestratorPresence(t *testing.T) {
@@ -705,5 +1009,269 @@ func TestRunAgent_Poll_OrchestratorPresence(t *testing.T) {
 		case <-timeout:
 			t.Fatalf("timed out waiting for re-registration, got %d register calls", count)
 		}
+	}
+}
+
+// TestRunAgent_SubTeamTerminate_InvalidPayload_Graceful verifies that a
+// subteam.terminate message with invalid JSON is dropped without panic.
+func TestRunAgent_SubTeamTerminate_InvalidPayload_Graceful(t *testing.T) {
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamTerminate,
+				From:    "orchestrator",
+				Payload: []byte("bad-json"),
+			},
+			ReceiptHandle: "receipt-bad-term",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	sm := &mocks.SubTeamManager{}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK -- bad message dropped.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// TestRunAgent_SubTeamTerminate_ManagerError_Graceful verifies that a Terminate
+// error from the SubTeamManager is logged but does not crash the agent.
+func TestRunAgent_SubTeamTerminate_ManagerError_Graceful(t *testing.T) {
+	termPayload, _ := json.Marshal(domain.SubTeamTerminatePayload{Name: "unknown-bot"})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamTerminate,
+				From:    "orchestrator",
+				Payload: termPayload,
+			},
+			ReceiptHandle: "receipt-term-err",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	sm := &mocks.SubTeamManager{
+		TerminateFn: func(_ context.Context, _ string) error {
+			return errors.New("agent not found")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK -- error logged, message deleted.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// TestRunAgent_SubTeamSpawn_ManagerError_Graceful verifies that a Spawn error
+// from the SubTeamManager is logged but does not crash the agent.
+func TestRunAgent_SubTeamSpawn_ManagerError_Graceful(t *testing.T) {
+	spawnPayload, _ := json.Marshal(domain.SubTeamSpawnPayload{BotType: "tech-lead", Name: "tech-lead-1"})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamSpawn,
+				From:    "orchestrator",
+				Payload: spawnPayload,
+			},
+			ReceiptHandle: "receipt-spawn-err",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	sm := &mocks.SubTeamManager{
+		SpawnFn: func(_ context.Context, _, _, _ string) (*domain.SpawnedAgent, error) {
+			return nil, errors.New("spawn failed")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithSubTeamManager(sm)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK -- error logged, message deleted.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// TestRunAgent_TaskResultHandler_NoHandler_Graceful verifies that a task.result
+// message is deleted gracefully when no handler is registered.
+func TestRunAgent_TaskResultHandler_NoHandler_Graceful(t *testing.T) {
+	resultPayload, _ := json.Marshal(domain.TaskResultPayload{TaskID: "t-1", Success: true})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeTaskResult,
+				From:    "dev-1",
+				Payload: resultPayload,
+			},
+			ReceiptHandle: "receipt-result-noh",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// No task result handler set.
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// TestRunAgent_SubTeamTerminate_NoManager_Graceful verifies that a
+// subteam.terminate with no SubTeamManager does not panic.
+func TestRunAgent_SubTeamTerminate_NoManager_Graceful(t *testing.T) {
+	termPayload, _ := json.Marshal(domain.SubTeamTerminatePayload{Name: "tech-lead-1"})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeSubTeamTerminate,
+				From:    "orchestrator",
+				Payload: termPayload,
+			},
+			ReceiptHandle: "receipt-noterm-mgr",
+		},
+	}
+
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			select {
+			case deleted <- rh:
+			default:
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case <-deleted:
+		// OK.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
 	}
 }

@@ -20,6 +20,7 @@ type RunAgentUseCase struct {
 	monitors             []domain.ChannelMonitor
 	orchestratorQueueURL string
 	taskResultHandler    TaskResultHandler
+	subTeamManager       domain.SubTeamManager
 }
 
 // WithTaskResultHandler registers a callback that is invoked whenever a
@@ -27,6 +28,13 @@ type RunAgentUseCase struct {
 // synchronously in the message-handling goroutine.
 func (u *RunAgentUseCase) WithTaskResultHandler(h TaskResultHandler) {
 	u.taskResultHandler = h
+}
+
+// WithSubTeamManager registers a SubTeamManager that handles subteam lifecycle
+// messages (subteam.spawn, subteam.terminate). Only applicable to tech-lead bots.
+func (u *RunAgentUseCase) WithSubTeamManager(m domain.SubTeamManager) *RunAgentUseCase {
+	u.subTeamManager = m
+	return u
 }
 
 func NewRunAgentUseCase(
@@ -127,6 +135,12 @@ func (u *RunAgentUseCase) handle(ctx context.Context, rm domain.ReceivedMessage)
 		u.handleOrchestratorPresence(ctx, rm)
 	case domain.MessageTypeShutdown:
 		// another bot shut down — no action required for non-orchestrator bots
+	case domain.MessageTypeSubTeamSpawn:
+		u.handleSubTeamSpawn(ctx, rm)
+	case domain.MessageTypeSubTeamTerminate:
+		u.handleSubTeamTerminate(ctx, rm)
+	case domain.MessageTypeSubTeamHeartbeat:
+		// ack only — no action needed in the tech-lead's own loop
 	default:
 		slog.Warn("unhandled message type", "type", rm.Message.Type)
 	}
@@ -185,4 +199,43 @@ func (u *RunAgentUseCase) handleOrchestratorPresence(ctx context.Context, _ doma
 	if err := u.register(ctx); err != nil {
 		slog.Error("re-registration failed", "err", err)
 	}
+}
+
+// handleSubTeamSpawn processes a subteam.spawn message by calling the registered
+// SubTeamManager. No-op if no SubTeamManager has been registered.
+func (u *RunAgentUseCase) handleSubTeamSpawn(ctx context.Context, rm domain.ReceivedMessage) {
+	if u.subTeamManager == nil {
+		slog.Warn("subteam.spawn received but no SubTeamManager registered", "from", rm.Message.From)
+		return
+	}
+	var p domain.SubTeamSpawnPayload
+	if err := json.Unmarshal(rm.Message.Payload, &p); err != nil {
+		slog.Error("failed to unmarshal subteam.spawn payload", "err", err)
+		return
+	}
+	agent, err := u.subTeamManager.Spawn(ctx, p.BotType, p.Name, p.WorkDir)
+	if err != nil {
+		slog.Error("subteam.spawn failed", "name", p.Name, "bot_type", p.BotType, "err", err)
+		return
+	}
+	slog.Info("subteam.spawn completed", "name", agent.Name, "status", agent.Status)
+}
+
+// handleSubTeamTerminate processes a subteam.terminate message by calling the
+// registered SubTeamManager. No-op if no SubTeamManager has been registered.
+func (u *RunAgentUseCase) handleSubTeamTerminate(ctx context.Context, rm domain.ReceivedMessage) {
+	if u.subTeamManager == nil {
+		slog.Warn("subteam.terminate received but no SubTeamManager registered", "from", rm.Message.From)
+		return
+	}
+	var p domain.SubTeamTerminatePayload
+	if err := json.Unmarshal(rm.Message.Payload, &p); err != nil {
+		slog.Error("failed to unmarshal subteam.terminate payload", "err", err)
+		return
+	}
+	if err := u.subTeamManager.Terminate(ctx, p.Name); err != nil {
+		slog.Error("subteam.terminate failed", "name", p.Name, "err", err)
+		return
+	}
+	slog.Info("subteam.terminate completed", "name", p.Name)
 }

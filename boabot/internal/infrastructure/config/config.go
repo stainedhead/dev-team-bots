@@ -11,9 +11,7 @@ type Config struct {
 	Bot          BotConfig          `yaml:"bot"`
 	Orchestrator OrchestratorConfig `yaml:"orchestrator"`
 	Models       ModelsConfig       `yaml:"models"`
-	Tools        ToolsConfig        `yaml:"tools"`
 	Budget       BudgetConfig       `yaml:"budget"`
-	Context      ContextConfig      `yaml:"context"`
 	Team         TeamFileConfig     `yaml:"team"`
 	Memory       MemoryConfig       `yaml:"memory"`
 	Backup       BackupConfig       `yaml:"backup"`
@@ -28,11 +26,10 @@ type TeamFileConfig struct {
 
 // MemoryConfig is the full memory configuration.
 type MemoryConfig struct {
-	Path        string `yaml:"path"`         // default: <binary-dir>/memory
-	VectorIndex string `yaml:"vector_index"` // "cosine" (default) | "hnsw" (future)
-	Embedder    string `yaml:"embedder"`     // "bm25" (default) | provider name
-	HeapWarnMB  int    `yaml:"heap_warn_mb"` // 0 = disabled
-	HeapHardMB  int    `yaml:"heap_hard_mb"` // 0 = disabled
+	Path       string `yaml:"path"`         // default: <binary-dir>/memory
+	Embedder   string `yaml:"embedder"`     // "bm25" (default) | provider name
+	HeapWarnMB int    `yaml:"heap_warn_mb"` // 0 = disabled
+	HeapHardMB int    `yaml:"heap_hard_mb"` // 0 = disabled
 }
 
 // BackupConfig controls the scheduled GitHub memory backup.
@@ -61,7 +58,6 @@ type BotConfig struct {
 type OrchestratorConfig struct {
 	Enabled       bool     `yaml:"enabled"`
 	APIPort       int      `yaml:"api_port"`
-	WebPort       int      `yaml:"web_port"`
 	JWTSecret     string   `yaml:"jwt_secret"`     // generated randomly if empty
 	AdminPassword string   `yaml:"admin_password"` // defaults to "admin" if empty
 	WorkDirs      []string `yaml:"work_dirs"`      // allowed base directories for board item workspaces
@@ -77,7 +73,6 @@ type ProviderConfig struct {
 	Name     string `yaml:"name"`
 	Type     string `yaml:"type"`
 	ModelID  string `yaml:"model_id"`
-	Region   string `yaml:"region"`
 	Endpoint string `yaml:"endpoint"`
 	// WorkDir is the working directory for subprocess-based providers (claude_code, codex).
 	WorkDir string `yaml:"work_dir"`
@@ -86,17 +81,9 @@ type ProviderConfig struct {
 	BinaryPath string `yaml:"binary_path"`
 }
 
-type ToolsConfig struct {
-	AllowedTools     []string `yaml:"allowed_tools"`
-}
-
 type BudgetConfig struct {
 	TokenSpendDaily int64 `yaml:"token_spend_daily"`
 	ToolCallsHourly int   `yaml:"tool_calls_hourly"`
-}
-
-type ContextConfig struct {
-	ThresholdTokens int `yaml:"threshold_tokens"`
 }
 
 func Load(path string) (Config, error) {

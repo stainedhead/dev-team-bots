@@ -43,7 +43,6 @@ func TestLoad_MemoryConfig(t *testing.T) {
 	dir := t.TempDir()
 	p := writeConfig(t, dir, `memory:
   path: /data/memory
-  vector_index: hnsw
   embedder: openai
   heap_warn_mb: 512
   heap_hard_mb: 1024
@@ -55,9 +54,6 @@ func TestLoad_MemoryConfig(t *testing.T) {
 	m := cfg.Memory
 	if m.Path != "/data/memory" {
 		t.Errorf("Path: got %q, want /data/memory", m.Path)
-	}
-	if m.VectorIndex != "hnsw" {
-		t.Errorf("VectorIndex: got %q, want hnsw", m.VectorIndex)
 	}
 	if m.Embedder != "openai" {
 		t.Errorf("Embedder: got %q, want openai", m.Embedder)
@@ -139,27 +135,20 @@ func TestLoad_FullConfig(t *testing.T) {
 orchestrator:
   enabled: true
   api_port: 8080
-  web_port: 8090
 models:
   default: claude
   providers:
     - name: claude
       type: anthropic
       model_id: claude-opus-4-5
-tools:
-  allowed_tools:
-    - shell
 budget:
   token_spend_daily: 100000
   tool_calls_hourly: 50
-context:
-  threshold_tokens: 8192
 team:
   file_path: ./team.yaml
   bots_dir: ./bots
 memory:
   path: ./memory
-  vector_index: cosine
   embedder: bm25
   heap_warn_mb: 256
   heap_hard_mb: 512
@@ -182,9 +171,6 @@ backup:
 	}
 	if cfg.Budget.TokenSpendDaily != 100000 {
 		t.Errorf("Budget.TokenSpendDaily: got %d", cfg.Budget.TokenSpendDaily)
-	}
-	if cfg.Context.ThresholdTokens != 8192 {
-		t.Errorf("Context.ThresholdTokens: got %d", cfg.Context.ThresholdTokens)
 	}
 	if cfg.Memory.HeapWarnMB != 256 {
 		t.Errorf("Memory.HeapWarnMB: got %d", cfg.Memory.HeapWarnMB)
@@ -283,6 +269,7 @@ func TestLoad_OrchestratorJWTAndAdminPassword(t *testing.T) {
   jwt_secret: mysecret
   admin_password: mypassword
 `)
+
 	cfg, err := config.Load(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

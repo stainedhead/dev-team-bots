@@ -16,24 +16,3 @@ models:
       type: openai
       model_id: gemma4:31b
       endpoint: http://localhost:11434/v1
-
-tools:
-  allowed_tools:
-    - read_file
-    - list_dir
-    - glob
-    - grep
-    - write_file
-    - edit_file
-    - memory_search
-    - send_message
-    - read_messages
-    - todo_write
-    - todo_read
-    - http_request
-    - get_metrics
-    - run_command
-
-
-context:
-  threshold_tokens: 150000

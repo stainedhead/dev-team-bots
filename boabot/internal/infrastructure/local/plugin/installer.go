@@ -92,6 +92,10 @@ func extractArchive(archive []byte, destDir string) error {
 		}
 
 		switch hdr.Typeflag {
+		case tar.TypeSymlink, tar.TypeLink:
+			// Symlinks and hardlinks are explicitly prohibited: they are a well-known
+			// zip-slip bypass vector and the spec forbids them.
+			return fmt.Errorf("plugin installer: archive contains symlink/hardlink %q — not permitted", hdr.Name)
 		case tar.TypeDir:
 			if mkErr := os.MkdirAll(target, 0o755); mkErr != nil {
 				return fmt.Errorf("plugin installer: create dir %q: %w", target, mkErr)

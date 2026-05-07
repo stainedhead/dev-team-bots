@@ -172,6 +172,42 @@ func TestExtract_SizeLimit(t *testing.T) {
 	}
 }
 
+func TestExtract_SymlinkRejected(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	hdr := &tar.Header{
+		Typeflag: tar.TypeSymlink,
+		Name:     "run.sh",
+		Linkname: "/etc/passwd",
+	}
+	_ = tw.WriteHeader(hdr)
+	_ = tw.Close()
+	_ = gw.Close()
+	archive := buf.Bytes()
+	checksum := sha256Hex(archive)
+
+	manifest := domain.PluginManifest{
+		Name:      "symlink-plugin",
+		Checksums: map[string]string{"sha256": checksum},
+	}
+
+	installDir := t.TempDir()
+	_, err := plugin.Extract(installDir, "sym-id", manifest, archive)
+	if err == nil {
+		t.Fatal("expected symlink error, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") && !strings.Contains(err.Error(), "hardlink") && !strings.Contains(err.Error(), "permitted") {
+		t.Errorf("expected symlink rejection error, got: %v", err)
+	}
+
+	// Temp dir must be cleaned up.
+	tmpDir := filepath.Join(installDir, "sym-id-tmp")
+	if _, statErr := os.Stat(tmpDir); !os.IsNotExist(statErr) {
+		t.Error("temp dir should be removed after symlink rejection")
+	}
+}
+
 func TestExtract_WrongChecksum(t *testing.T) {
 	archive := buildTarGz(t, map[string]string{"run.sh": "#!/bin/sh"})
 

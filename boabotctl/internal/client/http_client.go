@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabotctl/internal/domain"
 )
@@ -368,5 +372,188 @@ func (c *HTTPClient) MemoryStatus(ctx context.Context) (domain.MemoryStatusRespo
 		return domain.MemoryStatusResponse{}, err
 	}
 	var out domain.MemoryStatusResponse
+	return out, decodeJSON(resp, &out)
+}
+
+// ── Board extensions ──────────────────────────────────────────────────────────
+
+func (c *HTTPClient) BoardActivity(ctx context.Context, id string) (domain.ActivityResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, "board/"+id+"/activity", nil)
+	if err != nil {
+		return domain.ActivityResponse{}, err
+	}
+	var out domain.ActivityResponse
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) BoardAsk(ctx context.Context, id, content, threadID string) (domain.ChatMessage, error) {
+	body := map[string]string{"content": content, "thread_id": threadID}
+	resp, err := c.do(ctx, http.MethodPost, "board/"+id+"/ask", body)
+	if err != nil {
+		return domain.ChatMessage{}, err
+	}
+	var out domain.ChatMessage
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) BoardAttachmentUpload(ctx context.Context, id string, paths []string) (domain.WorkItem, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			return domain.WorkItem{}, fmt.Errorf("open %s: %w", p, err)
+		}
+		part, err := mw.CreateFormFile("files", filepath.Base(p))
+		if err != nil {
+			_ = f.Close()
+			return domain.WorkItem{}, fmt.Errorf("create form file: %w", err)
+		}
+		if _, err = io.Copy(part, f); err != nil {
+			_ = f.Close()
+			return domain.WorkItem{}, fmt.Errorf("copy %s: %w", p, err)
+		}
+		_ = f.Close()
+	}
+	_ = mw.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("board/"+id+"/attachments"), &buf)
+	if err != nil {
+		return domain.WorkItem{}, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if tok := c.tokenFn(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return domain.WorkItem{}, err
+	}
+	var out domain.WorkItem
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) BoardAttachmentGet(ctx context.Context, id, attID string) ([]byte, string, string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "board/"+id+"/attachments/"+attID, nil)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if err := checkResponse(resp); err != nil {
+		return nil, "", "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read body: %w", err)
+	}
+	ct := resp.Header.Get("Content-Type")
+	cd := resp.Header.Get("Content-Disposition")
+	name := ""
+	if cd != "" {
+		for _, part := range strings.Split(cd, ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "filename=") {
+				name = strings.Trim(strings.TrimPrefix(part, "filename="), `"`)
+			}
+		}
+	}
+	return data, ct, name, nil
+}
+
+func (c *HTTPClient) BoardAttachmentDelete(ctx context.Context, id, attID string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "board/"+id+"/attachments/"+attID, nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+func (c *HTTPClient) TaskList(ctx context.Context) ([]domain.DirectTask, error) {
+	resp, err := c.do(ctx, http.MethodGet, "tasks", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.DirectTask
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) TaskListByBot(ctx context.Context, botName string) ([]domain.DirectTask, error) {
+	resp, err := c.do(ctx, http.MethodGet, "bots/"+botName+"/tasks", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.DirectTask
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) TaskCreate(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error) {
+	body := map[string]any{"instruction": instruction}
+	if scheduledAt != nil {
+		body["scheduled_at"] = scheduledAt.Format(time.RFC3339)
+	}
+	resp, err := c.do(ctx, http.MethodPost, "bots/"+botName+"/tasks", body)
+	if err != nil {
+		return domain.DirectTask{}, err
+	}
+	var out domain.DirectTask
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) TaskGet(ctx context.Context, id string) (domain.DirectTask, error) {
+	resp, err := c.do(ctx, http.MethodGet, "tasks/"+id, nil)
+	if err != nil {
+		return domain.DirectTask{}, err
+	}
+	var out domain.DirectTask
+	return out, decodeJSON(resp, &out)
+}
+
+// ── Chat / Threads ────────────────────────────────────────────────────────────
+
+func (c *HTTPClient) ThreadList(ctx context.Context) ([]domain.ChatThread, error) {
+	resp, err := c.do(ctx, http.MethodGet, "threads", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.ChatThread
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) ThreadCreate(ctx context.Context, title string, participants []string) (domain.ChatThread, error) {
+	body := map[string]any{"title": title, "participants": participants}
+	resp, err := c.do(ctx, http.MethodPost, "threads", body)
+	if err != nil {
+		return domain.ChatThread{}, err
+	}
+	var out domain.ChatThread
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) ThreadDelete(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "threads/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
+func (c *HTTPClient) ThreadMessages(ctx context.Context, id string) ([]domain.ChatMessage, error) {
+	resp, err := c.do(ctx, http.MethodGet, "threads/"+id+"/messages", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.ChatMessage
+	return out, decodeJSON(resp, &out)
+}
+
+func (c *HTTPClient) ChatSend(ctx context.Context, botName, content, threadID string) (domain.ChatMessage, error) {
+	body := map[string]string{"content": content, "thread_id": threadID}
+	resp, err := c.do(ctx, http.MethodPost, "chat/"+botName, body)
+	if err != nil {
+		return domain.ChatMessage{}, err
+	}
+	var out domain.ChatMessage
 	return out, decodeJSON(resp, &out)
 }

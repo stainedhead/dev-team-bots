@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabotctl/internal/domain"
 )
@@ -19,6 +20,24 @@ type OrchestratorClient interface {
 	BoardUpdate(ctx context.Context, id string, req domain.UpdateWorkItemRequest) (domain.WorkItem, error)
 	BoardAssign(ctx context.Context, id, botName string) (domain.WorkItem, error)
 	BoardClose(ctx context.Context, id string) error
+	BoardActivity(ctx context.Context, id string) (domain.ActivityResponse, error)
+	BoardAsk(ctx context.Context, id, content, threadID string) (domain.ChatMessage, error)
+	BoardAttachmentUpload(ctx context.Context, id string, paths []string) (domain.WorkItem, error)
+	BoardAttachmentGet(ctx context.Context, id, attID string) (content []byte, contentType, filename string, err error)
+	BoardAttachmentDelete(ctx context.Context, id, attID string) error
+
+	// Tasks
+	TaskList(ctx context.Context) ([]domain.DirectTask, error)
+	TaskListByBot(ctx context.Context, botName string) ([]domain.DirectTask, error)
+	TaskCreate(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error)
+	TaskGet(ctx context.Context, id string) (domain.DirectTask, error)
+
+	// Chat / Threads
+	ThreadList(ctx context.Context) ([]domain.ChatThread, error)
+	ThreadCreate(ctx context.Context, title string, participants []string) (domain.ChatThread, error)
+	ThreadDelete(ctx context.Context, id string) error
+	ThreadMessages(ctx context.Context, id string) ([]domain.ChatMessage, error)
+	ChatSend(ctx context.Context, botName, content, threadID string) (domain.ChatMessage, error)
 
 	// Team
 	TeamList(ctx context.Context) ([]domain.BotEntry, error)

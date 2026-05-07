@@ -34,6 +34,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		commands.NewLoginCmd(c, os.Stdout),
 		commands.NewBoardCmd(c, os.Stdout),
+		commands.NewTaskCmd(c, os.Stdout),
+		commands.NewChatCmd(c, os.Stdout),
 		commands.NewTeamCmd(c, os.Stdout),
 		commands.NewUserCmd(c, os.Stdout),
 		commands.NewProfileCmd(c, os.Stdout),

@@ -1381,7 +1381,7 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="col-body" id="b-done"><div class="nil">No items</div></div>
         </div>
       </div>
-      <div class="ctx-panel" id="board-ctx" style="height:0">
+      <div class="ctx-panel" id="board-ctx" style="display:none">
         <div class="ctx-hdr">
           <span class="ctx-title" id="board-ctx-title">Select an item</span>
           <div class="ctx-tabs">
@@ -1404,7 +1404,7 @@ const kanbanHTML = `<!DOCTYPE html>
     <div class="pane" id="pane-tasks" style="display:flex;flex-direction:column;overflow:hidden">
       <div class="sec-hdr"><div class="sec-title">Direct Tasks</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div></div>
       <div id="tasks-body" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
-      <div class="ctx-panel" id="task-ctx" style="height:0">
+      <div class="ctx-panel" id="task-ctx" style="display:none">
         <div class="ctx-hdr">
           <span class="ctx-title" id="task-ctx-title">Select a task</span>
           <button class="ctx-close" onclick="closeTaskCtx()">&#x2715;</button>
@@ -1601,6 +1601,8 @@ const kanbanHTML = `<!DOCTYPE html>
     activeTab=name;
     document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.getAttribute('onclick').indexOf("'"+name+"'")>-1)});
     document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='pane-'+name)});
+    closeBoardCtx();
+    closeTaskCtx();
     if(name==='tasks')loadTasks();
     if(name==='chat'){loadThreads();loadChat()}
     if(name==='skills')loadSkills();
@@ -2120,6 +2122,7 @@ const kanbanHTML = `<!DOCTYPE html>
     boardCtxItem=item;
     boardCtxThread=null;
     var panel=ge('board-ctx');
+    panel.style.display='flex';
     panel.style.height='280px';
     ge('board-ctx-title').textContent=item.title;
     bctxTab(boardCtxTab);
@@ -2127,7 +2130,9 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function closeBoardCtx(){
-    ge('board-ctx').style.height='0';
+    var panel=ge('board-ctx');
+    panel.style.height='0';
+    panel.style.display='none';
     boardCtxItem=null;
   }
 
@@ -2219,13 +2224,16 @@ const kanbanHTML = `<!DOCTYPE html>
   function openTaskCtx(task){
     taskCtxTask=task;
     var panel=ge('task-ctx');
+    panel.style.display='flex';
     panel.style.height='260px';
     ge('task-ctx-title').textContent='Task: '+esc(task.bot_name);
     loadTaskCtx();
   }
 
   function closeTaskCtx(){
-    ge('task-ctx').style.height='0';
+    var panel=ge('task-ctx');
+    panel.style.height='0';
+    panel.style.display='none';
     taskCtxTask=null;
   }
 

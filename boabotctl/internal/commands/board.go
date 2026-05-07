@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,12 @@ func NewBoardCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
 		newBoardUpdateCmd(c, w),
 		newBoardAssignCmd(c, w),
 		newBoardCloseCmd(c, w),
+		newBoardActivityCmd(c, w),
+		newBoardAskCmd(c, w),
+		newBoardAttachCmd(c, w),
+		newBoardAttachmentsCmd(c, w),
+		newBoardAttachmentGetCmd(c, w),
+		newBoardAttachmentDeleteCmd(c, w),
 	)
 	return cmd
 }
@@ -166,7 +173,162 @@ func printWorkItem(w io.Writer, item domain.WorkItem) {
 	fmt.Fprintf(w, "Description: %s\n", item.Description)
 	fmt.Fprintf(w, "Status:      %s\n", item.Status)
 	fmt.Fprintf(w, "Assigned to: %s\n", item.AssignedTo)
+	if item.ActiveTaskID != "" {
+		fmt.Fprintf(w, "Active task: %s\n", item.ActiveTaskID)
+	}
+	if item.LastResult != "" {
+		result := item.LastResult
+		if len(result) > 200 {
+			result = result[:200] + "… (truncated, use 'board activity' for full output)"
+		}
+		fmt.Fprintf(w, "Last result: %s\n", result)
+	}
+	if len(item.Attachments) > 0 {
+		names := make([]string, len(item.Attachments))
+		for i, a := range item.Attachments {
+			names[i] = fmt.Sprintf("%s (%s)", a.Name, fmtBytes(a.Size))
+		}
+		fmt.Fprintf(w, "Attachments: %s\n", strings.Join(names, ", "))
+	}
 	fmt.Fprintf(w, "Created by:  %s\n", item.CreatedBy)
 	fmt.Fprintf(w, "Created at:  %s\n", item.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(w, "Updated at:  %s\n", item.UpdatedAt.Format("2006-01-02 15:04:05"))
+}
+
+func fmtBytes(b int) string {
+	switch {
+	case b < 1024:
+		return fmt.Sprintf("%dB", b)
+	case b < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(b)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(b)/1024/1024)
+	}
+}
+
+func newBoardActivityCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "activity <id>",
+		Short: "Show a work item's activity and last bot output",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			act, err := c.BoardActivity(context.Background(), args[0])
+			if err != nil {
+				return err
+			}
+			printWorkItem(w, act.Item)
+			if act.Task != nil {
+				fmt.Fprintln(w)
+				fmt.Fprintf(w, "Task ID:     %s\n", act.Task.ID)
+				fmt.Fprintf(w, "Task status: %s\n", act.Task.Status)
+				if act.Task.Output != "" {
+					fmt.Fprintf(w, "\n--- Bot Output ---\n%s\n", act.Task.Output)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newBoardAskCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	var threadID string
+	cmd := &cobra.Command{
+		Use:   "ask <id> <question>",
+		Short: "Ask the assigned bot a question about this item",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			msg, err := c.BoardAsk(context.Background(), args[0], args[1], threadID)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "Sent (thread %s). Reply will appear in chat.\n", msg.ThreadID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&threadID, "thread", "", "existing thread ID to continue (optional)")
+	return cmd
+}
+
+func newBoardAttachCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach <id> <file> [file...]",
+		Short: "Upload one or more files to a work item",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			item, err := c.BoardAttachmentUpload(context.Background(), args[0], args[1:])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "Uploaded. Item now has %d attachment(s).\n", len(item.Attachments))
+			return nil
+		},
+	}
+}
+
+func newBoardAttachmentsCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "attachments <id>",
+		Short: "List attachments on a work item",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			item, err := c.BoardGet(context.Background(), args[0])
+			if err != nil {
+				return err
+			}
+			if len(item.Attachments) == 0 {
+				fmt.Fprintln(w, "No attachments.")
+				return nil
+			}
+			tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tNAME\tSIZE\tUPLOADED")
+			for _, a := range item.Attachments {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+					a.ID, a.Name, fmtBytes(a.Size), a.UploadedAt.Format("2006-01-02 15:04"))
+			}
+			return tw.Flush()
+		},
+	}
+}
+
+func newBoardAttachmentGetCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	var outPath string
+	cmd := &cobra.Command{
+		Use:   "attachment-get <item-id> <att-id>",
+		Short: "Download or print an attachment",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, ct, name, err := c.BoardAttachmentGet(context.Background(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			if outPath != "" {
+				return os.WriteFile(outPath, data, 0o644)
+			}
+			// Print text content inline; prompt to use --output for binary.
+			if strings.HasPrefix(ct, "text/") || ct == "application/json" || ct == "" {
+				fmt.Fprintf(w, "--- %s ---\n", name)
+				_, err = w.Write(data)
+				return err
+			}
+			fmt.Fprintf(w, "Binary file (%s). Use --output <path> to save it.\n", ct)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outPath, "output", "", "write to file instead of stdout")
+	return cmd
+}
+
+func newBoardAttachmentDeleteCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "attachment-delete <item-id> <att-id>",
+		Short: "Remove an attachment from a work item",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := c.BoardAttachmentDelete(context.Background(), args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Fprintln(w, "Removed.")
+			return nil
+		},
+	}
 }

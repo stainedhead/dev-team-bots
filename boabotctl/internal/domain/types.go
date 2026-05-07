@@ -2,15 +2,71 @@ package domain
 
 import "time"
 
-type WorkItem struct {
+// Attachment holds a file uploaded to a WorkItem.
+type Attachment struct {
 	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	AssignedTo  string    `json:"assigned_to"`
-	CreatedBy   string    `json:"created_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Name        string    `json:"name"`
+	ContentType string    `json:"content_type"`
+	Content     string    `json:"content"` // base64-encoded
+	Size        int       `json:"size"`
+	UploadedAt  time.Time `json:"uploaded_at"`
+}
+
+type WorkItem struct {
+	ID           string       `json:"id"`
+	Title        string       `json:"title"`
+	Description  string       `json:"description"`
+	Status       string       `json:"status"`
+	AssignedTo   string       `json:"assigned_to"`
+	ActiveTaskID string       `json:"active_task_id,omitempty"`
+	LastResult   string       `json:"last_result,omitempty"`
+	LastResultAt *time.Time   `json:"last_result_at,omitempty"`
+	Attachments  []Attachment `json:"attachments,omitempty"`
+	CreatedBy    string       `json:"created_by"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+}
+
+// ActivityResponse is returned by GET /api/v1/board/{id}/activity.
+type ActivityResponse struct {
+	Item WorkItem    `json:"item"`
+	Task *DirectTask `json:"task,omitempty"`
+}
+
+// DirectTask is a task dispatched directly to a bot.
+type DirectTask struct {
+	ID           string     `json:"id"`
+	BotName      string     `json:"bot_name"`
+	Source       string     `json:"source,omitempty"`
+	ThreadID     string     `json:"thread_id,omitempty"`
+	Instruction  string     `json:"instruction"`
+	Status       string     `json:"status"`
+	Output       string     `json:"output,omitempty"`
+	ScheduledAt  *time.Time `json:"scheduled_at,omitempty"`
+	DispatchedAt *time.Time `json:"dispatched_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ChatThread is a named conversation session.
+type ChatThread struct {
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Participants []string  `json:"participants"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// ChatMessage is one turn in an operator↔bot conversation.
+type ChatMessage struct {
+	ID        string    `json:"id"`
+	ThreadID  string    `json:"thread_id,omitempty"`
+	BotName   string    `json:"bot_name"`
+	Direction string    `json:"direction"` // "inbound" | "outbound"
+	Content   string    `json:"content"`
+	TaskID    string    `json:"task_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type CreateWorkItemRequest struct {

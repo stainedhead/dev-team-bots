@@ -31,6 +31,7 @@ tools:
     - todo_write
     - todo_read
     - http_request
+    - run_command
   http_allowed_hosts:
     - api.github.com
   receive_from:

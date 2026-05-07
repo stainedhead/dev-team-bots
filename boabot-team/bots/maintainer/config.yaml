@@ -32,6 +32,7 @@ tools:
     - todo_read
     - http_request
     - get_metrics
+    - run_command
   http_allowed_hosts:
     - api.github.com
   receive_from:

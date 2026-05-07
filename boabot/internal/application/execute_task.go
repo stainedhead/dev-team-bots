@@ -9,6 +9,7 @@ import (
 
 type ExecuteTaskUseCase struct {
 	provider      domain.ModelProvider
+	chatProvider  domain.ModelProvider // used for chat-source tasks; nil falls back to provider
 	mcp           domain.MCPClient
 	memory        domain.MemoryStore
 	embedder      domain.Embedder
@@ -35,6 +36,11 @@ func NewExecuteTaskUseCase(
 	}
 }
 
+// WithChatProvider sets a dedicated model provider for chat-source tasks.
+func (u *ExecuteTaskUseCase) WithChatProvider(p domain.ModelProvider) {
+	u.chatProvider = p
+}
+
 // WithBudgetTracker wires a BudgetTracker into the use case.  When set, every
 // model invocation is gated by CheckAndRecordToolCall before the call and
 // CheckAndRecordTokens after, using the actual token counts from the response.
@@ -54,7 +60,12 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 		return domain.TaskResult{TaskID: task.ID}, fmt.Errorf("build context: %w", err)
 	}
 
-	resp, err := u.provider.Invoke(ctx, domain.InvokeRequest{
+	provider := u.provider
+	if task.Source == "chat" && u.chatProvider != nil {
+		provider = u.chatProvider
+	}
+
+	resp, err := provider.Invoke(ctx, domain.InvokeRequest{
 		SystemPrompt: u.soulPrompt,
 		Messages: []domain.ProviderMessage{
 			{Role: "user", Content: msgCtx},

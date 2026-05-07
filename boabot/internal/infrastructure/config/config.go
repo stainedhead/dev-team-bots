@@ -67,8 +67,9 @@ type OrchestratorConfig struct {
 }
 
 type ModelsConfig struct {
-	Default   string           `yaml:"default"`
-	Providers []ProviderConfig `yaml:"providers"`
+	Default      string           `yaml:"default"`
+	ChatProvider string           `yaml:"chat_provider"` // provider name used for chat-source tasks; falls back to Default
+	Providers    []ProviderConfig `yaml:"providers"`
 }
 
 type ProviderConfig struct {

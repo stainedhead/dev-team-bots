@@ -560,6 +560,17 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	)
 	worker.WithBudgetTracker(bt)
 
+	// Wire chat provider if configured and different from the default.
+	if chatName := botCfg.Models.ChatProvider; chatName != "" && chatName != providerName {
+		if chatProvider, chatErr := pf.Get(chatName); chatErr != nil {
+			slog.Warn("chat provider unavailable; falling back to default for chat tasks",
+				"bot", entry.Name, "chat_provider", chatName, "err", chatErr)
+		} else {
+			worker.WithChatProvider(chatProvider)
+			slog.Info("chat provider wired", "bot", entry.Name, "chat_provider", chatName)
+		}
+	}
+
 	workerFactory := &simpleWorkerFactory{worker: worker}
 
 	// Build the BotIdentity.

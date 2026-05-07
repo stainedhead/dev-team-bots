@@ -15,7 +15,7 @@
 | 2 | Research & Data Modeling | Complete |
 | 3 | Architecture & Planning | Complete |
 | 4 | Task Breakdown | Complete |
-| 5 | Implementation | 🔄 In Progress |
+| 5 | Implementation | Complete |
 | 6 | Completion & Archival | Not Started |
 
 ---
@@ -76,3 +76,7 @@ None.
 - 2026-05-07: Spec directory created from PRD; all phase files initialized.
 - 2026-05-07: Phase 5a complete — domain entities and message types.
 - 2026-05-07: Phase 5b complete — ScopedBus, Deregister, OnStatusChange hook.
+- 2026-05-07: Phase 5c complete — SessionFile, PoolStateFile atomic persistence.
+- 2026-05-07: Phase 5d complete — SubTeamManager (90.5% coverage).
+- 2026-05-07: Phase 5e complete — TechLeadPool (91.4% coverage).
+- 2026-05-07: Phase 5f complete — wire-up, REST API. All tests pass, lint clean.

@@ -1664,7 +1664,7 @@ const kanbanHTML = `<!DOCTYPE html>
       <button class="tab on" onclick="tab('board')">Board</button>
       <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
       <button class="tab" onclick="tab('chat')" id="t-chat">Chat</button>
-      <button class="tab" onclick="tab('skills')" id="t-skills">Skills</button>
+      <button class="tab" onclick="tab('plugins')" id="t-plugins">Plugins &amp; Skills</button>
       <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
       <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>
     </div>
@@ -1750,9 +1750,61 @@ const kanbanHTML = `<!DOCTYPE html>
       <select id="chat-bot-sel" style="display:none"></select>
     </div>
 
-    <!-- Skills -->
-    <div class="pane" id="pane-skills">
-      <div class="sec-hdr"><div class="sec-title">Skills</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button><button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button></div></div>
+    <!-- Plugins & Skills -->
+    <div class="pane" id="pane-plugins">
+
+      <!-- Registry Browser -->
+      <div class="sec-hdr">
+        <div class="sec-title">Registry Browser</div>
+        <div class="sec-acts">
+          <select id="registry-select" onchange="loadRegistryIndex()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
+          <input type="text" id="registry-search" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc" />
+          <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadRegistries()">Refresh</button>
+        </div>
+      </div>
+      <div id="registry-cards" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;"><div class="empty-state">Select a registry above</div></div>
+
+      <!-- Add Registry Modal -->
+      <div id="add-registry-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+        <div style="background:#fff;padding:24px;border-radius:8px;min-width:400px">
+          <h3 style="margin-top:0">Add Registry</h3>
+          <div style="margin-bottom:12px"><label>Name<br/><input id="reg-name" type="text" style="width:100%;box-sizing:border-box;padding:6px" /></label></div>
+          <div style="margin-bottom:12px"><label>URL (https://)<br/><input id="reg-url" type="text" style="width:100%;box-sizing:border-box;padding:6px" placeholder="https://..." /></label></div>
+          <div style="margin-bottom:16px"><label><input id="reg-trusted" type="checkbox" /> Trusted registry</label></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" onclick="addRegistry()">Add</button>
+            <button class="btn btn-secondary btn-sm" onclick="ge('add-registry-modal').style.display='none'">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <hr style="margin:12px 0"/>
+
+      <!-- Installed Plugins -->
+      <div class="sec-hdr">
+        <div class="sec-title">Installed Plugins</div>
+        <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadPlugins()">Refresh</button></div>
+      </div>
+      <div id="plugins-body"><div class="empty-state">Loading…</div></div>
+
+      <!-- Plugin Detail Side Panel -->
+      <div id="plugin-detail-panel" style="display:none;position:fixed;top:0;right:0;width:400px;height:100%;background:#fff;box-shadow:-2px 0 8px rgba(0,0,0,0.15);overflow:auto;padding:20px;z-index:500">
+        <button onclick="ge('plugin-detail-panel').style.display='none'" style="float:right;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
+        <h3 id="plugin-detail-name" style="margin-top:0"></h3>
+        <div id="plugin-detail-content"></div>
+      </div>
+
+      <hr style="margin:12px 0"/>
+
+      <!-- Uploaded Skills (Legacy) -->
+      <div class="sec-hdr">
+        <div class="sec-title">Manually Uploaded Skills (Legacy)</div>
+        <div class="sec-acts">
+          <button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button>
+        </div>
+      </div>
       <input type="file" id="skill-upload-inp" accept=".md,.zip" style="display:none" onchange="uploadSkill(this)"/>
       <div id="skills-body"><div class="empty-state">Loading…</div></div>
     </div>
@@ -1923,7 +1975,7 @@ const kanbanHTML = `<!DOCTYPE html>
     closeTaskCtx();
     if(name==='tasks')loadTasks();
     if(name==='chat'){loadThreads();loadChat()}
-    if(name==='skills')loadSkills();
+    if(name==='plugins'){loadPlugins();loadRegistries();}
     if(name==='dlq')loadDLQ();
     if(name==='users')loadUsers();
   }
@@ -2145,6 +2197,143 @@ const kanbanHTML = `<!DOCTYPE html>
     api('POST','/api/v1/board',body)
       .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir-sel').value='';ge('ni-workdir-txt').value='';ge('ni-workdir-txt').style.display='none';loadBoard()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
+  }
+
+  // ── Plugins & Registry ──────────────────────────────────────────────────────
+  var registryData=[];
+
+  function loadRegistries(){
+    api('GET','/api/v1/registries',null).then(function(regs){
+      registryData=regs||[];
+      var sel=ge('registry-select');
+      if(!sel)return;
+      var prev=sel.value;
+      sel.innerHTML='<option value="">-- select registry --</option>';
+      regs.forEach(function(r){
+        var opt=document.createElement('option');
+        opt.value=r.name;opt.textContent=r.name+(r.trusted?' (trusted)':'');
+        sel.appendChild(opt);
+      });
+      if(prev)sel.value=prev;
+    }).catch(function(){});
+  }
+
+  function loadRegistryIndex(){
+    var name=ge('registry-select').value;
+    if(!name){ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';return;}
+    ge('registry-cards').innerHTML='<div class="empty-state">Loading…</div>';
+    api('GET','/api/v1/registries/'+encodeURIComponent(name)+'/index',null).then(function(idx){
+      renderRegistryCards(idx.plugins||[]);
+    }).catch(function(e){ge('registry-cards').innerHTML='<div class="empty-state">Error: '+e.message+'</div>';});
+  }
+
+  function renderRegistryCards(plugins){
+    var q=(ge('registry-search').value||'').toLowerCase();
+    var filtered=plugins.filter(function(p){return !q||p.name.toLowerCase().includes(q)||p.description.toLowerCase().includes(q);});
+    if(!filtered.length){ge('registry-cards').innerHTML='<div class="empty-state">No plugins found</div>';return;}
+    ge('registry-cards').innerHTML=filtered.map(function(p){
+      return '<div style="background:#f9f9f9;border:1px solid #ddd;border-radius:6px;padding:14px;min-width:220px;max-width:260px">'+
+        '<div style="font-weight:600;margin-bottom:4px">'+esc(p.name)+'</div>'+
+        '<div style="font-size:12px;color:#666;margin-bottom:8px">'+esc(p.latest_version)+'</div>'+
+        '<div style="font-size:13px;margin-bottom:10px">'+esc(p.description)+'</div>'+
+        (p.tags&&p.tags.length?'<div style="font-size:11px;color:#888;margin-bottom:8px">'+p.tags.map(function(t){return '<span style="background:#e8e8e8;padding:2px 6px;border-radius:10px;margin-right:4px">'+esc(t)+'</span>'}).join('')+'</div>':'')+
+        '<button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>'+
+        '</div>';
+    }).join('');
+  }
+
+  function filterRegistryCards(){
+    var name=ge('registry-select').value;
+    if(name)loadRegistryIndex();
+  }
+
+  function showAddRegistryModal(){
+    ge('add-registry-modal').style.display='flex';
+  }
+
+  function addRegistry(){
+    var name=ge('reg-name').value.trim();
+    var url=ge('reg-url').value.trim();
+    var trusted=ge('reg-trusted').checked;
+    if(!name||!url){alert('Name and URL are required');return;}
+    api('POST','/api/v1/registries',{name:name,url:url,trusted:trusted}).then(function(){
+      ge('add-registry-modal').style.display='none';
+      ge('reg-name').value='';ge('reg-url').value='';ge('reg-trusted').checked=false;
+      loadRegistries();
+    }).catch(function(e){alert('Error: '+e.message);});
+  }
+
+  function installPlugin(registry,name,version){
+    if(!token){alert('Login required');return;}
+    api('POST','/api/v1/plugins',{registry:registry,name:name,version:version}).then(function(p){
+      alert('Plugin "'+name+'" installation initiated (status: '+p.status+')');
+      loadPlugins();
+    }).catch(function(e){alert('Install failed: '+e.message);});
+  }
+
+  function loadPlugins(){
+    api('GET','/api/v1/plugins',null).then(function(plugins){
+      renderPluginsTable(plugins||[]);
+    }).catch(function(){ge('plugins-body').innerHTML='<div class="empty-state">Not available</div>';});
+  }
+
+  function renderPluginsTable(plugins){
+    var el=ge('plugins-body');
+    if(!plugins.length){el.innerHTML='<div class="empty-state">No plugins installed</div>';return;}
+    var rows=plugins.map(function(p){
+      var acts='';
+      if(p.status==='staged'){acts+='<button class="btn btn-primary btn-sm" onclick="pluginAction(\'approve\',\''+p.id+'\')">Approve</button> <button class="btn btn-danger btn-sm" onclick="pluginAction(\'reject\',\''+p.id+'\')">Reject</button> ';}
+      if(p.status==='active'){acts+='<button class="btn btn-secondary btn-sm" onclick="pluginAction(\'disable\',\''+p.id+'\')">Disable</button> ';}
+      if(p.status==='disabled'){acts+='<button class="btn btn-primary btn-sm" onclick="pluginAction(\'enable\',\''+p.id+'\')">Enable</button> ';}
+      if(p.status==='active'||p.status==='disabled'){acts+='<button class="btn btn-secondary btn-sm" onclick="pluginAction(\'reload\',\''+p.id+'\')">Reload</button> ';}
+      acts+='<button class="btn btn-danger btn-sm" onclick="pluginAction(\'remove\',\''+p.id+'\')">Remove</button>';
+      return '<tr>'+
+        '<td><a href="#" onclick="showPluginDetail(\''+p.id+'\');return false" style="text-decoration:none;font-weight:500">'+esc(p.name)+'</a></td>'+
+        '<td>'+esc(p.version)+'</td>'+
+        '<td>'+esc(p.registry||'—')+'</td>'+
+        '<td><span class="badge" style="background:'+statusColor(p.status)+'">'+esc(p.status)+'</span></td>'+
+        '<td>'+esc(p.installed_at?p.installed_at.substring(0,10):'—')+'</td>'+
+        '<td>'+acts+'</td>'+
+        '</tr>';
+    }).join('');
+    el.innerHTML='<table class="tbl"><thead><tr><th>NAME</th><th>VERSION</th><th>REGISTRY</th><th>STATUS</th><th>INSTALLED</th><th>ACTIONS</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }
+
+  function statusColor(s){
+    var m={'active':'#22863a','staged':'#e36209','disabled':'#666','rejected':'#cb2431','update_available':'#0366d6','checksum_fail':'#cb2431'};
+    return m[s]||'#888';
+  }
+
+  function pluginAction(action,id){
+    var method=action==='remove'?'DELETE':'POST';
+    var path='/api/v1/plugins/'+id+(action!=='remove'?'/'+action:'');
+    api(method,path,null).then(function(){loadPlugins();}).catch(function(e){alert('Error: '+e.message);});
+  }
+
+  function showPluginDetail(id){
+    api('GET','/api/v1/plugins/'+id,null).then(function(p){
+      ge('plugin-detail-name').textContent=p.name+' '+p.version;
+      var m=p.manifest||{};
+      var tools=(m.provides&&m.provides.tools)||[];
+      var perms=m.permissions||{};
+      ge('plugin-detail-content').innerHTML=
+        '<p><b>Author:</b> '+esc(m.author||'—')+'</p>'+
+        '<p><b>Description:</b> '+esc(m.description||'—')+'</p>'+
+        '<p><b>Status:</b> <span style="color:'+statusColor(p.status)+'">'+esc(p.status)+'</span></p>'+
+        '<p><b>Registry:</b> '+esc(p.registry||'—')+'</p>'+
+        '<p><b>Entrypoint:</b> '+esc(m.entrypoint||'—')+'</p>'+
+        (m.homepage?'<p><b>Homepage:</b> <a href="'+esc(m.homepage)+'" target="_blank">'+esc(m.homepage)+'</a></p>':'')+
+        '<hr/><b>Tools provided:</b>'+
+        (tools.length?'<ul>'+tools.map(function(t){return '<li><b>'+esc(t.name)+'</b> — '+esc(t.description||'')+'</li>';}).join('')+'</ul>':'<p>None</p>')+
+        '<hr/><b>Permissions:</b>'+
+        '<ul>'+
+        (perms.filesystem?'<li>Filesystem access</li>':'')+
+        ((perms.network||[]).map(function(n){return '<li>Network: '+esc(n)+'</li>';}).join(''))+
+        ((perms.env_vars||[]).map(function(e){return '<li>Env var: '+esc(e)+'</li>';}).join(''))+
+        '</ul>'+
+        (m.checksums?'<hr/><b>Checksums:</b><pre style="font-size:11px;overflow:auto">'+esc(JSON.stringify(m.checksums,null,2))+'</pre>':'');
+      ge('plugin-detail-panel').style.display='block';
+    }).catch(function(e){alert('Error: '+e.message);});
   }
 
   // ── Skills ───────────────────────────────────────────────────────────────────
@@ -2909,7 +3098,7 @@ const kanbanHTML = `<!DOCTYPE html>
     loadBoard(); loadTeam(); loadThreads();
     if(activeTab==='tasks')loadTasks();
     if(activeTab==='chat')loadChat();
-    if(activeTab==='skills')loadSkills();
+    if(activeTab==='plugins'){loadPlugins();loadRegistries();}
     if(activeTab==='dlq')loadDLQ();
     if(activeTab==='users')loadUsers();
     if(boardCtxItem){

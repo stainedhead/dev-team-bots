@@ -58,7 +58,7 @@ func TestLocalTaskDispatcher_Dispatch_Immediate(t *testing.T) {
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
 
-	task, err := dispatcher.Dispatch(ctx, "dev-1", "write unit tests", nil, domain.DirectTaskSourceOperator)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "write unit tests", nil, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestLocalTaskDispatcher_Dispatch_ImmediateForPastScheduledAt(t *testing.T) 
 	ctx := context.Background()
 
 	past := time.Now().Add(-5 * time.Minute)
-	task, err := dispatcher.Dispatch(ctx, "dev-1", "do something", &past, domain.DirectTaskSourceOperator)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "do something", &past, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 	ctx := context.Background()
 
 	future := time.Now().Add(100 * time.Millisecond)
-	task, err := dispatcher.Dispatch(ctx, "dev-1", "scheduled work", &future, domain.DirectTaskSourceOperator)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "scheduled work", &future, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestLocalTaskDispatcher_Dispatch_MessageContainsInstruction(t *testing.T) {
 	ctx := context.Background()
 
 	instruction := "implement feature X"
-	task, err := dispatcher.Dispatch(ctx, "dev-1", instruction, nil, domain.DirectTaskSourceOperator)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", instruction, nil, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestLocalTaskDispatcher_Dispatch_StoreIsUpdated(t *testing.T) {
 	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
 	ctx := context.Background()
 
-	task, err := dispatcher.Dispatch(ctx, "dev-1", "check logs", nil, domain.DirectTaskSourceOperator)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "check logs", nil, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}

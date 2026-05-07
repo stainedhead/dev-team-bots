@@ -609,6 +609,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			}
 			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
 				msg.BotName = task.BotName
+				msg.ThreadID = task.ThreadID
 			}
 			if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil {
 				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)

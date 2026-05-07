@@ -30,12 +30,13 @@ func NewLocalTaskDispatcher(store domain.DirectTaskStore, queue domain.MessageQu
 // If scheduledAt is nil or in the past, the task is dispatched immediately and
 // returns with status=dispatched. If scheduledAt is in the future, the task is
 // stored with status=pending and a goroutine is spawned to dispatch it at that time.
-func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource) (domain.DirectTask, error) {
+func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string) (domain.DirectTask, error) {
 	now := time.Now().UTC()
 
 	task := domain.DirectTask{
 		BotName:     botName,
 		Source:      source,
+		ThreadID:    threadID,
 		Instruction: instruction,
 		Status:      domain.DirectTaskStatusPending,
 		ScheduledAt: scheduledAt,

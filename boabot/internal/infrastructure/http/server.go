@@ -291,7 +291,7 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
 		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
 			updated.Title, updated.Description, updated.ID)
-		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard); dispErr != nil {
+		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard, ""); dispErr != nil {
 			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
 			// Non-fatal: the board update already succeeded.
 		} else {
@@ -666,7 +666,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "instruction must not be empty")
 		return
 	}
-	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator)
+	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator, "")
 	if err != nil {
 		writeInternalError(w, "bot task create", err)
 		return
@@ -776,7 +776,7 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, msg)
 	instruction := fmt.Sprintf("Regarding board item '%s' (ID: %s):\n\n%s", item.Title, item.ID, req.Content)
-	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat)
+	task, dispErr := s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil, domain.DirectTaskSourceChat, threadID)
 	if dispErr != nil {
 		writeInternalError(w, "ask dispatch", dispErr)
 		return
@@ -882,7 +882,7 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	task, err := s.cfg.Dispatcher.Dispatch(ctx, bot, instruction, nil, domain.DirectTaskSourceChat)
+	task, err := s.cfg.Dispatcher.Dispatch(ctx, bot, instruction, nil, domain.DirectTaskSourceChat, threadID)
 	if err != nil {
 		writeInternalError(w, "chat dispatch", err)
 		return

@@ -194,7 +194,7 @@ func TestChatSend_Returns201WithMessage(t *testing.T) {
 	}
 	var dispatchedBot, dispatchedInstruction string
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource, _ string) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
 			return domain.DirectTask{ID: "task-99", BotName: botName, Instruction: instruction, Status: domain.DirectTaskStatusDispatched}, nil

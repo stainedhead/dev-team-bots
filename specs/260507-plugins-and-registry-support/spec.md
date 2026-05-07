@@ -193,12 +193,77 @@ None. All changes are additive. The existing `SkillRegistry` interface and endpo
 
 ## Success Criteria and Acceptance Criteria
 
-See PRD Acceptance Criteria section. Quality gates:
+### Quality Gates
 
 - All tests pass: `go test -race ./...`
 - Coverage ≥ 90% on `internal/domain/...` and `internal/application/...` (excluding `mocks/`)
 - Linter clean: `golangci-lint run`
-- All 22 FRs implemented and verified by at least one test each
+- All 22 FRs covered by at least one automated test
+
+### Acceptance Criteria
+
+**AC-001** (FR-001) — `POST /api/v1/registries` with a valid HTTPS URL returns 201 and the registry appears in `GET /api/v1/registries`. An HTTP URL is rejected with 400.
+
+**AC-002** (FR-002) — `GET /api/v1/registries/{name}/index` returns the parsed registry index. The admin UI Registry Browser renders the catalog and its search/filter controls.
+
+**AC-003** (FR-003) — `POST /api/v1/plugins` with a trusted-registry plugin returns a `Plugin` with `status: active`. A subsequent `GET /api/v1/plugins` includes the plugin. No approval step is required.
+
+**AC-004** (FR-004) — `POST /api/v1/plugins` with an untrusted-registry plugin returns a `Plugin` with `status: staged`. The plugin's tools do not appear in `ListTools` until `POST /api/v1/plugins/{id}/approve` is called.
+
+**AC-005** (FR-005) — Install with a deliberately wrong SHA-256 in `plugin.yaml` returns an error; no directory is created under `install_dir`.
+
+**AC-006** (FR-006) — Attempting to install a tar.gz containing a member path with `../` traversal returns an error; no files are written to `install_dir`.
+
+**AC-007** (FR-007) — A test archive that extracts to > 50 MB is rejected; the temp directory is deleted; `install_dir` contains no trace of the attempted install.
+
+**AC-008** (FR-008) — `POST /api/v1/plugins/{id}/reload` returns 200; the next `ListTools` call reflects changes made to the plugin's `plugin.yaml` without a process restart.
+
+**AC-009** (FR-009) — `POST /api/v1/plugins/{id}/update` replaces the plugin with the new version; `GET /api/v1/plugins/{id}` returns the new version string. The old version directory is removed.
+
+**AC-010** (FR-010) — After `POST /api/v1/plugins/{id}/disable`, `ListTools` does not include the plugin's tools. After `POST /api/v1/plugins/{id}/enable`, the tools reappear on the next `ListTools` call.
+
+**AC-011** (FR-011) — After `DELETE /api/v1/plugins/{id}`, the plugin directory under `install_dir` is deleted and the plugin is absent from `ListTools`.
+
+**AC-012** (FR-012) — A registry added at runtime via the API persists across a process restart: `GET /api/v1/registries` returns it after the process is restarted with the same `install_dir`.
+
+**AC-013** (FR-013) — Every lifecycle operation (install, approve, reject, disable, enable, update, reload, remove) produces a structured `slog` log line containing all required fields. Verified by reading log output in tests.
+
+**AC-014** (FR-014) — The admin UI Plugin Detail Panel shows plugin name, version, description, author, tags, all tool names and descriptions, permissions, and SHA-256 checksum.
+
+**AC-015** (FR-015) — `boabotctl plugin list` outputs a table with columns NAME, VERSION, REGISTRY, STATUS, INSTALLED for all installed plugins.
+
+**AC-016** (FR-016) — `boabotctl plugin info <name>` outputs the full manifest block including tools and permissions sections.
+
+**AC-017** (FR-017) — `boabotctl plugin install <name>` installs the latest version from the first registry. `--version` pins to a specific version. `--registry` pins to a specific registry.
+
+**AC-018** (FR-018) — `boabotctl plugin remove <name>` removes the plugin; a subsequent `boabotctl plugin list` does not include it.
+
+**AC-019** (FR-019) — `boabotctl plugin reload <name>` triggers reload; no process restart occurs.
+
+**AC-020** (FR-020) — All existing skill endpoint tests pass without modification.
+
+**AC-021** (FR-021) — Installing a second plugin that declares a tool name already claimed by an active plugin disables the second plugin and logs a warning. The first plugin's tool continues to work.
+
+**AC-022** (FR-022) — The default `config.yaml` template includes `stainedhead/shared-plugins` with `trusted: true` as the first registry entry.
+
+---
+
+## Edge Case Handling
+
+| Scenario | Expected Behaviour |
+|---|---|
+| Registry index returns non-JSON or malformed JSON | `FetchIndex` returns an error; the UI shows a registry-fetch-failed message; no partial state is written |
+| Registry index fetch times out (> 10s) | HTTP client cancels the request; error surfaced to caller; cached index (if present) is retained |
+| Archive download times out (> 60s) | HTTP client cancels; temp dir (if started) is deleted; install returns error |
+| Archive wire size > 20 MB | Response body is rejected before reading; install returns error; no temp dir created |
+| `install_dir` does not exist on startup | Startup logs a warning and attempts to create it; if creation fails, plugin system is disabled and existing skills continue to work |
+| `install_dir` is not writable | Installer returns an error at first write; no partial state left; surfaced as a 500 with a clear message |
+| `status.json` is corrupt or missing for an installed plugin directory | `ListTools` skips that directory and logs a warning; it does not crash or return an error to the caller |
+| Concurrent install of the same plugin name | Second install is rejected with a conflict error (409) if a plugin with that name already exists in any non-terminal state |
+| Plugin entrypoint subprocess crashes (non-zero exit) | `CallTool` returns an `MCPToolResult` with `IsError: true` and the stderr text as the content; the plugin remains active |
+| Plugin entrypoint subprocess times out | `CallTool` kills the subprocess after the configured timeout and returns an error result; the plugin remains active |
+| Entrypoint file missing after reload | `POST .../reload` returns an error; the plugin is moved to `disabled` status with a descriptive message |
+| Plugin name not found in `boabotctl plugin info/remove/reload` | CLI exits with a non-zero code and prints `plugin "<name>" not found` |
 
 ---
 

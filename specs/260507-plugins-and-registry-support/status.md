@@ -26,9 +26,10 @@
 - [x] PRD moved into spec directory
 - [x] spec.md populated from PRD
 - [x] All phase files initialized
-- [ ] Research questions identified and documented in research.md
-- [ ] Data dictionary seeded with domain entity stubs
-- [ ] Architecture overview drafted
+- [x] Research questions identified and documented in research.md
+- [x] Data dictionary seeded with domain entity stubs
+- [x] Architecture overview drafted
+- [x] Spec reviewed — acceptance criteria inlined (AC-001–AC-022), edge cases documented
 
 ---
 
@@ -41,3 +42,4 @@ None.
 ## Recent Activity
 
 - 2026-05-07 — Spec directory created from finalized PRD (all 9 open questions resolved)
+- 2026-05-07 — Spec reviewed: inline ACs added (AC-001–AC-022), 12 edge cases documented

@@ -21,6 +21,7 @@ const (
 type DirectTask struct {
 	ID           string           `json:"id"`
 	BotName      string           `json:"bot_name"`
+	Title        string           `json:"title,omitempty"`
 	Source       DirectTaskSource `json:"source,omitempty"`
 	ThreadID     string           `json:"thread_id,omitempty"` // set for chat-source tasks
 	Instruction  string           `json:"instruction"`
@@ -64,6 +65,9 @@ type DirectTaskStore interface {
 // TaskDispatcher assigns immediate or scheduled tasks to bots.
 type TaskDispatcher interface {
 	Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source DirectTaskSource, threadID string, workDir string) (DirectTask, error)
+	// RunNow immediately dispatches an existing task regardless of its scheduled time.
+	// Tasks already in dispatched state are returned as-is without re-dispatching.
+	RunNow(ctx context.Context, id string) (DirectTask, error)
 }
 
 // ChatThread represents a named conversation session.

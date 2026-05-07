@@ -146,6 +146,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tasks", s.auth(s.handleTaskList))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", s.auth(s.handleTaskGet))
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.auth(s.adminOnly(s.handleTaskDelete)))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/run", s.auth(s.handleTaskRunNow))
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
 
@@ -969,6 +970,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	var req struct {
+		Title       string     `json:"title,omitempty"`
 		Instruction string     `json:"instruction"`
 		ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 		WorkDir     string     `json:"work_dir,omitempty"`
@@ -985,6 +987,12 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeInternalError(w, "bot task create", err)
 		return
+	}
+	if req.Title != "" && s.cfg.Tasks != nil {
+		task.Title = req.Title
+		if updated, updErr := s.cfg.Tasks.Update(r.Context(), task); updErr == nil {
+			task = updated
+		}
 	}
 	writeJSON(w, http.StatusCreated, task)
 }
@@ -1046,6 +1054,20 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		_ = os.RemoveAll(filepath.Join(s.cfg.TaskLogBase, task.ID))
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleTaskRunNow(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "task dispatch not available")
+		return
+	}
+	id := r.PathValue("id")
+	task, err := s.cfg.Dispatcher.RunNow(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (s *Server) handleSkillUpload(w http.ResponseWriter, r *http.Request) {
@@ -1732,6 +1754,7 @@ const kanbanHTML = `<!DOCTYPE html>
           <button class="btn btn-sm task-filter-btn"        id="tf-scheduled" onclick="setTaskFilter('scheduled')">Scheduled</button>
         </div>
         <div class="sec-acts">
+          <button id="task-run-btn" class="btn btn-primary btn-sm" disabled onclick="runSelectedTasks()" style="opacity:.35;cursor:not-allowed">Run Selected</button>
           <button id="task-del-btn" class="btn btn-danger btn-sm" disabled onclick="deleteSelectedTasks()" style="opacity:.35;cursor:not-allowed">Delete Selected</button>
           <button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button>
         </div>
@@ -1891,6 +1914,7 @@ const kanbanHTML = `<!DOCTYPE html>
 <dialog id="at-dlg">
   <h2>Assign Task</h2>
   <div class="fg"><label class="fl">Bot</label><div id="at-bot" style="font-size:.82rem;color:#64748b;padding:.25rem 0"></div></div>
+  <div class="fg"><label class="fl">Title</label><input class="fi" id="at-title" type="text" placeholder="Brief label (optional)"/></div>
   <div class="fg"><label class="fl">Instruction</label><textarea class="fi" id="at-instr" placeholder="Describe the task…" required></textarea></div>
   <div class="fg">
     <label class="fl">Timing</label>
@@ -2483,10 +2507,9 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function updateTaskDeleteBtn(){
     var checked=ge('tasks-list').querySelectorAll('input[data-cid]:checked').length;
-    var btn=ge('task-del-btn');
-    btn.disabled=!checked;
-    btn.style.opacity=checked?'1':'0.35';
-    btn.style.cursor=checked?'pointer':'not-allowed';
+    function setBtn(btn,on){if(!btn)return;btn.disabled=!on;btn.style.opacity=on?'1':'0.35';btn.style.cursor=on?'pointer':'not-allowed'}
+    setBtn(ge('task-del-btn'),checked>0);
+    setBtn(ge('task-run-btn'),checked>0);
   }
 
   function renderTaskList(){
@@ -2495,10 +2518,10 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">None</div>';return}
     var rows=tasks.map(function(t){
       var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
-      var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'&#x2026;':'');
-      return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
+      var label=esc(t.title||(t.instruction||'').substring(0,60))+((!t.title&&t.instruction&&t.instruction.length>60)?'&#x2026;':'');
+      return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+label+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
     }).join('');
-    el.innerHTML='<table><thead><tr><th style="width:1.5rem"><input type="checkbox" id="task-chk-all" onclick="toggleAllTaskChecks(this)"/></th><th>Bot</th><th>Instruction</th><th>Status</th><th>Sched</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el.innerHTML='<table><thead><tr><th style="width:1.5rem"><input type="checkbox" id="task-chk-all" onclick="toggleAllTaskChecks(this)"/></th><th>Bot</th><th>Title / Instruction</th><th>Status</th><th>Sched</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
     el.querySelectorAll('tr[data-tid]').forEach(function(tr){
       tr.style.cursor='pointer';
       tr.onclick=function(ev){
@@ -2533,6 +2556,19 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(e){alert('Delete failed: '+e.message);loadTasks()});
   }
 
+  function runSelectedTasks(){
+    var ids=[];
+    ge('tasks-list').querySelectorAll('input[data-cid]:checked').forEach(function(cb){
+      var id=cb.getAttribute('data-cid');
+      var task=allTasksList.find(function(t){return t.id===id});
+      if(task&&task.status!=='dispatched')ids.push(id);
+    });
+    if(!ids.length){alert('No eligible tasks selected (already-running tasks are skipped).');return}
+    Promise.all(ids.map(function(id){return api('POST','/api/v1/tasks/'+id+'/run',{})}))
+      .then(function(){loadTasks()})
+      .catch(function(e){alert('Run failed: '+e.message);loadTasks()});
+  }
+
   function openAssignTask(botName){
     ge('at-bot').textContent=botName;
     ge('at-instr').value='';
@@ -2554,6 +2590,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function doDispatchTask(){
     var botName=ge('at-bot').textContent;
+    var title=ge('at-title').value.trim();
     var instruction=ge('at-instr').value.trim();
     var isNow=ge('at-now').checked;
     var schedVal=ge('at-sched').value;
@@ -2563,10 +2600,11 @@ const kanbanHTML = `<!DOCTYPE html>
     var root=ge('at-workdir-sel').value,sub=ge('at-workdir-txt').value.trim();
     var workDir=root?(sub?root+'/'+sub:root):'';
     var body={instruction:instruction};
+    if(title){body.title=title}
     if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
     if(workDir){body.work_dir=workDir}
     api('POST','/api/v1/bots/'+botName+'/tasks',body)
-      .then(function(){cls('at-dlg');setTaskFilter('immediate');tab('tasks');loadTasks()})
+      .then(function(){cls('at-dlg');ge('at-title').value='';ge('at-instr').value='';setTaskFilter('immediate');tab('tasks');loadTasks()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -3091,6 +3129,7 @@ const kanbanHTML = `<!DOCTYPE html>
       return;
     }
     body.innerHTML=
+      (t.title?'<div class="ctx-row"><span class="ctx-lbl">Title</span><span class="ctx-val" style="font-weight:500">'+esc(t.title)+'</span></div>':'')+
       '<div class="ctx-row"><span class="ctx-lbl">Bot</span><span class="ctx-val">'+esc(t.bot_name)+'</span></div>'+
       '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(t.status)+'</span></div>'+
       '<div class="ctx-row"><span class="ctx-lbl">Source</span><span class="ctx-val">'+(t.source||'&#x2014;')+'</span></div>'+

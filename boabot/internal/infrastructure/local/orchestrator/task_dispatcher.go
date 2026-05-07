@@ -44,6 +44,8 @@ func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	// Title is set by callers that populate the struct directly; Dispatch does not
+	// accept it as a parameter to keep the signature stable.
 
 	created, err := d.store.Create(ctx, task)
 	if err != nil {
@@ -78,6 +80,19 @@ func (d *LocalTaskDispatcher) dispatchNow(ctx context.Context, task domain.Direc
 		return task, err
 	}
 	return updated, nil
+}
+
+// RunNow immediately dispatches an existing task regardless of its scheduled time.
+// If the task is already dispatched it is returned unchanged.
+func (d *LocalTaskDispatcher) RunNow(ctx context.Context, id string) (domain.DirectTask, error) {
+	task, err := d.store.Get(ctx, id)
+	if err != nil {
+		return domain.DirectTask{}, err
+	}
+	if task.Status == domain.DirectTaskStatusDispatched {
+		return task, nil
+	}
+	return d.dispatchNow(ctx, task)
 }
 
 // dispatchAt waits until scheduledAt, then dispatches the task.

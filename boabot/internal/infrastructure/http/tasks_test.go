@@ -93,6 +93,10 @@ func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction 
 	}, nil
 }
 
+func (f *fakeTaskDispatcher) RunNow(_ context.Context, _ string) (domain.DirectTask, error) {
+	return domain.DirectTask{Status: domain.DirectTaskStatusDispatched}, nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newTaskTestServer() *httptest.Server {

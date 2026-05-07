@@ -1,8 +1,8 @@
 # PRD — Plugin Registry Support
 
-**Status:** Draft  
+**Status:** Reviewed  
 **Author:** stainedhead  
-**Module:** `boabot` (runtime + HTTP server), `boabotctl` (CLI)
+**Module:** `boabot` (runtime + HTTP server), `boabotctl` (CLI — plugin subcommands)
 
 ---
 
@@ -31,6 +31,9 @@ Teams need a way to browse, install, update, and remove named, versioned plugins
 - Plugins do not auto-update without explicit admin action.
 - Plugin sandboxing beyond the existing subprocess isolation model is out of scope.
 - Bot-initiated plugin installation is out of scope. Only admin actions install or update plugins.
+- Private/authenticated registries are out of scope. Only anonymous HTTPS registries are supported.
+- `min_runtime` version enforcement is out of scope; the field is advisory metadata only.
+- Per-bot plugin scoping is out of scope; all active plugins are available to all bots.
 
 ---
 
@@ -46,6 +49,36 @@ Teams need a way to browse, install, update, and remove named, versioned plugins
 | Admin | to add a second registry URL | I can mix first-party and community plugins |
 | Admin | to reload a plugin without restarting the runtime | I can pick up changes to a running bot |
 | Bot | to receive new tools from an installed plugin automatically | capabilities appear without a process restart |
+
+---
+
+## Non-Functional Requirements
+
+### Performance
+
+- Registry index fetches must complete within 10 seconds or be aborted with an error.
+- Plugin archive downloads must complete within 60 seconds or be aborted and cleaned up.
+- Maximum plugin archive size on the wire: 20 MB compressed. Requests exceeding this are rejected before extraction begins.
+- Maximum total extracted size per plugin: 50 MB. Extraction is aborted and the temp directory cleaned up if this limit is exceeded.
+- The registry index is cached in memory with a 5-minute TTL. A "Reload" action in the UI forces a fresh fetch regardless of cache state.
+
+### Reliability
+
+- Plugin install is atomic: the archive is extracted to a temp directory inside `install_dir`, validated, then renamed to the final directory. Any failure at any stage deletes the temp directory. `install_dir` never contains a partially-extracted plugin.
+- `install_dir` is a persistent directory. For cloud deployments (ECS), operators must mount it on a persistent volume — same contract as the `memory/` directory.
+- Runtime-added registries are persisted in `install_dir/registries.json` and survive process restarts. Registries declared in `config.yaml` are always loaded on startup and take precedence.
+
+### Security
+
+- All registry fetches use HTTPS only; HTTP URLs are rejected at config validation time.
+- Checksum verification: the `sha256` declared in `plugin.yaml` must match `sha256(downloaded .tar.gz)`. Mismatch aborts installation with no files written.
+- Archive extraction enforces zip-slip protection: any member whose cleaned path resolves outside the target directory causes the install to abort and the temp directory to be deleted.
+- Plugin entrypoint scripts run in the existing subprocess sandbox. Network access is limited to hosts declared in `permissions.network`. Env vars are injected from the credentials config; the subprocess cannot read env vars not declared in the manifest.
+- Trusted registries skip the admin approval gate but still require checksum verification.
+
+### Observability
+
+- A structured `slog` log line is emitted for every plugin lifecycle event: install, approve, reject, disable, enable, update, reload, remove. Each log line includes: `plugin_name`, `version`, `registry`, `actor` (admin username from JWT claims), `status`, and `timestamp`.
 
 ---
 
@@ -425,6 +458,18 @@ Actions per row:
 
 "Update All" button at top applies available updates to all active plugins from trusted registries.
 
+### Plugin Detail Panel
+
+Clicking any plugin name (in the Registry Browser or Installed Plugins table) opens a side panel or modal showing:
+
+- Full metadata: name, version, description, author, tags, min_runtime, homepage.
+- Status badge and installed-at timestamp.
+- Tools list: name, description, and full input schema for each tool provided.
+- Permissions summary: network hosts, required env vars, filesystem access flag.
+- Checksum: sha256 of the installed archive.
+- Registry source URL (or "Manual upload" for legacy skills).
+- Action buttons matching the current status (same set as the Installed Plugins table row).
+
 ### 3. Uploaded Skills (Legacy)
 
 Existing skills table. Unchanged behaviour. Label: "Manually uploaded skills".
@@ -441,6 +486,60 @@ The local MCP client (`infrastructure/local/mcp`) currently returns 5 built-in t
 2. Each active plugin's `provides.tools` entries are added to the tool list.
 3. On `CallTool`, if the tool name belongs to an installed plugin, the client launches the plugin's entrypoint subprocess (same sandbox model as skills) with the tool name and JSON args on stdin, reads the JSON result from stdout.
 4. Tool name collision detection: if two active plugins declare the same tool name, the second one is disabled at activation time and an admin warning is surfaced.
+
+---
+
+## boabotctl — Plugin Subcommands
+
+`boabotctl` gains a `plugin` subcommand group. All commands call the boabot REST API; auth is handled via the existing token mechanism.
+
+```
+boabotctl plugin list                          # List all installed plugins and their status
+boabotctl plugin info <name>                   # Show full detail for a single installed plugin
+boabotctl plugin install <name>                # Install latest version from the first matching registry
+  --registry <name>                            # Specify which registry to install from
+  --version <version>                          # Pin to a specific version
+boabotctl plugin remove <name>                 # Remove an installed plugin and delete its files
+boabotctl plugin reload <name>                 # Reload plugin from disk without restarting the runtime
+```
+
+Output format for `plugin list`:
+
+```
+NAME                   VERSION   REGISTRY   STATUS             INSTALLED
+github-pr-reviewer     1.2.0     official   active             2026-05-07
+jira-integration       2.0.0     official   update_available   2026-04-01
+custom-tool            1.0.0     —          staged             2026-05-06
+```
+
+Output format for `plugin info <name>`:
+
+```
+Name:           github-pr-reviewer
+Version:        1.2.0
+Registry:       official
+Status:         active
+Installed:      2026-05-07
+Description:    GitHub PR review and creation tools for bots
+Author:         stainedhead
+Tags:           github, pr, code-review
+Min Runtime:    1.0.0
+
+Tools:
+  create_pr         Creates a GitHub pull request
+  list_prs          Lists open pull requests for a repository
+  request_review    Requests a review on an open PR
+
+Permissions:
+  Network:      api.github.com
+  Env vars:     GITHUB_TOKEN
+  Filesystem:   false
+
+Checksums:
+  sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+All write operations (`install`, `remove`, `reload`) require admin credentials. `list` and `info` are read-only and require only a valid token.
 
 ---
 
@@ -481,6 +580,14 @@ Future: a migration utility to convert an existing skill archive into a `plugin.
 - Add `stainedhead/shared-plugins` as the default trusted registry in the default `config.yaml` template
 - Publish `index.json` bootstrap to `stainedhead/shared-plugins` on GitHub
 
+### Phase 6 — boabotctl plugin subcommands
+- `boabotctl plugin list` — calls `GET /api/v1/plugins`, renders table
+- `boabotctl plugin info <name>` — calls `GET /api/v1/plugins/{id}`, renders full detail view
+- `boabotctl plugin install <name>` — calls `POST /api/v1/plugins`; supports `--registry` and `--version` flags
+- `boabotctl plugin remove <name>` — calls `DELETE /api/v1/plugins/{id}`
+- `boabotctl plugin reload <name>` — calls `POST /api/v1/plugins/{id}/reload`
+- Unit tests for CLI output formatting; integration tests against a running boabot instance
+
 ---
 
 ## Acceptance Criteria
@@ -491,6 +598,27 @@ Future: a migration utility to convert an existing skill archive into a `plugin.
 - Checksum mismatch aborts installation; no files are written to `install_dir`.
 - Removing a plugin causes `ListTools` to stop returning its tools on the next call.
 - All existing skill upload, approve, reject, revoke flows continue to work without change.
-- Registries list survives a process restart (persisted in config or a sidecar JSON file).
+- Runtime-added registries survive a process restart: they are persisted to `install_dir/registries.json` and loaded on startup.
 - A plugin reload picks up changes to its `entrypoint` without restarting the boabot process.
 - Default config includes `stainedhead/shared-plugins` as the first trusted registry.
+- Archive extraction enforces zip-slip protection: any archive member whose resolved path escapes the target directory causes the install to abort; no files from that archive are retained.
+- Archives that would expand beyond 50 MB are aborted during extraction; the temp directory is deleted.
+- Every plugin lifecycle event (install, approve, reject, disable, enable, update, reload, remove) produces a structured `slog` log line containing `plugin_name`, `version`, `registry`, `actor`, `status`, and `timestamp`.
+- `boabotctl plugin info <name>` prints the full manifest detail, tool list, and permissions for an installed plugin.
+- Clicking a plugin name in the UI opens a detail panel showing full manifest metadata, tools, permissions, and checksum.
+
+---
+
+## Open Questions (Resolved)
+
+| # | Question | Decision |
+|---|---|---|
+| OQ-1 | Private/authenticated registries in scope? | **Out of scope.** Only anonymous HTTPS registries are supported. Private registries are a future feature. |
+| OQ-2 | Where is the runtime registry list persisted? | **`install_dir/registries.json`** — a JSON sidecar in the persistent install directory. Registries declared in `config.yaml` always load on startup and take precedence over runtime additions. |
+| OQ-3 | Global or per-bot plugin scoping? | **Global scope.** All active plugins are available to all bots. Per-bot scoping is listed as a non-goal. |
+| OQ-4 | Registry index cache strategy? | **5-minute in-memory TTL.** A "Reload" action in the UI forces a fresh fetch regardless of cache state. |
+| OQ-5 | `min_runtime` enforcement? | **Advisory only.** The field is metadata; the runtime logs a warning if the installed runtime version is below `min_runtime` but does not block installation. |
+| OQ-6 | `boabotctl` plugin subcommands? | **`list`, `info`, `install`, `remove`, `reload`.** All call the boabot REST API. |
+| OQ-7 | Atomic install strategy? | **Temp dir → rename.** Extract to a temp dir inside `install_dir`, validate (checksum + zip-slip), then rename to final directory. Any failure deletes the temp dir. |
+| OQ-8 | Audit logging mechanism? | **Structured `slog`** — one log line per lifecycle event with standard fields (`plugin_name`, `version`, `registry`, `actor`, `status`, `timestamp`). |
+| OQ-9 | Archive security constraints? | **Zip-slip protection + 50 MB extraction cap.** Any path traversal attempt aborts the install. Extraction is aborted if total extracted size exceeds 50 MB. |

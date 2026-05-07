@@ -33,7 +33,7 @@ func TestBoardUpdate_DispatchesTaskOnInProgress(t *testing.T) {
 		},
 	}
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
 			return domain.DirectTask{ID: "dispatched-task", BotName: botName, Status: domain.DirectTaskStatusDispatched}, nil
@@ -79,7 +79,7 @@ func TestBoardUpdate_DispatchesTaskOnInProgress(t *testing.T) {
 func TestBoardUpdate_NoDispatch_WhenNotInProgress(t *testing.T) {
 	dispatchCount := 0
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			dispatchCount++
 			return domain.DirectTask{}, nil
 		},
@@ -133,7 +133,7 @@ func TestBoardUpdate_NoDispatch_WhenNoAssignedBot(t *testing.T) {
 		},
 	}
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			dispatchCount++
 			return domain.DirectTask{}, nil
 		},
@@ -184,7 +184,7 @@ func TestBoardUpdate_DispatchFailure_DoesNotFailBoardUpdate(t *testing.T) {
 		},
 	}
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			return domain.DirectTask{}, context.Canceled // simulate failure
 		},
 	}

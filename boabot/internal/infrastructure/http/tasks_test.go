@@ -66,12 +66,12 @@ func (f *fakeDirectTaskStore) ListAll(ctx context.Context) ([]domain.DirectTask,
 }
 
 type fakeTaskDispatcher struct {
-	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error)
+	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource) (domain.DirectTask, error)
 }
 
-func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error) {
+func (f *fakeTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource) (domain.DirectTask, error) {
 	if f.dispatchFn != nil {
-		return f.dispatchFn(ctx, botName, instruction, scheduledAt)
+		return f.dispatchFn(ctx, botName, instruction, scheduledAt, source)
 	}
 	return domain.DirectTask{
 		ID:          "task-new",
@@ -153,7 +153,7 @@ func TestBotTaskCreate_WithScheduledAt(t *testing.T) {
 	var capturedBotName, capturedInstruction string
 
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, scheduledAt *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, scheduledAt *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			capturedBotName = botName
 			capturedInstruction = instruction
 			capturedScheduledAt = scheduledAt
@@ -229,7 +229,7 @@ func TestBotTaskCreate_RequiresAuth(t *testing.T) {
 
 func TestBotTaskCreate_DispatcherError_Returns500(t *testing.T) {
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			return domain.DirectTask{}, errors.New("queue full")
 		},
 	}

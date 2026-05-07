@@ -18,9 +18,34 @@ import (
 // ── fake chat store ───────────────────────────────────────────────────────────
 
 type fakeChatStore struct {
-	appendFn  func(ctx context.Context, msg domain.ChatMessage) error
-	listFn    func(ctx context.Context, botName string) ([]domain.ChatMessage, error)
-	listAllFn func(ctx context.Context) ([]domain.ChatMessage, error)
+	appendFn         func(ctx context.Context, msg domain.ChatMessage) error
+	listFn           func(ctx context.Context, threadID string) ([]domain.ChatMessage, error)
+	listAllFn        func(ctx context.Context) ([]domain.ChatMessage, error)
+	listByBotFn      func(ctx context.Context, botName string) ([]domain.ChatMessage, error)
+	createThreadFn   func(ctx context.Context, title string, participants []string) (domain.ChatThread, error)
+	listThreadsFn    func(ctx context.Context) ([]domain.ChatThread, error)
+	deleteThreadFn   func(ctx context.Context, threadID string) error
+}
+
+func (f *fakeChatStore) CreateThread(ctx context.Context, title string, participants []string) (domain.ChatThread, error) {
+	if f.createThreadFn != nil {
+		return f.createThreadFn(ctx, title, participants)
+	}
+	return domain.ChatThread{ID: "thread-1", Title: title, Participants: participants}, nil
+}
+
+func (f *fakeChatStore) ListThreads(ctx context.Context) ([]domain.ChatThread, error) {
+	if f.listThreadsFn != nil {
+		return f.listThreadsFn(ctx)
+	}
+	return []domain.ChatThread{{ID: "thread-1", Title: "Test Thread"}}, nil
+}
+
+func (f *fakeChatStore) DeleteThread(ctx context.Context, threadID string) error {
+	if f.deleteThreadFn != nil {
+		return f.deleteThreadFn(ctx, threadID)
+	}
+	return nil
 }
 
 func (f *fakeChatStore) Append(ctx context.Context, msg domain.ChatMessage) error {
@@ -30,12 +55,12 @@ func (f *fakeChatStore) Append(ctx context.Context, msg domain.ChatMessage) erro
 	return nil
 }
 
-func (f *fakeChatStore) List(ctx context.Context, botName string) ([]domain.ChatMessage, error) {
+func (f *fakeChatStore) List(ctx context.Context, threadID string) ([]domain.ChatMessage, error) {
 	if f.listFn != nil {
-		return f.listFn(ctx, botName)
+		return f.listFn(ctx, threadID)
 	}
 	return []domain.ChatMessage{
-		{ID: "m1", BotName: botName, Direction: domain.ChatDirectionOutbound, Content: "hello", CreatedAt: time.Now()},
+		{ID: "m1", ThreadID: threadID, BotName: "dev-1", Direction: domain.ChatDirectionOutbound, Content: "hello", CreatedAt: time.Now()},
 	}, nil
 }
 
@@ -45,6 +70,15 @@ func (f *fakeChatStore) ListAll(ctx context.Context) ([]domain.ChatMessage, erro
 	}
 	return []domain.ChatMessage{
 		{ID: "m1", BotName: "dev-1", Direction: domain.ChatDirectionOutbound, Content: "hello", CreatedAt: time.Now()},
+	}, nil
+}
+
+func (f *fakeChatStore) ListByBot(ctx context.Context, botName string) ([]domain.ChatMessage, error) {
+	if f.listByBotFn != nil {
+		return f.listByBotFn(ctx, botName)
+	}
+	return []domain.ChatMessage{
+		{ID: "m1", BotName: botName, Direction: domain.ChatDirectionOutbound, Content: "hello", CreatedAt: time.Now()},
 	}, nil
 }
 
@@ -100,7 +134,7 @@ func TestChatList_RequiresAuth(t *testing.T) {
 func TestChatBotList_ReturnsMessagesForBot(t *testing.T) {
 	var capturedBotName string
 	chat := &fakeChatStore{
-		listFn: func(_ context.Context, botName string) ([]domain.ChatMessage, error) {
+		listByBotFn: func(_ context.Context, botName string) ([]domain.ChatMessage, error) {
 			capturedBotName = botName
 			return []domain.ChatMessage{
 				{ID: "m1", BotName: botName, Direction: domain.ChatDirectionOutbound, Content: "ping"},
@@ -160,7 +194,7 @@ func TestChatSend_Returns201WithMessage(t *testing.T) {
 	}
 	var dispatchedBot, dispatchedInstruction string
 	dispatcher := &fakeTaskDispatcher{
-		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time) (domain.DirectTask, error) {
+		dispatchFn: func(_ context.Context, botName, instruction string, _ *time.Time, _ domain.DirectTaskSource) (domain.DirectTask, error) {
 			dispatchedBot = botName
 			dispatchedInstruction = instruction
 			return domain.DirectTask{ID: "task-99", BotName: botName, Instruction: instruction, Status: domain.DirectTaskStatusDispatched}, nil

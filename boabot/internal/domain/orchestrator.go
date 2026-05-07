@@ -47,6 +47,7 @@ type WorkItem struct {
 	Description    string         `json:"description"`
 	Status         WorkItemStatus `json:"status"`
 	AssignedTo     string         `json:"assigned_to"`
+	ActiveTaskID   string         `json:"active_task_id,omitempty"`
 	CreatedBy      string         `json:"created_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`

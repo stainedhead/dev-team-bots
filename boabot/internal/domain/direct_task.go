@@ -5,10 +5,23 @@ import (
 	"time"
 )
 
+// DirectTaskSource identifies where a DirectTask originated.
+type DirectTaskSource string
+
+const (
+	// DirectTaskSourceChat means the task was created by the chat interface.
+	DirectTaskSourceChat DirectTaskSource = "chat"
+	// DirectTaskSourceOperator means the task was created directly by an operator.
+	DirectTaskSourceOperator DirectTaskSource = "operator"
+	// DirectTaskSourceBoard means the task was triggered by a board item.
+	DirectTaskSourceBoard DirectTaskSource = "board"
+)
+
 // DirectTask represents an out-of-band task assigned directly to a bot by an operator.
 type DirectTask struct {
 	ID           string           `json:"id"`
 	BotName      string           `json:"bot_name"`
+	Source       DirectTaskSource `json:"source,omitempty"`
 	Instruction  string           `json:"instruction"`
 	Status       DirectTaskStatus `json:"status"`
 	ScheduledAt  *time.Time       `json:"scheduled_at,omitempty"`
@@ -40,12 +53,22 @@ type DirectTaskStore interface {
 
 // TaskDispatcher assigns immediate or scheduled tasks to bots.
 type TaskDispatcher interface {
-	Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time) (DirectTask, error)
+	Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source DirectTaskSource) (DirectTask, error)
+}
+
+// ChatThread represents a named conversation session.
+type ChatThread struct {
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Participants []string  `json:"participants"` // bot names
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ChatMessage represents one turn in an operator↔bot conversation.
 type ChatMessage struct {
 	ID        string        `json:"id"`
+	ThreadID  string        `json:"thread_id,omitempty"`
 	BotName   string        `json:"bot_name"`
 	Direction ChatDirection `json:"direction"` // "outbound" | "inbound"
 	Content   string        `json:"content"`
@@ -63,9 +86,19 @@ const (
 	ChatDirectionInbound ChatDirection = "inbound"
 )
 
-// ChatStore persists and retrieves chat messages.
+// ChatStore persists and retrieves chat threads and messages.
 type ChatStore interface {
+	// Thread lifecycle
+	CreateThread(ctx context.Context, title string, participants []string) (ChatThread, error)
+	ListThreads(ctx context.Context) ([]ChatThread, error)
+	DeleteThread(ctx context.Context, threadID string) error
+
+	// Messages
 	Append(ctx context.Context, msg ChatMessage) error
-	List(ctx context.Context, botName string) ([]ChatMessage, error)
+	// List returns messages for a specific thread (newest-first).
+	List(ctx context.Context, threadID string) ([]ChatMessage, error)
+	// ListAll returns all messages across all threads (newest-first).
 	ListAll(ctx context.Context) ([]ChatMessage, error)
+	// ListByBot returns all messages for a bot across all threads.
+	ListByBot(ctx context.Context, botName string) ([]ChatMessage, error)
 }

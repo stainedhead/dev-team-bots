@@ -163,7 +163,10 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 
 	// Create shared stores. The orchestrator HTTP server uses these; all bots
 	// register a result handler against them so any bot's reply appears in chat.
-	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore()
+	// Persist the chat store under the orchestrator's memory directory.
+	orchestratorMemPath := filepath.Join(tm.cfg.MemoryRoot, orchestratorName)
+	_ = os.MkdirAll(orchestratorMemPath, 0o755)
+	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
 	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore()
 
 	// Start each enabled bot in its own goroutine.

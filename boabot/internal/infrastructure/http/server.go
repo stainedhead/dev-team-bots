@@ -97,6 +97,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
 
+	// Threads — require auth
+	mux.HandleFunc("GET /api/v1/threads", s.auth(s.handleThreadList))
+	mux.HandleFunc("POST /api/v1/threads", s.auth(s.handleThreadCreate))
+	mux.HandleFunc("DELETE /api/v1/threads/{id}", s.auth(s.handleThreadDelete))
+	mux.HandleFunc("GET /api/v1/threads/{id}/messages", s.auth(s.handleThreadMessages))
+
 	// Chat — require auth
 	mux.HandleFunc("GET /api/v1/chat", s.auth(s.handleChatList))
 	mux.HandleFunc("GET /api/v1/chat/{bot}", s.auth(s.handleChatBotList))
@@ -280,9 +286,15 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
 		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
 			updated.Title, updated.Description, updated.ID)
-		if _, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil); dispErr != nil {
+		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard); dispErr != nil {
 			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
 			// Non-fatal: the board update already succeeded.
+		} else {
+			// Store task ID back into the board item so the UI can track progress.
+			updated.ActiveTaskID = task.ID
+			if _, updateErr := s.cfg.Board.Update(r.Context(), updated); updateErr != nil {
+				slog.Warn("board item active_task_id update failed", "err", updateErr)
+			}
 		}
 	}
 
@@ -619,7 +631,16 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "task list all", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tasks)
+	var filtered []domain.DirectTask
+	for _, t := range tasks {
+		if t.Source != domain.DirectTaskSourceChat {
+			filtered = append(filtered, t)
+		}
+	}
+	if filtered == nil {
+		filtered = []domain.DirectTask{}
+	}
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
@@ -640,7 +661,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "instruction must not be empty")
 		return
 	}
-	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt)
+	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator)
 	if err != nil {
 		writeInternalError(w, "bot task create", err)
 		return
@@ -659,7 +680,16 @@ func (s *Server) handleBotTaskList(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "bot task list", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tasks)
+	var filtered []domain.DirectTask
+	for _, t := range tasks {
+		if t.Source != domain.DirectTaskSourceChat {
+			filtered = append(filtered, t)
+		}
+	}
+	if filtered == nil {
+		filtered = []domain.DirectTask{}
+	}
+	writeJSON(w, http.StatusOK, filtered)
 }
 
 // ── chat handlers ─────────────────────────────────────────────────────────────
@@ -683,7 +713,7 @@ func (s *Server) handleChatBotList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bot := r.PathValue("bot")
-	msgs, err := s.cfg.Chat.List(r.Context(), bot)
+	msgs, err := s.cfg.Chat.ListByBot(r.Context(), bot)
 	if err != nil {
 		writeInternalError(w, "chat bot list", err)
 		return
@@ -698,7 +728,8 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 	bot := r.PathValue("bot")
 	var req struct {
-		Content string `json:"content"`
+		Content  string `json:"content"`
+		ThreadID string `json:"thread_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -709,24 +740,137 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
+	// Ensure a thread exists.
+	threadID := req.ThreadID
+	if threadID == "" {
+		t, err := s.cfg.Chat.CreateThread(ctx, fmt.Sprintf("Chat with %s", bot), []string{bot})
+		if err != nil {
+			writeInternalError(w, "create thread", err)
+			return
+		}
+		threadID = t.ID
+	}
+
+	// Record the outbound message.
 	msg := domain.ChatMessage{
+		ThreadID:  threadID,
 		BotName:   bot,
 		Direction: domain.ChatDirectionOutbound,
 		Content:   req.Content,
 	}
-	if err := s.cfg.Chat.Append(r.Context(), msg); err != nil {
+	if err := s.cfg.Chat.Append(ctx, msg); err != nil {
 		writeInternalError(w, "chat append", err)
 		return
 	}
 
-	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), bot, req.Content, nil)
+	// Build instruction with conversation context (last 10 messages in thread).
+	instruction := req.Content
+	if history, err := s.cfg.Chat.List(ctx, threadID); err == nil && len(history) > 1 {
+		// history is newest-first; reverse for chronological order, skip the message we just appended.
+		var prior []domain.ChatMessage
+		for i := len(history) - 1; i >= 1 && len(prior) < 10; i-- {
+			prior = append(prior, history[i])
+		}
+		if len(prior) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Prior conversation context (oldest first):\n")
+			for _, m := range prior {
+				who := "Operator"
+				if m.Direction == domain.ChatDirectionInbound {
+					who = m.BotName
+				}
+				sb.WriteString(fmt.Sprintf("%s: %s\n", who, m.Content))
+			}
+			sb.WriteString("\nOperator: ")
+			sb.WriteString(req.Content)
+			instruction = sb.String()
+		}
+	}
+
+	task, err := s.cfg.Dispatcher.Dispatch(ctx, bot, instruction, nil, domain.DirectTaskSourceChat)
 	if err != nil {
 		writeInternalError(w, "chat dispatch", err)
 		return
 	}
 
 	msg.TaskID = task.ID
+	msg.ThreadID = threadID
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+// ── thread handlers ───────────────────────────────────────────────────────────
+
+func (s *Server) handleThreadList(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	threads, err := s.cfg.Chat.ListThreads(r.Context())
+	if err != nil {
+		writeInternalError(w, "thread list", err)
+		return
+	}
+	if threads == nil {
+		threads = []domain.ChatThread{}
+	}
+	writeJSON(w, http.StatusOK, threads)
+}
+
+func (s *Server) handleThreadCreate(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	var req struct {
+		Title        string   `json:"title"`
+		Participants []string `json:"participants"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Title == "" {
+		writeError(w, http.StatusBadRequest, "title required")
+		return
+	}
+	thread, err := s.cfg.Chat.CreateThread(r.Context(), req.Title, req.Participants)
+	if err != nil {
+		writeInternalError(w, "thread create", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, thread)
+}
+
+func (s *Server) handleThreadDelete(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.cfg.Chat.DeleteThread(r.Context(), id); err != nil {
+		writeInternalError(w, "thread delete", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleThreadMessages(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	id := r.PathValue("id")
+	msgs, err := s.cfg.Chat.List(r.Context(), id)
+	if err != nil {
+		writeInternalError(w, "thread messages", err)
+		return
+	}
+	if msgs == nil {
+		msgs = []domain.ChatMessage{}
+	}
+	writeJSON(w, http.StatusOK, msgs)
 }
 
 // ── enum validation helpers ────────────────────────────────────────────────────
@@ -887,6 +1031,21 @@ const kanbanHTML = `<!DOCTYPE html>
     .chat-input-row textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px}
     .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
 
+    /* ── Thread sidebar ── */
+    .thread-sidebar{width:220px;border-right:1px solid #1a2744;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+    .thread-sidebar-hdr{display:flex;justify-content:space-between;align-items:center;padding:.5rem .75rem;border-bottom:1px solid #1a2744;font-size:.75rem;color:#94a3b8}
+    .thread-list{flex:1;overflow-y:auto}
+    .thread-item{position:relative;padding:.55rem .75rem;cursor:pointer;border-bottom:1px solid #0f1929;transition:background .15s}
+    .thread-item:hover{background:#0d1a30}
+    .thread-item.active{background:#1e3a5f}
+    .thread-title{font-size:.78rem;color:#e2e8f0;margin-bottom:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:1.2rem}
+    .thread-meta{font-size:.66rem;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .thread-del{position:absolute;top:.4rem;right:.4rem;background:none;border:none;color:#475569;cursor:pointer;font-size:.75rem;opacity:0;transition:opacity .15s}
+    .thread-item:hover .thread-del{opacity:1}
+
+    /* ── Board card badge ── */
+    .card-working{font-size:.65rem;color:#fbbf24;margin-top:.2rem;animation:blink 1.5s infinite}
+
     /* ── Scrollbars ── */
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
@@ -958,15 +1117,21 @@ const kanbanHTML = `<!DOCTYPE html>
 
     <!-- Chat -->
     <div class="pane" id="pane-chat">
-      <div class="chat-wrap">
-        <div class="sec-hdr" style="flex-shrink:0;padding:.75rem 1rem 0">
-          <div class="sec-title">Chat</div>
+      <div style="display:flex;flex:1;overflow:hidden;height:100%">
+        <div class="thread-sidebar">
+          <div class="thread-sidebar-hdr">
+            <span>Threads</span>
+            <button class="btn btn-ghost btn-sm" onclick="newThread()">+ New</button>
+          </div>
+          <div id="thread-list" class="thread-list"></div>
         </div>
-        <div class="chat-hist" id="chat-hist"></div>
-        <div class="convo-bar" id="convo-bar"></div>
-        <div class="chat-input-row">
-          <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
-          <button class="btn btn-primary" onclick="sendChat()">Send</button>
+        <div class="chat-wrap" style="flex:1;overflow:hidden">
+          <div class="chat-hist" id="chat-hist"></div>
+          <div class="convo-bar" id="convo-bar"></div>
+          <div class="chat-input-row">
+            <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+            <button class="btn btn-primary" onclick="sendChat()">Send</button>
+          </div>
         </div>
       </div>
       <select id="chat-bot-sel" style="display:none"></select>
@@ -1063,6 +1228,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var selectedBots=[], pendingTasks={}, fastPollTimer=null;
   var dragId=null, setPwTarget=null;
   var activeTab='board', countdown=30, tickTimer=null;
+  var activeThreadID=null, allThreads=[];
 
   // ── Util ────────────────────────────────────────────────────────────────────
   function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -1123,7 +1289,7 @@ const kanbanHTML = `<!DOCTYPE html>
     document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t.getAttribute('onclick').indexOf("'"+name+"'")>-1)});
     document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='pane-'+name)});
     if(name==='tasks')loadTasks();
-    if(name==='chat')loadChat();
+    if(name==='chat'){loadThreads();loadChat()}
     if(name==='skills')loadSkills();
     if(name==='dlq')loadDLQ();
     if(name==='users')loadUsers();
@@ -1157,6 +1323,7 @@ const kanbanHTML = `<!DOCTYPE html>
     d.style.cursor=token?'grab':'default';
     d.innerHTML=
       '<div class="card-title">'+esc(it.title)+'</div>'+
+      (it.status==='in-progress'&&it.active_task_id?'<div class="card-working">&#x2699; working&hellip;</div>':'')+
       (it.description?'<div class="card-desc">'+esc(it.description)+'</div>':'')+
       '<div class="card-foot">'+
         (it.assigned_to?'<span class="card-who">'+esc(it.assigned_to)+'</span>':'')+
@@ -1462,13 +1629,86 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Chat ──────────────────────────────────────────────────────────────────────
+  function loadThreads(){
+    if(!token)return;
+    api('GET','/api/v1/threads',null)
+      .then(function(threads){
+          allThreads=threads||[];
+          renderThreadList();
+          if(!activeThreadID&&allThreads.length){
+              selectThread(allThreads[0].id);
+          }
+      })
+      .catch(function(){});
+  }
+
+  function renderThreadList(){
+    var el=ge('thread-list');
+    if(!el)return;
+    el.innerHTML='';
+    if(!allThreads.length){
+        el.innerHTML='<div class="nil" style="padding:.75rem;font-size:.75rem">No threads yet</div>';
+        return;
+    }
+    allThreads.forEach(function(t){
+        var d=document.createElement('div');
+        d.className='thread-item'+(t.id===activeThreadID?' active':'');
+        d.innerHTML=
+            '<div class="thread-title">'+esc(t.title)+'</div>'+
+            '<div class="thread-meta">'+(t.participants||[]).map(function(p){return esc(p)}).join(', ')+'</div>'+
+            '<button class="thread-del" onclick="deleteThread(event,\''+esc(t.id)+'\')">&#x2715;</button>';
+        d.onclick=function(){selectThread(t.id)};
+        el.appendChild(d);
+    });
+  }
+
+  function selectThread(id){
+    activeThreadID=id;
+    renderThreadList();
+    var t=allThreads.find(function(x){return x.id===id});
+    if(t&&t.participants&&t.participants.length){
+        selectedBots=t.participants.slice();
+        renderConvoBar();
+    }
+    loadChat();
+  }
+
+  function newThread(){
+    if(!token){alert('Please sign in first');return}
+    var title=prompt('Thread title (leave blank to auto-name):')||'';
+    if(title===null)return;
+    var participants=selectedBots.length?selectedBots:(allBots.length?[allBots[0].name]:[]);
+    if(!title)title='Chat with '+participants.join(', ');
+    api('POST','/api/v1/threads',{title:title,participants:participants})
+      .then(function(t){
+          loadThreads();
+          selectThread(t.id);
+      })
+      .catch(function(e){alert('Failed: '+e.message)});
+  }
+
+  function deleteThread(ev,id){
+    ev.stopPropagation();
+    if(!confirm('Delete this thread and all its messages?'))return;
+    api('DELETE','/api/v1/threads/'+id,null)
+      .then(function(){
+          if(activeThreadID===id){activeThreadID=null;ge('chat-hist').innerHTML=''}
+          loadThreads();
+      })
+      .catch(function(e){alert('Failed: '+e.message)});
+  }
+
   function loadChat(){
     var el=ge('chat-hist');
     if(!token){el.innerHTML='<div class="nil">Sign in to chat</div>';return}
     // Ensure selector is current (loadTeam populates it; this is a safety call
     // for the case where the user switches to Chat before loadTeam resolves).
     if(!ge('chat-bot-sel').options.length)populateBotSelectors();
-    api('GET','/api/v1/chat',null)
+    if(!activeThreadID){
+        el.innerHTML='<div class="nil">Select or create a thread</div>';
+        return;
+    }
+    api('GET','/api/v1/threads/'+activeThreadID+'/messages',null)
       .then(function(msgs){
         el.innerHTML='';
         if(!msgs||!msgs.length){el.innerHTML='<div class="nil">No messages yet</div>';return}
@@ -1486,7 +1726,7 @@ const kanbanHTML = `<!DOCTYPE html>
         resolved.forEach(function(id){hideThinking(id);delete pendingTasks[id]});
         if(!Object.keys(pendingTasks).length)stopFastPoll();
       })
-      .catch(function(){el.innerHTML='<div class="nil">Failed to load chat</div>'});
+      .catch(function(){el.innerHTML='<div class="nil">Failed to load messages</div>'});
   }
 
   function renderChatMsg(msg){
@@ -1500,7 +1740,7 @@ const kanbanHTML = `<!DOCTYPE html>
     bubble.textContent=msg.content||'';
     var meta=document.createElement('div');
     meta.className='chat-meta';
-    meta.textContent=esc(msg.bot_name)+' &bull; '+ago(msg.created_at);
+    meta.textContent=esc(msg.bot_name)+' • '+ago(msg.created_at);
     wrap.appendChild(bubble);
     wrap.appendChild(meta);
     return wrap;
@@ -1511,9 +1751,26 @@ const kanbanHTML = `<!DOCTYPE html>
     var content=ge('chat-input').value.trim();
     if(!content)return;
     if(!selectedBots.length){alert('Select a bot first');return}
+    if(!activeThreadID){
+        var participants=selectedBots.slice();
+        var title='Chat with '+participants.join(', ');
+        api('POST','/api/v1/threads',{title:title,participants:participants})
+          .then(function(t){
+              allThreads.unshift(t);
+              activeThreadID=t.id;
+              renderThreadList();
+              doSend(content);
+          })
+          .catch(function(e){alert('Failed: '+e.message)});
+        return;
+    }
+    doSend(content);
+  }
+
+  function doSend(content){
     ge('chat-input').value='';
     var promises=selectedBots.map(function(bot){
-      return api('POST','/api/v1/chat/'+bot,{content:content})
+      return api('POST','/api/v1/chat/'+bot,{content:content,thread_id:activeThreadID})
         .then(function(msg){
           if(msg&&msg.task_id){
             pendingTasks[msg.task_id]=bot;
@@ -1537,7 +1794,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function refreshAll(){
-    loadBoard(); loadTeam();
+    loadBoard(); loadTeam(); loadThreads();
     if(activeTab==='tasks')loadTasks();
     if(activeTab==='chat')loadChat();
     if(activeTab==='skills')loadSkills();

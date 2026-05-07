@@ -31,6 +31,7 @@ func NewBoardCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
 		newBoardUpdateCmd(c, w),
 		newBoardAssignCmd(c, w),
 		newBoardCloseCmd(c, w),
+		newBoardDeleteCmd(c, w),
 		newBoardActivityCmd(c, w),
 		newBoardAskCmd(c, w),
 		newBoardAttachCmd(c, w),
@@ -77,7 +78,7 @@ func newBoardGetCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
 }
 
 func newBoardCreateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
-	var title, description, assignTo string
+	var title, description, assignTo, workDir string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new work item",
@@ -86,6 +87,7 @@ func newBoardCreateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command 
 				Title:       title,
 				Description: description,
 				AssignedTo:  assignTo,
+				WorkDir:     workDir,
 			}
 			item, err := c.BoardCreate(context.Background(), req)
 			if err != nil {
@@ -98,11 +100,12 @@ func newBoardCreateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command 
 	cmd.Flags().StringVar(&title, "title", "", "work item title")
 	cmd.Flags().StringVar(&description, "description", "", "work item description")
 	cmd.Flags().StringVar(&assignTo, "assign", "", "bot to assign the item to")
+	cmd.Flags().StringVar(&workDir, "workdir", "", "working directory for bot output (optional)")
 	return cmd
 }
 
 func newBoardUpdateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
-	var title, description, status string
+	var title, description, status, workDir string
 	cmd := &cobra.Command{
 		Use:   "update <id>",
 		Short: "Update a work item",
@@ -118,6 +121,9 @@ func newBoardUpdateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command 
 			if cmd.Flags().Changed("status") {
 				req.Status = &status
 			}
+			if cmd.Flags().Changed("workdir") {
+				req.WorkDir = &workDir
+			}
 			item, err := c.BoardUpdate(context.Background(), args[0], req)
 			if err != nil {
 				return err
@@ -129,6 +135,7 @@ func newBoardUpdateCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command 
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&description, "description", "", "new description")
 	cmd.Flags().StringVar(&status, "status", "", "new status")
+	cmd.Flags().StringVar(&workDir, "workdir", "", "working directory for bot output")
 	return cmd
 }
 
@@ -167,10 +174,28 @@ func newBoardCloseCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
 	}
 }
 
+func newBoardDeleteCmd(c client.OrchestratorClient, w io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <id>",
+		Short: "Permanently delete a work item",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := c.BoardDelete(context.Background(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintln(w, "Deleted.")
+			return nil
+		},
+	}
+}
+
 func printWorkItem(w io.Writer, item domain.WorkItem) {
 	fmt.Fprintf(w, "ID:          %s\n", item.ID)
 	fmt.Fprintf(w, "Title:       %s\n", item.Title)
 	fmt.Fprintf(w, "Description: %s\n", item.Description)
+	if item.WorkDir != "" {
+		fmt.Fprintf(w, "Work dir:    %s\n", item.WorkDir)
+	}
 	fmt.Fprintf(w, "Status:      %s\n", item.Status)
 	fmt.Fprintf(w, "Assigned to: %s\n", item.AssignedTo)
 	if item.ActiveTaskID != "" {

@@ -139,6 +139,18 @@ func (s *InMemoryBoardStore) List(_ context.Context, filter domain.WorkItemFilte
 	return result, nil
 }
 
+// Delete removes a WorkItem by ID. Returns ErrWorkItemNotFound if absent.
+func (s *InMemoryBoardStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.items[id]; !ok {
+		return ErrWorkItemNotFound
+	}
+	delete(s.items, id)
+	s.persist()
+	return nil
+}
+
 // newID generates a random 8-byte hex string for use as an ID.
 func newID() (string, error) {
 	b := make([]byte, 8)

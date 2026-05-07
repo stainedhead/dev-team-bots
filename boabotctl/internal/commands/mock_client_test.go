@@ -26,6 +26,7 @@ type mockClient struct {
 	boardAssignResp domain.WorkItem
 	boardAssignErr  error
 	boardCloseErr   error
+	boardDeleteErr  error
 
 	// Team
 	teamListResp   []domain.BotEntry
@@ -151,6 +152,7 @@ func (m *mockClient) BoardClose(_ context.Context, id string) error {
 	m.lastBoardCloseID = id
 	return m.boardCloseErr
 }
+func (m *mockClient) BoardDelete(_ context.Context, _ string) error { return m.boardDeleteErr }
 func (m *mockClient) TeamList(_ context.Context) ([]domain.BotEntry, error) {
 	return m.teamListResp, m.teamListErr
 }
@@ -287,7 +289,8 @@ func (e *errClient) BoardUpdate(_ context.Context, _ string, _ domain.UpdateWork
 func (e *errClient) BoardAssign(_ context.Context, _, _ string) (domain.WorkItem, error) {
 	return domain.WorkItem{}, e.err
 }
-func (e *errClient) BoardClose(_ context.Context, _ string) error          { return e.err }
+func (e *errClient) BoardClose(_ context.Context, _ string) error  { return e.err }
+func (e *errClient) BoardDelete(_ context.Context, _ string) error { return e.err }
 func (e *errClient) TeamList(_ context.Context) ([]domain.BotEntry, error) { return nil, e.err }
 func (e *errClient) TeamGet(_ context.Context, _ string) (domain.BotEntry, error) {
 	return domain.BotEntry{}, e.err

@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/board/{id}", s.handleBoardGet)
 	mux.HandleFunc("POST /api/v1/board", s.auth(s.handleBoardCreate))
 	mux.HandleFunc("PATCH /api/v1/board/{id}", s.auth(s.handleBoardUpdate))
+	mux.HandleFunc("DELETE /api/v1/board/{id}", s.auth(s.handleBoardDelete))
 	mux.HandleFunc("POST /api/v1/board/{id}/assign", s.auth(s.handleBoardAssign))
 	mux.HandleFunc("POST /api/v1/board/{id}/close", s.auth(s.handleBoardClose))
 	mux.HandleFunc("POST /api/v1/board/{id}/attachments", s.auth(s.handleBoardAttachmentUpload))
@@ -231,6 +232,7 @@ func (s *Server) handleBoardCreate(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		AssignedTo  string `json:"assigned_to"`
+		WorkDir     string `json:"work_dir"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -242,6 +244,7 @@ func (s *Server) handleBoardCreate(w http.ResponseWriter, r *http.Request) {
 		Title:       req.Title,
 		Description: req.Description,
 		AssignedTo:  req.AssignedTo,
+		WorkDir:     req.WorkDir,
 		Status:      domain.WorkItemStatusBacklog,
 		CreatedBy:   claims.Subject,
 		CreatedAt:   now,
@@ -266,6 +269,7 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		Description *string `json:"description"`
 		Status      *string `json:"status"`
 		AssignedTo  *string `json:"assigned_to"`
+		WorkDir     *string `json:"work_dir"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -287,6 +291,9 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.AssignedTo != nil {
 		existing.AssignedTo = *req.AssignedTo
 	}
+	if req.WorkDir != nil {
+		existing.WorkDir = *req.WorkDir
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	updated, err := s.cfg.Board.Update(r.Context(), existing)
 	if err != nil {
@@ -298,6 +305,9 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
 		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
 			updated.Title, updated.Description, updated.ID)
+		if updated.WorkDir != "" {
+			instruction += fmt.Sprintf("\n\nWorking directory: %s\nYou may read and write files in this directory to complete your work. If it is a git repository you may also use git commands.", updated.WorkDir)
+		}
 		for _, att := range updated.Attachments {
 			raw, decErr := base64.StdEncoding.DecodeString(att.Content)
 			if decErr != nil {
@@ -495,6 +505,15 @@ func (s *Server) handleBoardClose(w http.ResponseWriter, r *http.Request) {
 	existing.UpdatedAt = time.Now().UTC()
 	if _, err := s.cfg.Board.Update(r.Context(), existing); err != nil {
 		writeInternalError(w, "board close", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleBoardDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.cfg.Board.Delete(r.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1478,6 +1497,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg"><label class="fl">Title</label><input class="fi" id="ni-title" type="text" placeholder="What needs to be done?"/></div>
   <div class="fg"><label class="fl">Description</label><textarea class="fi" id="ni-desc" placeholder="Optional details…"></textarea></div>
   <div class="fg"><label class="fl">Assign to bot</label><select class="fi" id="ni-bot"><option value="">Unassigned</option></select></div>
+  <div class="fg"><label class="fl">Working directory</label><input class="fi" id="ni-workdir" type="text" placeholder="/path/to/repo (optional)"/></div>
   <div class="errmsg" id="ni-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('ni-dlg')">Cancel</button><button class="btn btn-primary" onclick="doCreateItem()">Create</button></div>
 </dialog>
@@ -1810,11 +1830,13 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function doCreateItem(){
-    var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,e=ge('ni-err');
+    var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,workdir=ge('ni-workdir').value.trim(),e=ge('ni-err');
     e.style.display='none';
     if(!title){e.textContent='Title is required';e.style.display='block';return}
-    api('POST','/api/v1/board',{title:title,description:desc,assigned_to:bot})
-      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';loadBoard()})
+    var body={title:title,description:desc,assigned_to:bot};
+    if(workdir)body.work_dir=workdir;
+    api('POST','/api/v1/board',body)
+      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir').value='';loadBoard()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -2156,13 +2178,19 @@ const kanbanHTML = `<!DOCTYPE html>
     if(boardCtxTab==='detail'){
       var it=boardCtxItem;
       var attCount=(it.attachments||[]).length;
+      var isDone=it.status==='done';
       body.innerHTML=
         '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+(it.assigned_to||'&#x2014;')+'</span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+(it.description?esc(it.description):'&#x2014;')+'</span></div>'+
+        '<div class="ctx-row"><span class="ctx-lbl">Work dir</span><span class="ctx-val" style="display:flex;align-items:center;gap:.5rem">'+
+          '<input id="bctx-workdir" value="'+esc(it.work_dir||'')+'" placeholder="none" style="flex:1;background:#0d1627;border:1px solid #1a2744;border-radius:4px;color:#e2e8f0;font-size:.78rem;padding:.2rem .4rem"/>'+
+          '<button class="btn btn-secondary btn-sm" onclick="saveBoardWorkDir()">Save</button>'+
+        '</span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Attachments</span><span class="ctx-val"><a href="#" onclick="bctxTab(\'files\');return false" style="color:#60a5fa">'+attCount+' file'+(attCount!==1?'s':'')+'</a></span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
-        (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'');
+        (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
+        (isDone&&token?'<div style="margin-top:.75rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
       api('GET','/api/v1/board/'+boardCtxItem.id+'/activity',null)
@@ -2210,6 +2238,22 @@ const kanbanHTML = `<!DOCTYPE html>
       }
       body.innerHTML=html;
     }
+  }
+
+  function saveBoardWorkDir(){
+    if(!boardCtxItem||!token)return;
+    var val=(ge('bctx-workdir')||{}).value||'';
+    api('PATCH','/api/v1/board/'+boardCtxItem.id,{work_dir:val})
+      .then(function(item){boardCtxItem=item;loadBoard();})
+      .catch(function(e){alert('Failed to save: '+e.message)});
+  }
+
+  function deleteBoardItem(){
+    if(!boardCtxItem||!token)return;
+    if(!confirm('Delete "'+boardCtxItem.title+'"? This cannot be undone.'))return;
+    api('DELETE','/api/v1/board/'+boardCtxItem.id,null)
+      .then(function(){closeBoardCtx();loadBoard()})
+      .catch(function(e){alert('Delete failed: '+e.message)});
   }
 
   function boardAsk(){

@@ -38,6 +38,7 @@ type BoardStore interface {
 	Update(ctx context.Context, item WorkItem) (WorkItem, error)
 	Get(ctx context.Context, id string) (WorkItem, error)
 	List(ctx context.Context, filter WorkItemFilter) ([]WorkItem, error)
+	Delete(ctx context.Context, id string) error
 }
 
 // Attachment holds a file uploaded to a WorkItem.
@@ -55,6 +56,7 @@ type WorkItem struct {
 	IdempotencyKey string         `json:"idempotency_key"` // client-supplied UUID; mutations with a seen key are no-ops
 	Title          string         `json:"title"`
 	Description    string         `json:"description"`
+	WorkDir        string         `json:"work_dir,omitempty"`
 	Status         WorkItemStatus `json:"status"`
 	AssignedTo     string         `json:"assigned_to"`
 	ActiveTaskID   string         `json:"active_task_id,omitempty"`

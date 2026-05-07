@@ -16,6 +16,7 @@ type WorkItem struct {
 	ID           string       `json:"id"`
 	Title        string       `json:"title"`
 	Description  string       `json:"description"`
+	WorkDir      string       `json:"work_dir,omitempty"`
 	Status       string       `json:"status"`
 	AssignedTo   string       `json:"assigned_to"`
 	ActiveTaskID string       `json:"active_task_id,omitempty"`
@@ -73,6 +74,7 @@ type CreateWorkItemRequest struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	AssignedTo  string `json:"assigned_to,omitempty"`
+	WorkDir     string `json:"work_dir,omitempty"`
 }
 
 type UpdateWorkItemRequest struct {
@@ -80,6 +82,7 @@ type UpdateWorkItemRequest struct {
 	Description *string `json:"description,omitempty"`
 	Status      *string `json:"status,omitempty"`
 	AssignedTo  *string `json:"assigned_to,omitempty"`
+	WorkDir     *string `json:"work_dir,omitempty"`
 }
 
 type BotEntry struct {

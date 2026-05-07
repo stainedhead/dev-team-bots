@@ -20,6 +20,7 @@ type OrchestratorClient interface {
 	BoardUpdate(ctx context.Context, id string, req domain.UpdateWorkItemRequest) (domain.WorkItem, error)
 	BoardAssign(ctx context.Context, id, botName string) (domain.WorkItem, error)
 	BoardClose(ctx context.Context, id string) error
+	BoardDelete(ctx context.Context, id string) error
 	BoardActivity(ctx context.Context, id string) (domain.ActivityResponse, error)
 	BoardAsk(ctx context.Context, id, content, threadID string) (domain.ChatMessage, error)
 	BoardAttachmentUpload(ctx context.Context, id string, paths []string) (domain.WorkItem, error)

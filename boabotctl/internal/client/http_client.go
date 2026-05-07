@@ -170,6 +170,14 @@ func (c *HTTPClient) BoardClose(ctx context.Context, id string) error {
 	return checkResponse(resp)
 }
 
+func (c *HTTPClient) BoardDelete(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "board/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return checkResponse(resp)
+}
+
 // ── Team ──────────────────────────────────────────────────────────────────────
 
 func (c *HTTPClient) TeamList(ctx context.Context) ([]domain.BotEntry, error) {

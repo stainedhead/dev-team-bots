@@ -3,9 +3,13 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -62,6 +66,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/board/{id}", s.auth(s.handleBoardUpdate))
 	mux.HandleFunc("POST /api/v1/board/{id}/assign", s.auth(s.handleBoardAssign))
 	mux.HandleFunc("POST /api/v1/board/{id}/close", s.auth(s.handleBoardClose))
+	mux.HandleFunc("POST /api/v1/board/{id}/attachments", s.auth(s.handleBoardAttachmentUpload))
+	mux.HandleFunc("GET /api/v1/board/{id}/attachments/{attId}", s.auth(s.handleBoardAttachmentGet))
+	mux.HandleFunc("DELETE /api/v1/board/{id}/attachments/{attId}", s.auth(s.handleBoardAttachmentDelete))
 
 	// Team — read endpoints are public; exact /health before wildcard /{name}
 	mux.HandleFunc("GET /api/v1/team", s.handleTeamList)
@@ -291,6 +298,19 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
 		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
 			updated.Title, updated.Description, updated.ID)
+		for _, att := range updated.Attachments {
+			raw, decErr := base64.StdEncoding.DecodeString(att.Content)
+			if decErr != nil {
+				continue
+			}
+			ct := att.ContentType
+			if ct == "" || strings.HasPrefix(ct, "text/") || ct == "application/json" ||
+				strings.HasSuffix(att.Name, ".md") || strings.HasSuffix(att.Name, ".yaml") ||
+				strings.HasSuffix(att.Name, ".yml") || strings.HasSuffix(att.Name, ".go") ||
+				strings.HasSuffix(att.Name, ".txt") {
+				instruction += fmt.Sprintf("\n\n--- Attachment: %s ---\n%s", att.Name, string(raw))
+			}
+		}
 		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard, ""); dispErr != nil {
 			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
 			// Non-fatal: the board update already succeeded.
@@ -304,6 +324,135 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// newAttachmentID generates a random hex ID for an attachment.
+func newAttachmentID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func (s *Server) handleBoardAttachmentUpload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	item, err := s.cfg.Board.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+	files := r.MultipartForm.File["files"]
+	const maxFileSize = 10 << 20 // 10 MB
+	for _, fh := range files {
+		f, openErr := fh.Open()
+		if openErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to open uploaded file")
+			return
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(f, maxFileSize+1))
+		_ = f.Close()
+		if readErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read uploaded file")
+			return
+		}
+		if len(raw) > maxFileSize {
+			writeError(w, http.StatusRequestEntityTooLarge, "file exceeds 10 MB limit")
+			return
+		}
+		attID, idErr := newAttachmentID()
+		if idErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate attachment ID")
+			return
+		}
+		ct := fh.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		att := domain.Attachment{
+			ID:          attID,
+			Name:        fh.Filename,
+			ContentType: ct,
+			Content:     base64.StdEncoding.EncodeToString(raw),
+			Size:        len(raw),
+			UploadedAt:  time.Now().UTC(),
+		}
+		item.Attachments = append(item.Attachments, att)
+	}
+	updated, err := s.cfg.Board.Update(r.Context(), item)
+	if err != nil {
+		writeInternalError(w, "attachment upload", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleBoardAttachmentGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	attId := r.PathValue("attId")
+	item, err := s.cfg.Board.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	var found *domain.Attachment
+	for i := range item.Attachments {
+		if item.Attachments[i].ID == attId {
+			found = &item.Attachments[i]
+			break
+		}
+	}
+	if found == nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	raw, decErr := base64.StdEncoding.DecodeString(found.Content)
+	if decErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to decode attachment")
+		return
+	}
+	ct := found.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	if ct == "" || strings.HasPrefix(ct, "text/") || ct == "application/json" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, found.Name))
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, found.Name))
+	}
+	_, _ = w.Write(raw)
+}
+
+func (s *Server) handleBoardAttachmentDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	attId := r.PathValue("attId")
+	item, err := s.cfg.Board.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	originalLen := len(item.Attachments)
+	filtered := item.Attachments[:0]
+	for _, a := range item.Attachments {
+		if a.ID != attId {
+			filtered = append(filtered, a)
+		}
+	}
+	if len(filtered) == originalLen {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	item.Attachments = filtered
+	if _, err := s.cfg.Board.Update(r.Context(), item); err != nil {
+		writeInternalError(w, "attachment delete", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleBoardAssign(w http.ResponseWriter, r *http.Request) {
@@ -1162,6 +1311,20 @@ const kanbanHTML = `<!DOCTYPE html>
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:#1a2744;border-radius:2px}
     ::-webkit-scrollbar-thumb:hover{background:#2d3e5a}
+
+    /* ── Attachments ── */
+    .att-list{display:flex;flex-direction:column;gap:.35rem;margin-top:.5rem}
+    .att-row{display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;background:#0d1829;border-radius:4px;font-size:.78rem}
+    .att-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8}
+    .att-acts{display:flex;gap:.25rem;flex-shrink:0}
+    .upload-btn{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .7rem;background:#1a2744;border:1px solid #2d3f6b;border-radius:4px;color:#94a3b8;font-size:.78rem;cursor:pointer}
+    .upload-btn:hover{background:#243460;color:#e2e8f0}
+    .viewer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center}
+    .viewer-box{background:#070d1a;border:1px solid #1a2744;border-radius:8px;width:min(90vw,900px);max-height:85vh;display:flex;flex-direction:column}
+    .viewer-hdr{display:flex;align-items:center;padding:.75rem 1rem;border-bottom:1px solid #1a2744;gap:.5rem}
+    .viewer-title{flex:1;font-size:.9rem;color:#e2e8f0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .viewer-body{flex:1;overflow:auto;padding:1rem}
+    .viewer-pre{margin:0;font-size:.78rem;color:#94a3b8;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,monospace}
   </style>
 </head>
 <body>
@@ -1225,6 +1388,7 @@ const kanbanHTML = `<!DOCTYPE html>
             <button class="ctx-tab on" id="bctx-t-detail" onclick="bctxTab('detail')">Details</button>
             <button class="ctx-tab" id="bctx-t-output" onclick="bctxTab('output')">Output</button>
             <button class="ctx-tab" id="bctx-t-ask" onclick="bctxTab('ask')">Ask</button>
+            <button class="ctx-tab" id="bctx-t-files" onclick="bctxTab('files')">Files</button>
           </div>
           <button class="ctx-close" onclick="closeBoardCtx()">&#x2715;</button>
         </div>
@@ -1354,6 +1518,17 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="errmsg" id="cp-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('cp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doChangePw()">Update</button></div>
 </dialog>
+
+<div id="viewer-overlay" class="viewer-overlay" style="display:none" onclick="if(event.target===this)closeViewer()">
+  <div class="viewer-box">
+    <div class="viewer-hdr">
+      <span class="viewer-title" id="viewer-title"></span>
+      <a id="viewer-dl" class="btn btn-secondary btn-sm" download>Download</a>
+      <button class="ctx-close" onclick="closeViewer()">&#x2715;</button>
+    </div>
+    <div class="viewer-body"><pre class="viewer-pre" id="viewer-pre"></pre></div>
+  </div>
+</div>
 
 <script>
   // ── State ───────────────────────────────────────────────────────────────────
@@ -1958,7 +2133,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function bctxTab(name){
     boardCtxTab=name;
-    ['detail','output','ask'].forEach(function(t){
+    ['detail','output','ask','files'].forEach(function(t){
       var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
     });
     ge('board-ctx-ask').style.display=name==='ask'?'flex':'none';
@@ -1970,10 +2145,12 @@ const kanbanHTML = `<!DOCTYPE html>
     var body=ge('board-ctx-body');
     if(boardCtxTab==='detail'){
       var it=boardCtxItem;
+      var attCount=(it.attachments||[]).length;
       body.innerHTML=
         '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Assigned to</span><span class="ctx-val">'+(it.assigned_to||'&#x2014;')+'</span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Description</span><span class="ctx-val">'+(it.description?esc(it.description):'&#x2014;')+'</span></div>'+
+        '<div class="ctx-row"><span class="ctx-lbl">Attachments</span><span class="ctx-val"><a href="#" onclick="bctxTab(\'files\');return false" style="color:#60a5fa">'+attCount+' file'+(attCount!==1?'s':'')+'</a></span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
         (it.active_task_id?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'');
     } else if(boardCtxTab==='output'){
@@ -1982,7 +2159,7 @@ const kanbanHTML = `<!DOCTYPE html>
         .then(function(resp){
           var html='';
           if(resp.item&&resp.item.last_result){
-            html+='<div class="ctx-output">'+esc(resp.item.last_result)+'</div>';
+            html+='<pre class="viewer-pre" style="max-height:160px;overflow-y:auto">'+esc(resp.item.last_result)+'</pre>';
           } else if(resp.task&&resp.task.status==='dispatched'){
             html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
           } else {
@@ -1998,6 +2175,30 @@ const kanbanHTML = `<!DOCTYPE html>
         .catch(function(){body.innerHTML='<div style="color:#e74c3c">Failed to load activity</div>'});
     } else if(boardCtxTab==='ask'){
       body.innerHTML='<div style="color:#475569;font-size:.75rem">Ask the assigned bot a question about this item. Replies will appear in chat.</div>';
+    } else if(boardCtxTab==='files'){
+      var it=boardCtxItem;
+      var atts=(it.attachments||[]);
+      var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">'
+        +'<span style="font-size:.78rem;color:#475569">'+atts.length+' file'+(atts.length!==1?'s':'')+'</span>'
+        +'<label class="upload-btn"><input type="file" multiple style="display:none" onchange="uploadFiles(this)">&#x2B; Attach files</label>'
+        +'</div>';
+      if(atts.length===0){
+        html+='<div style="color:#475569;font-size:.78rem">No attachments yet</div>';
+      } else {
+        html+='<div class="att-list">';
+        atts.forEach(function(a){
+          html+='<div class="att-row">'
+            +'<span class="att-name" title="'+esc(a.name)+'">'+esc(a.name)+'</span>'
+            +'<span style="color:#475569;font-size:.72rem">'+fmtBytes(a.size)+'</span>'
+            +'<div class="att-acts">'
+            +'<button class="btn btn-secondary btn-sm" onclick="viewAttachment(\''+esc(it.id)+'\',\''+esc(a.id)+'\',\''+esc(a.name)+'\')">View</button>'
+            +'<button class="btn btn-secondary btn-sm" onclick="deleteAttachment(\''+esc(it.id)+'\',\''+esc(a.id)+'\')">Del</button>'
+            +'</div>'
+            +'</div>';
+        });
+        html+='</div>';
+      }
+      body.innerHTML=html;
     }
   }
 
@@ -2052,6 +2253,62 @@ const kanbanHTML = `<!DOCTYPE html>
     var task=allTasksList.find(function(t){return t.id===id});
     if(task)openTaskCtx(task);
   }
+
+  // ── Attachment helpers ─────────────────────────────────────────────────────────
+  function fmtBytes(b){
+    if(b<1024)return b+'B';
+    if(b<1048576)return (b/1024).toFixed(1)+'KB';
+    return (b/1048576).toFixed(1)+'MB';
+  }
+
+  function uploadFiles(input){
+    if(!boardCtxItem||!token)return;
+    var files=input.files;
+    if(!files||files.length===0)return;
+    var fd=new FormData();
+    for(var i=0;i<files.length;i++)fd.append('files',files[i]);
+    fetch('/api/v1/board/'+boardCtxItem.id+'/attachments',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+token},
+      body:fd
+    }).then(function(r){return r.json()}).then(function(item){
+      boardCtxItem=item;
+      loadBoardCtx();
+    }).catch(function(e){alert('Upload failed: '+e.message)});
+  }
+
+  function deleteAttachment(itemId,attId){
+    if(!confirm('Remove this attachment?'))return;
+    api('DELETE','/api/v1/board/'+itemId+'/attachments/'+attId,null)
+      .then(function(){
+        if(boardCtxItem&&boardCtxItem.id===itemId){
+          boardCtxItem.attachments=(boardCtxItem.attachments||[]).filter(function(a){return a.id!==attId});
+          loadBoardCtx();
+        }
+      }).catch(function(e){alert('Delete failed: '+e.message)});
+  }
+
+  function viewAttachment(itemId,attId,name){
+    ge('viewer-title').textContent=name;
+    ge('viewer-pre').textContent='Loading…';
+    var url='/api/v1/board/'+itemId+'/attachments/'+attId;
+    ge('viewer-dl').href=url;
+    ge('viewer-dl').download=name;
+    ge('viewer-overlay').style.display='flex';
+    fetch(url,{headers:{Authorization:'Bearer '+token}})
+      .then(function(r){
+        var ct=r.headers.get('content-type')||'';
+        if(ct.startsWith('text/')||ct==='application/json'||ct===''){
+          return r.text().then(function(t){ge('viewer-pre').textContent=t});
+        } else {
+          return r.blob().then(function(){
+            ge('viewer-pre').textContent='[Binary file — use Download button]';
+          });
+        }
+      }).catch(function(){ge('viewer-pre').textContent='Failed to load'});
+  }
+
+  function closeViewer(){ge('viewer-overlay').style.display='none'}
 
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function refreshAll(){

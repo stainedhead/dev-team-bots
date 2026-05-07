@@ -40,6 +40,16 @@ type BoardStore interface {
 	List(ctx context.Context, filter WorkItemFilter) ([]WorkItem, error)
 }
 
+// Attachment holds a file uploaded to a WorkItem.
+type Attachment struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	ContentType string    `json:"content_type"`
+	Content     string    `json:"content"`  // base64-encoded file bytes
+	Size        int       `json:"size"`     // original byte count
+	UploadedAt  time.Time `json:"uploaded_at"`
+}
+
 type WorkItem struct {
 	ID             string         `json:"id"`
 	IdempotencyKey string         `json:"idempotency_key"` // client-supplied UUID; mutations with a seen key are no-ops
@@ -50,6 +60,7 @@ type WorkItem struct {
 	ActiveTaskID   string         `json:"active_task_id,omitempty"`
 	LastResult     string         `json:"last_result,omitempty"`
 	LastResultAt   *time.Time     `json:"last_result_at,omitempty"`
+	Attachments    []Attachment   `json:"attachments,omitempty"`
 	CreatedBy      string         `json:"created_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`

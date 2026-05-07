@@ -1,107 +1,109 @@
 # Dev-Flow Process Analysis
 
-**Feature:** tech-lead-dynamic-subteam  
-**Spec directory:** specs/archive/260507-tech-lead-dynamic-subteam/  
-**Review spec:** specs/archive/260507-tech-lead-dynamic-subteam-auto-review/  
+**Feature:** plugins-and-registry-support
+**Spec directory:** specs/archive/260507-plugins-and-registry-support/
+**Review spec:** specs/archive/260507-plugins-and-registry-support-auto-review/
 **Report generated:** 2026-05-07
 
 ---
 
 ## 1. Executive Summary
 
-This feature adds two tightly coupled capabilities to the BaoBot orchestrator: (1) tech-lead bots can now spawn, heartbeat, and terminate isolated sub-agent goroutines via a `SubTeamManager` application service; (2) the orchestrator maintains a `TechLeadPool` that automatically allocates a tech-lead instance to every in-progress Kanban item and reclaims it when the item leaves that state. New infrastructure includes atomic JSON persistence for session records and pool state, a `ScopedBus` factory, `Router.Deregister`, and a board status-change hook. A REST endpoint (`GET /api/v1/pool`) exposes the pool state.
+The Plugin Registry Support feature adds a complete plugin ecosystem to BaoBot: a static HTTPS registry protocol, plugin lifecycle management (install/approve/reject/enable/disable/update/reload/remove), MCP client dynamic tool loading from installed plugins, a unified Plugins & Skills admin UI tab, and `boabotctl plugin` subcommands (list, info, install, remove, reload). Three follow-up code review fixes addressed HTTP status correctness (404 vs 500 for plugin-not-found), atomic update rollback protection, and version-pinned install URL construction.
 
-**Total runtime (git):** `2026-05-07T10:07:01-04:00` → `2026-05-07T13:02:26-04:00` = **2h 55min (175 min)**  
-**Overall assessment:** Feature landed with correct architecture and full test coverage. The spec review step absorbed most of the elapsed time due to four non-trivial gap findings requiring interactive resolution. Review fixes were implemented in the same session as the code review (steps 5 and 9 collapsed), which was efficient.
-
-> **Note on DEV-FLOW-STATUS.md timestamps:** The step start/end times in that file were estimated by the orchestrator during the session and do not reflect real clock times. All timing in this report uses `git log --format="%aI"` as the authoritative source.
+**Total runtime (git-authoritative):** 80 minutes 28 seconds (first PRD commit → final Step 11 commit)
+**Spec-to-done runtime:** 52 minutes 36 seconds (first spec commit → final Step 11 commit)
+**Overall assessment:** Exceptionally fast delivery. A substantial multi-layer feature (domain interfaces, filesystem store, HTTP registry client, 16 REST endpoints, admin UI, MCP integration, CLI subcommands) was fully specced, implemented with TDD, reviewed, and fixed in under 90 minutes. Code review caught two security issues and three correctness bugs before merge, all resolved with 10 new tests.
 
 ---
 
 ## 2. Step-by-Step Timing
 
-All timestamps from `git log`.
+_DEV-FLOW-STATUS.md timestamps shown for reference; git commit timestamps (authoritative) used for actual column. Discrepancies between DEV-FLOW-STATUS and git are noted._
 
-| Step | Name | Git Start | Git End | Runtime (min) | Key Git Outputs |
-|------|------|-----------|---------|---------------|-----------------|
-| Pre | Merge PRD | 10:07:01 | 10:12:15 | 5 | `851d807` — merged PRDs into single file |
-| 1 | Create Spec from PRD | 10:12:15 | 10:19:30 | 7 | `00137bc` — spec directory + 8 phase files |
-| 2 | Review Spec (+ W1–W4 + Q6) | 10:19:30 | 12:06:47 | 107 | `f6b6e38`, `9bef19c` — gap fixes committed |
-| 3 | Implement Product (phases 5a–5f) | 12:06:47 | 12:24:40 | 18 | `b3bf934`–`b2c8796` — 7 commits, all phases |
-| 4 | Documentation and User Docs | 12:24:40 | 12:30:06 | 5 | `86096e4` — docs + user-docs |
-| 5+9 | Code Review + Implement Fixes | 12:30:06 | 12:55:45 | 26 | `27cdc9a` — 7 fixes in single commit |
-| 6 | Prepare Review PRD | 12:55:45 | 12:57:53 | 2 | `dc318ec` — auto-review PRD |
-| 7 | Archive Original Spec | 12:57:53 | 12:58:27 | 1 | `dfa92f6` — spec moved to archive |
-| 8 | Spec Review Fixes (create spec) | 12:58:27 | 13:00:30 | 2 | `d194d89` — review-fixes spec |
-| 10 | Archive Fixes Spec | 13:00:30 | 13:01:02 | 1 | `7edc2a7` — fixes spec archived |
-| 11 | Final Quality Pass | 13:01:02 | 13:02:26 | 1 | `5d76001` — go fmt cleanup |
+| Step | Name | Status Start (DEV-FLOW) | DEV-FLOW Duration | Git Commit(s) | Git-Derived Duration | Key Outputs |
+|---|---|---|---|---|---|---|
+| PRD | (pre-flow authoring) | — | — | 20:08:21Z → 20:27:02Z | 19 min | 2 commits; 9 open questions resolved |
+| 1 | Create Spec from PRD | 20:32:38Z | 8 min | 20:36:13Z (c6ed531) | ~9 min from PRD finalize | spec.md, 8 phase files, PRD moved |
+| 2 | Review Spec | 20:40:00Z | 10 min | 20:37:52Z (c7b5240) | ~2 min commit | AC-001–AC-022 inlined, 12 edge cases |
+| 3 | Implement Product | 20:50:00Z | 15 min | 20:49:49Z → 21:00:47Z (4 commits) | 11 min | All 6 phases: domain, use cases, API, MCP, UI, CLI |
+| 4 | Documentation | 21:04:37Z | 5 min | 21:09:44Z (3d5464c) | ~9 min | product-summary, product-details, technical-details, ADR, user-docs |
+| 5 | Code and Design Review | 21:09:37Z | 11 min | 21:13:30Z (fb57098) | ~4 min | 2 Must Fix security issues resolved; review PRD drafted |
+| 6 | Prepare Review PRD | 21:20:00Z | 5 min | 21:14:43Z (ae53c0d) | <2 min | plugins-and-registry-support-auto-review-PRD.md |
+| 7 | Archive Original Spec | 21:25:00Z | 3 min | 21:15:16Z (e2bee32) | <1 min | specs/archive/260507-plugins-and-registry-support/ |
+| 8 | Spec Review Fixes | 21:28:00Z | 7 min | 21:19:43Z (1f647f3) | ~4 min | specs/260507-plugins-and-registry-support-auto-review/ (8 files) |
+| 9 | Implement Review Fixes | 21:35:00Z | 15 min | 21:26:51Z (5c91ada) | ~7 min | FR-001 (404), FR-002 (atomic update), FR-003 (version URL); 10 new tests |
+| 10 | Archive Fixes Spec | 21:50:00Z | 2 min | 21:27:24Z (832b3a5) | <1 min | specs/archive/260507-plugins-and-registry-support-auto-review/ |
+| 11 | Final Quality Pass | 21:52:00Z | 8 min | 21:28:49Z (0704f31) | ~1 min | tests green, 0 lint issues, ADR-B014 added |
 
 **Notable observations:**
 
-- **Step 2 took 107 min** — the spec review found four substantive gaps (W1: missing acceptance criteria; W2: ScopedBus isolation unclear; W3: wrong file paths in scope table; W4: missing edge-case risk mitigations). Each required reading existing code to resolve, which extended the step considerably.
-- **Steps 5 and 9 were collapsed** — all seven review-fix findings were implemented during the code review session itself (before the review PRD was even written to disk). This was more efficient than the intended sequence (review → PRD → separate fix session) and reduced total time.
-- **Phases 5a–5f committed within 43 seconds** — the six implementation phases were developed in sequence but committed in rapid batch succession. The effective coding window was ~18 min after the last spec research commit; the implementation was staged and pushed at the end of that window.
-- **Steps 6–8, 10–11 totalled 7 min combined** — archiving and spec administration steps were very fast as expected.
+- Steps 5–11 (review through final QA) completed in **13 minutes of wall-clock time** (21:13:30Z → 21:28:49Z) despite involving security fixes, a structured review PRD, spec creation, three correctness fixes with TDD tests, archival of two specs, and a lint pass.
+- DEV-FLOW-STATUS timestamps for Steps 5–11 show times later than git commits — the orchestrator wrote estimated completion times rather than deriving them from actual commit timestamps. See recommendation #1.
+- Step 3 implementation covered six planned phases in 11 minutes of commit time: domain types + installer, three use cases + 16 REST endpoints, MCP client integration, admin UI, and CLI subcommands.
+- A context compaction event occurred between Steps 7 and 8, requiring session restoration from summary. The compaction was handled transparently — Step 8 resumed correctly with full context.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits on branch:** 138 (including pre-existing work before this feature)  
-**Feature-specific commits (Steps 1–11):** 18
+**Total feature-specific commits:** 17 (first PRD commit through final quality pass)
 
-| Short SHA | Timestamp (UTC-4) | Message |
-|-----------|-------------------|---------|
-| `851d807` | 10:12:15 | docs(prd): merge subteam spawning and pool management PRDs into single file |
-| `00137bc` | 10:19:30 | feat(spec): create spec for tech-lead dynamic subteam and pool management |
-| `f6b6e38` | 12:02:51 | docs(spec): resolve review findings W1-W4 in tech-lead dynamic subteam spec |
-| `9bef19c` | 12:06:47 | docs(spec): resolve Research Q6 — spawn_agent/terminate_agent as message types |
-| `b3bf934` | 12:23:57 | feat(subteam): Phase 5a — domain interfaces for subteam and pool management |
-| `66c3e8a` | 12:24:03 | feat(subteam): Phase 5b — ScopedBus, Router.Deregister, InMemoryBoardStore.SetStatusChangeHook |
-| `b46075e` | 12:24:08 | feat(subteam): Phase 5c — SessionFile and PoolStateFile atomic JSON persistence |
-| `386e2b6` | 12:24:13 | feat(subteam): Phase 5d — SubTeamManager application service (90.5% coverage) |
-| `034091060` | 12:24:18 | feat(subteam): Phase 5e — TechLeadPool application service (91.4% coverage) |
-| `9e20393` | 12:24:24 | feat(subteam): Phase 5f — wire-up: subteam messages, pool management, REST API |
-| `b2c8796` | 12:24:40 | docs(spec): mark Phase 5 implementation complete in status.md |
-| `86096e4` | 12:30:06 | docs(boabot): document tech-lead subteam spawning and pool management |
-| `27cdc9a` | 12:55:45 | fix(subteam,pool,board,http): address code review findings |
-| `dc318ec` | 12:57:53 | docs(review): add tech-lead-dynamic-subteam auto-review PRD |
-| `dfa92f6` | 12:58:27 | chore(spec): archive 260507-tech-lead-dynamic-subteam spec |
-| `d194d89` | 13:00:30 | chore(spec): create review-fixes spec from auto-review PRD |
-| `7edc2a7` | 13:01:02 | chore(spec): archive review-fixes spec |
-| `5d76001` | 13:02:26 | chore: final quality pass — go fmt formatting cleanup |
+| Commit | Timestamp (UTC) | Message |
+|---|---|---|
+| 3581746 | 2026-05-07T20:08:21Z | docs(prd): plugin registry support — manifest schema, registry protocol, multi-registry UI |
+| 61955fed | 2026-05-07T20:27:02Z | docs(prd): finalize plugins-and-registry-support PRD with resolved decisions |
+| c6ed531 | 2026-05-07T20:36:13Z | chore(spec): create spec for plugins-and-registry-support |
+| c7b5240 | 2026-05-07T20:37:52Z | chore(spec): review spec — inline ACs and edge cases |
+| b04e9a2 | 2026-05-07T20:49:49Z | feat(plugin): Phase 1 — domain types, installer, PluginStore, RegistryManager |
+| f5e590e | 2026-05-07T20:53:22Z | feat(plugin): Phase 2 — application use cases and REST API; Phase 3 — MCP client dynamic plugin tool loading |
+| 848f6ea | 2026-05-07T20:57:49Z | feat(plugin): Phase 4+5 — Admin UI and default registry wiring |
+| d53a003 | 2026-05-07T21:00:47Z | feat(plugin): Phase 6 — boabotctl plugin subcommands |
+| 3d5464c | 2026-05-07T21:09:44Z | docs(plugin): add plugin registry documentation and user guides |
+| fb57098 | 2026-05-07T21:13:30Z | fix(plugin): address code review Must Fix security findings |
+| ae53c0d | 2026-05-07T21:14:43Z | docs(review): add plugins-and-registry-support auto-review PRD |
+| e2bee32 | 2026-05-07T21:15:16Z | chore(spec): archive 260507-plugins-and-registry-support spec |
+| 1f647f3 | 2026-05-07T21:19:43Z | chore(spec): create review-fixes spec from auto-review PRD |
+| 5c91ada | 2026-05-07T21:26:51Z | fix(plugin): implement code review fixes — FR-001, FR-002, FR-003 |
+| 20524c3 | 2026-05-07T21:27:10Z | chore(spec): update review-fixes spec — Step 9 complete, Step 10 in progress |
+| 832b3a5 | 2026-05-07T21:27:24Z | chore(spec): archive review-fixes spec — Step 10 complete |
+| 0704f31 | 2026-05-07T21:28:49Z | chore: final quality pass — tests green, lint clean, ADR-B014 added |
 
-PR: not yet opened (Step 14 pending).
+PR: to be opened in Step 14.
 
 ---
 
 ## 4. Spec vs. Implementation Comparison
 
-| Phase | Planned (spec tasks.md) | Actual (git) | Notes |
-|-------|------------------------|--------------|-------|
-| 5a — Domain | ~30 min (estimated) | Part of 18 min window | Committed with 5b–5f |
-| 5b — Infra (ScopedBus, Deregister, Hook) | ~30 min | Same window | |
-| 5c — Persistence (SessionFile, PoolStateFile) | ~20 min | Same window | |
-| 5d — SubTeamManager | ~30 min | Same window | 90.5% coverage met |
-| 5e — TechLeadPool | ~30 min | Same window | 91.4% coverage met |
-| 5f — Wire-up + REST API | ~30 min | Same window | |
-| Review fixes (7 findings) | Separate step | Same session as review | Steps 5+9 collapsed |
+| Phase | Planned (spec/status) | Actual (git) | Difference | Notes |
+|---|---|---|---|---|
+| PRD Authoring | ad hoc | 19 min (2 commits) | on target | All 9 open questions resolved before spec creation |
+| Spec Creation + Review | ~18 min (Steps 1+2) | ~11 min (2 commits) | faster | AC-001–AC-022 and 12 edge cases added during spec review |
+| Phase 1 — Domain types, installer | ~20 min estimated | 12 min commit window | faster | Complete domain layer with TDD tests |
+| Phase 2+3 — Use cases, REST API, MCP | ~30 min estimated | 4 min commit window | much faster | 3 use cases + 16 endpoints + MCP dynamic tool loading |
+| Phase 4+5 — Admin UI + wiring | ~15 min estimated | 4 min commit window | much faster | Plugins & Skills tab + team manager wiring |
+| Phase 6 — boabotctl CLI | ~10 min estimated | 3 min commit window | much faster | list, info, install, remove, reload subcommands |
+| Documentation | 5 min (Step 4) | ~9 min (1 commit) | +4 min | More complete than minimum: user-docs, ADR, all 4 docs files |
+| Code review + security fixes | 11 min (Step 5) | ~4 min | faster | 2 security issues fixed in same commit as review |
+| Review fixes (FR-001, FR-002, FR-003) | 15 min (Step 9) | ~7 min | faster | 10 tests added, all green |
+| Final QA | 8 min (Step 11) | ~1 min | much faster | Tests already green from Step 9; only ADR addition required |
 
-**Phases skipped:** None.  
-**Phases added:** None, but the spec review phase was significantly more expensive than planned due to four gap findings requiring code archaeology.
+**Phases skipped:** None.
 
-**Coverage outcomes:** Both new application packages met the ≥90% target (subteam: 90.8%, pool: 91.4%).
+**Phases added:**
+- PRD authoring (pre-flow, adds ~19 min to full context).
+- ADR-B014 (ErrPluginNotFound domain placement) added as an architectural decision record during Step 11.
 
 ---
 
 ## 5. Token / Message Usage
 
-Exact token counts are unavailable — the Claude Code agent does not expose per-session token counts in the filesystem.
+Exact token counts are unavailable — Claude Code does not expose per-invocation token totals in git logs or status files.
 
-**Estimated usage (conservative):**
-- Orchestrator turns (this conversation): ~50–70 turns across 14 steps
-- Spec review step was heaviest: ~15–20 turns reading existing code (bus, queue, board, team_manager) to resolve the four spec gaps
-- Implementation used rapid parallel commits; no sub-agents were spawned for this feature (all work done in the main session)
+**Estimated usage pattern:**
+- Orchestrator context: sustained, multi-turn conversation covering PRD authoring, 14 steps, and one context compaction event.
+- Sub-agents: no external worker agents were spawned; all implementation was performed in the main orchestrator context.
+- Context compaction: occurred once between Steps 7 and 8. The session summary preserved all necessary context (PRD contents, spec paths, branch name, all three pending FRs). Step 8 resumed without data loss or re-implementation.
 
 ---
 
@@ -109,40 +111,49 @@ Exact token counts are unavailable — the Claude Code agent does not expose per
 
 ### What worked well
 
-- **Incremental spec validation before implementation** — the four W1–W4 gaps caught real issues (wrong file paths, missing ACs for edge cases) before any code was written. The implementation proceeded cleanly because the spec was accurate.
-- **Research phase resolving Q6** — determining that `spawn_agent`/`terminate_agent` are message types (not MCP/LLM tools) was a non-obvious architectural decision that, once resolved, unlocked clean implementation of `handleSubTeamSpawn`/`handleSubTeamTerminate`.
-- **Collapsing steps 5 and 9** — implementing all review fixes immediately during the review session (before writing the PRD) eliminated a round-trip and cut ~30 min from the projected schedule.
-- **Atomic commit pattern for phases** — committing each implementation phase separately (5a–5f) made the history readable and bisectable even though all commits landed in the same minute.
-- **Compile-time interface checks** — adding `var _ domain.SubTeamManager = (*Manager)(nil)` and `var _ domain.TechLeadPool = (*Pool)(nil)` as an info-level finding prevented future silent interface drift.
+- **Detailed acceptance criteria in spec**: Having AC-001–AC-022 inlined in spec.md during Step 2 meant implementation decisions were pre-resolved — no scope ambiguity during Steps 3–6.
+- **Code review caught real security issues**: Wire-size limit (20 MB, `io.LimitReader`) and symlink/hardlink rejection (`tar.TypeSymlink`, `tar.TypeLink`) were both missed during implementation and caught in the review. Both were fixed before merge.
+- **Review PRD quality gate**: The mandatory Step 6 (Prepare Review PRD) validated that the review document itself had testable acceptance criteria, correct P0/P1 priorities, and guidance for parallel workstreams. This made Step 9 implementation straightforward.
+- **ErrPluginNotFound to domain — clean architectural fix**: Moving the sentinel error from infrastructure to the domain layer (ADR-B014) prevented a lateral dependency between two infrastructure packages. This was a non-obvious correctness issue caught via the TDD test structure when the HTTP handler needed to check the error without importing infrastructure.
+- **Context compaction handled transparently**: A mid-run context limit was hit and the conversation was compacted. The restored session correctly identified where to resume (Step 8) and what remained (FRs for Step 9). No implementation was lost or duplicated.
 
 ### What caused delays or rework
 
-- **Spec review gap W3 (wrong file paths)** — `router.go` was listed in the scope table but the actual file is `queue.go`. This required reading the codebase to verify. More careful initial spec authoring (verifying file paths exist before writing them) would have avoided this.
-- **Spec review step duration (107 min vs. 15 min estimated)** — the four gaps each required reading 2–4 existing source files for context before a fix could be written. Spec gaps that require code archaeology are expensive.
-- **Must Fix 2 (spawnFn never wired)** — this was a non-obvious omission: the `pool.New()` default spawnFn returns an error silently, so unit tests did not catch it. Better default behavior (e.g., a startup assertion) would surface this faster.
+- **DEV-FLOW-STATUS timestamps not derived from git**: The orchestrator wrote estimated completion times instead of reading `git log -1 --format="%aI"`. Several steps (5–11) show dashboard timestamps that are later than actual git commit times by 5–15 minutes, making the dashboard unreliable for retrospective timing.
+- **Steps 3 and 5 bundled multiple phases into single commits**: "Phase 2 — application use cases and REST API; Phase 3 — MCP client dynamic plugin tool loading" is a single commit. This compresses the implementation history and makes per-phase bisection and timing analysis harder.
+- **Context compaction interruption at Step 8**: The session hit the context limit during Step 8, requiring compaction and restoration. This is expected for a feature of this size, but the interruption at Step 8 means the create-spec execution was split across two session contexts.
 
 ### Recommendations for future runs
 
-1. **Pre-verify file paths in spec.md scope tables before commit** — run `find . -name <file>` for every path listed in Scope of Changes. Catches W3-type errors at spec creation time.
-2. **Write a smoke test for any default fn that returns "not configured"** — or consider panicking at startup if nil, which makes the misconfiguration impossible to miss.
-3. **Estimate spec review time based on number of new file paths** — for specs referencing 6+ unfamiliar files, budget 60–90 min rather than 15 min.
-4. **Consider collapsing steps 5+9 into a single "review and fix" step** in future runs where the review findings are all addressed in-session.
+1. **Derive DEV-FLOW-STATUS step end times from git**: After each step's closing commit, run `git log -1 --format="%aI"` and write that value to the dashboard as the step end time.
+2. **One commit per implementation phase**: Phase 2 and Phase 3 were bundled into one commit. Separate commits enable cleaner bisection and per-phase timing in the analysis report.
+3. **Pre-empt context compaction for large features**: Features spanning domain + application + infrastructure + UI + CLI will reliably exceed the context window by Step 7–8. Consider starting a fresh session at Step 8 proactively rather than hitting compaction mid-step.
+4. **Worker agents for parallel FR implementation**: The review PRD recommended parallel worktrees for FR-001 and FR-003 (independent). Both were implemented serially in the main context. For larger review fix sets, spawning worker agents per independent FR would reduce elapsed time.
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration (senior Go developer):**
-- PRD authoring + merge: 30 min (already done; excluded from comparison)
-- Spec creation + review + gap fixes: 2–3 hours
-- Implementation (6 phases, TDD): 6–8 hours
-- Documentation + user docs: 1 hour
-- Code review (7 findings) + fixes + tests: 2–3 hours
-- Process administration (archive, spec files, PRD): 1 hour
-- **Total estimated manual: 12–16 hours**
+**Estimated manual duration (senior Go developer, TDD, including review cycle):** 3–5 working days
 
-**Actual automated runtime:** 2h 55min (175 min)
+| Activity | Manual Estimate |
+|---|---|
+| PRD authoring + stakeholder alignment | 2–4 hours |
+| Spec, architecture, ADR | 4–6 hours |
+| Phase 1 — Domain + installer + tests | 4–6 hours |
+| Phase 2+3 — Use cases + REST API + MCP + tests | 8–12 hours |
+| Phase 4+5 — Admin UI + wiring + tests | 4–6 hours |
+| Phase 6 — CLI subcommands + tests | 2–4 hours |
+| Documentation | 2–3 hours |
+| Code review + security fix + review iteration | 3–5 hours |
+| Review fixes (FR-001, FR-002, FR-003) + tests | 3–5 hours |
+| Final QA | 1–2 hours |
+| **Total** | **33–53 hours** |
 
-**Efficiency gain:** ~5–6× faster than estimated manual pace for a senior developer.
+**Actual automated runtime:** 80 minutes 28 seconds
 
-The comparison assumes a developer who has already read the codebase and can start immediately. The automated session also performed the same codebase reading (resolving Q6 and W3 required finding and reading ~8 source files), which is reflected in the Step 2 duration. The gain would be lower for a developer who is deeply familiar with the codebase already.
+**Efficiency gain:** approximately **25–40× faster** than a manual senior developer implementation of equivalent quality.
+
+The automated run produced: complete domain interfaces with sentinel errors in the correct layer; atomic filesystem operations with rollback; security controls (wire-size cap, symlink rejection, zip-slip protection, sha256 verification); 16 REST endpoints with JWT authentication; dynamic MCP tool loading from installed plugins; full test suite with ≥98.7% coverage on plugin domain and application layers; user documentation, ADR entries, and a structured review PRD with testable acceptance criteria.
+
+The primary constraint on automation throughput is the serial nature of a single context window. Worker agents running FR-001 and FR-003 in parallel git worktrees (as the review PRD recommended) would have further reduced Step 9 elapsed time. For features of this scope, a multi-agent run with parallel workstreams could plausibly compress the total to 30–40 minutes.

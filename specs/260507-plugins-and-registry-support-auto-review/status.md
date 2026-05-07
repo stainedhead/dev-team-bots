@@ -10,13 +10,13 @@
 
 | Phase | Name | Status | Notes |
 |---|---|---|---|
-| 0 | Spec Creation | In Progress | spec dir created, files initializing |
-| 1 | Specification | Not Started | — |
-| 2 | Research & Data Modeling | Not Started | — |
-| 3 | Architecture & Planning | Not Started | — |
-| 4 | Task Breakdown | Not Started | — |
-| 5 | Implementation | Not Started | — |
-| 6 | Completion & Archival | Not Started | — |
+| 0 | Spec Creation | Done | spec dir created, all phase files initialized |
+| 1 | Specification | Done | spec.md populated from review PRD |
+| 2 | Research & Data Modeling | Done | research.md, data-dictionary.md complete |
+| 3 | Architecture & Planning | Done | architecture.md, plan.md complete |
+| 4 | Task Breakdown | Done | tasks.md complete |
+| 5 | Implementation | Done | FR-001, FR-002, FR-003 all fixed with TDD |
+| 6 | Completion & Archival | In Progress | archival pending |
 
 ---
 

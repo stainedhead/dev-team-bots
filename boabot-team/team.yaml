@@ -32,4 +32,4 @@ team:
 
   - name: tech-lead
     type: tech-lead
-    enabled: false
+    enabled: true

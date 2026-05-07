@@ -1595,6 +1595,11 @@ const kanbanHTML = `<!DOCTYPE html>
     .thread-del{position:absolute;top:.4rem;right:.4rem;background:none;border:none;color:#475569;cursor:pointer;font-size:.75rem;opacity:0;transition:opacity .15s}
     .thread-item:hover .thread-del{opacity:1}
 
+    /* ── Task filter buttons ── */
+    .task-filter-btn{background:#0f1829;border:1px solid #1a2744;color:#64748b;font-size:.72rem;padding:.25rem .7rem}
+    .task-filter-btn.active{background:#1e3a5f;border-color:#2d5a8e;color:#93c5fd;box-shadow:inset 0 1px 3px rgba(0,0,0,.5)}
+    .task-filter-btn:hover:not(.active){border-color:#2d3e5a;color:#94a3b8}
+
     /* ── Board card badge ── */
     .card-working{font-size:.65rem;color:#fbbf24;margin-top:.2rem;animation:blink 1.5s infinite}
 
@@ -1721,17 +1726,25 @@ const kanbanHTML = `<!DOCTYPE html>
     <!-- Tasks -->
     <div class="pane" id="pane-tasks" style="overflow:hidden">
       <div class="sec-hdr">
-        <div style="display:flex;gap:.5rem;align-items:center">
-          <button class="tab active" id="tt-direct" onclick="taskSubTab('direct')" style="font-size:.75rem;padding:.2rem .6rem">Direct</button>
-          <button class="tab" id="tt-sched" onclick="taskSubTab('sched')" style="font-size:.75rem;padding:.2rem .6rem">Scheduled</button>
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-sm task-filter-btn active" id="tf-all"       onclick="setTaskFilter('all')">All</button>
+          <button class="btn btn-sm task-filter-btn"        id="tf-immediate" onclick="setTaskFilter('immediate')">Immediate</button>
+          <button class="btn btn-sm task-filter-btn"        id="tf-scheduled" onclick="setTaskFilter('scheduled')">Scheduled</button>
         </div>
-        <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button></div>
+        <div class="sec-acts">
+          <button id="task-del-btn" class="btn btn-danger btn-sm" disabled onclick="deleteSelectedTasks()" style="opacity:.35;cursor:not-allowed">Delete Selected</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button>
+        </div>
       </div>
-      <div id="tasks-direct" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
-      <div id="tasks-sched" style="flex:1;overflow:auto;display:none"><div class="empty-state">Loading&#x2026;</div></div>
+      <div id="tasks-list" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
       <div class="ctx-panel" id="task-ctx" style="display:none">
+        <div class="ctx-resize-handle" id="tctx-resize"></div>
         <div class="ctx-hdr">
           <span class="ctx-title" id="task-ctx-title">Select a task</span>
+          <div class="ctx-tabs">
+            <button class="ctx-tab on" id="tctx-t-detail" onclick="tctxTab('detail')">Details</button>
+            <button class="ctx-tab" id="tctx-t-output" onclick="tctxTab('output')">Output</button>
+          </div>
           <button class="ctx-close" onclick="closeTaskCtx()">&#x2715;</button>
         </div>
         <div class="ctx-body" id="task-ctx-body"></div>
@@ -1919,8 +1932,8 @@ const kanbanHTML = `<!DOCTYPE html>
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
   var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null;
-  var taskCtxTask=null;
-  var allTasksList=[];
+  var taskCtxTask=null, taskCtxActiveTab='detail';
+  var allTasksList=[], currentTaskFilter='all';
   var dragging=false;
 
   // ── Util ────────────────────────────────────────────────────────────────────
@@ -2456,63 +2469,68 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Tasks ─────────────────────────────────────────────────────────────────────
-  var currentTaskSubTab='direct';
-
-  function taskSubTab(tab){
-    currentTaskSubTab=tab;
-    ge('tasks-direct').style.display=tab==='direct'?'flex':'none';
-    ge('tasks-sched').style.display=tab==='sched'?'flex':'none';
-    ge('tt-direct').classList.toggle('active',tab==='direct');
-    ge('tt-sched').classList.toggle('active',tab==='sched');
+  function setTaskFilter(f){
+    currentTaskFilter=f;
+    ['all','immediate','scheduled'].forEach(function(n){ge('tf-'+n).classList.toggle('active',n===f)});
+    renderTaskList();
   }
 
-  function renderTaskTable(tasks,containerId){
-    var el=ge(containerId);
+  function getFilteredTasks(){
+    if(currentTaskFilter==='immediate')return allTasksList.filter(function(t){return!t.scheduled_at});
+    if(currentTaskFilter==='scheduled')return allTasksList.filter(function(t){return!!t.scheduled_at});
+    return allTasksList;
+  }
+
+  function updateTaskDeleteBtn(){
+    var checked=ge('tasks-list').querySelectorAll('input[data-cid]:checked').length;
+    var btn=ge('task-del-btn');
+    btn.disabled=!checked;
+    btn.style.opacity=checked?'1':'0.35';
+    btn.style.cursor=checked?'pointer':'not-allowed';
+  }
+
+  function renderTaskList(){
+    var el=ge('tasks-list');
+    var tasks=getFilteredTasks();
     if(!tasks||!tasks.length){el.innerHTML='<div class="empty-state">None</div>';return}
     var rows=tasks.map(function(t){
       var sc=t.status==='pending'?'pill-warn':t.status==='dispatched'?'pill-ok':t.status==='completed'?'pill-ok':'pill-off';
       var instr=esc((t.instruction||'').substring(0,60))+(t.instruction&&t.instruction.length>60?'&#x2026;':'');
-      var del=token?'<button class="btn btn-danger btn-sm" style="padding:.1rem .4rem;font-size:.7rem" onclick="deleteTask(event,\''+esc(t.id)+'\')">&#x1F5D1;</button>':'';
-      return'<tr data-tid="'+esc(t.id)+'"><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td><td>'+del+'</td></tr>';
+      return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+instr+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
     }).join('');
-    el.innerHTML='<table><thead><tr><th>Bot</th><th>Instruction</th><th>Status</th><th>Sched</th><th>Created</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el.innerHTML='<table><thead><tr><th style="width:1.5rem"><input type="checkbox" id="task-chk-all" onclick="toggleAllTaskChecks(this)"/></th><th>Bot</th><th>Instruction</th><th>Status</th><th>Sched</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
     el.querySelectorAll('tr[data-tid]').forEach(function(tr){
       tr.style.cursor='pointer';
       tr.onclick=function(ev){
-        if(ev.target.tagName==='BUTTON')return;
+        if(ev.target.type==='checkbox')return;
         var tid=tr.getAttribute('data-tid');
         var task=allTasksList.find(function(t){return t.id===tid});
-        if(task)openTaskCtx(task);
+        if(task)openTaskCtx(task,tr);
       };
     });
+    updateTaskDeleteBtn();
+  }
+
+  function toggleAllTaskChecks(master){
+    ge('tasks-list').querySelectorAll('input[data-cid]').forEach(function(cb){cb.checked=master.checked});
+    updateTaskDeleteBtn();
   }
 
   function loadTasks(){
-    if(!token){
-      ge('tasks-direct').innerHTML='<div class="empty-state">Sign in to view tasks</div>';
-      ge('tasks-sched').innerHTML='<div class="empty-state">Sign in to view tasks</div>';
-      return;
-    }
+    if(!token){ge('tasks-list').innerHTML='<div class="empty-state">Sign in to view tasks</div>';return}
     api('GET','/api/v1/tasks')
-      .then(function(tasks){
-        allTasksList=tasks||[];
-        var direct=allTasksList.filter(function(t){return!t.scheduled_at});
-        var sched=allTasksList.filter(function(t){return!!t.scheduled_at});
-        renderTaskTable(direct,'tasks-direct');
-        renderTaskTable(sched,'tasks-sched');
-      })
-      .catch(function(){
-        ge('tasks-direct').innerHTML='<div class="empty-state">Failed to load tasks</div>';
-        ge('tasks-sched').innerHTML='<div class="empty-state">Failed to load tasks</div>';
-      });
+      .then(function(tasks){allTasksList=tasks||[];renderTaskList()})
+      .catch(function(){ge('tasks-list').innerHTML='<div class="empty-state">Failed to load tasks</div>'});
   }
 
-  function deleteTask(ev,id){
-    ev.stopPropagation();
-    if(!confirm('Delete this task? The task log directory will also be removed.'))return;
-    api('DELETE','/api/v1/tasks/'+id,null)
-      .then(function(){closeTaskCtx();loadTasks()})
-      .catch(function(e){alert('Delete failed: '+e.message)});
+  function deleteSelectedTasks(){
+    var ids=[];
+    ge('tasks-list').querySelectorAll('input[data-cid]:checked').forEach(function(cb){ids.push(cb.getAttribute('data-cid'))});
+    if(!ids.length)return;
+    if(!confirm('Delete '+ids.length+' task'+(ids.length>1?'s':'')+' and their log directories?'))return;
+    Promise.all(ids.map(function(id){return api('DELETE','/api/v1/tasks/'+id,null)}))
+      .then(function(){if(taskCtxTask&&ids.indexOf(taskCtxTask.id)>=0)closeTaskCtx();loadTasks()})
+      .catch(function(e){alert('Delete failed: '+e.message);loadTasks()});
   }
 
   function openAssignTask(botName){
@@ -2548,7 +2566,7 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
     if(workDir){body.work_dir=workDir}
     api('POST','/api/v1/bots/'+botName+'/tasks',body)
-      .then(function(){cls('at-dlg');taskSubTab('direct');tab('tasks');loadTasks()})
+      .then(function(){cls('at-dlg');setTaskFilter('immediate');tab('tasks');loadTasks()})
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -3034,12 +3052,20 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Task context panel ────────────────────────────────────────────────────────
-  function openTaskCtx(task){
+  var tctxH=260;
+  function openTaskCtx(task,rowEl){
     taskCtxTask=task;
     var panel=ge('task-ctx');
     panel.style.display='flex';
-    panel.style.height='260px';
+    panel.style.height=tctxH+'px';
     ge('task-ctx-title').textContent='Task: '+esc(task.bot_name);
+    tctxTab(taskCtxActiveTab);
+    if(rowEl){requestAnimationFrame(function(){rowEl.scrollIntoView({block:'nearest',behavior:'smooth'})})}
+  }
+
+  function tctxTab(name){
+    taskCtxActiveTab=name;
+    ['detail','output'].forEach(function(t){var el=ge('tctx-t-'+t);if(el)el.classList.toggle('on',t===name)});
     loadTaskCtx();
   }
 
@@ -3054,7 +3080,17 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!taskCtxTask)return;
     var body=ge('task-ctx-body');
     var t=taskCtxTask;
-    var html=
+    if(taskCtxActiveTab==='output'){
+      if(t.output){
+        body.innerHTML='<div class="ctx-output" style="max-height:none">'+esc(t.output)+'</div>';
+      } else if(t.status==='dispatched'){
+        body.innerHTML='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
+      } else {
+        body.innerHTML='<div style="color:#475569;font-size:.78rem">No output recorded.</div>';
+      }
+      return;
+    }
+    body.innerHTML=
       '<div class="ctx-row"><span class="ctx-lbl">Bot</span><span class="ctx-val">'+esc(t.bot_name)+'</span></div>'+
       '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(t.status)+'</span></div>'+
       '<div class="ctx-row"><span class="ctx-lbl">Source</span><span class="ctx-val">'+(t.source||'&#x2014;')+'</span></div>'+
@@ -3062,13 +3098,32 @@ const kanbanHTML = `<!DOCTYPE html>
       (t.dispatched_at?'<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(t.dispatched_at)+'</span></div>':'')+
       (t.completed_at?'<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(t.completed_at)+'</span></div>':'')+
       '<div class="ctx-row"><span class="ctx-lbl">Instruction</span><span class="ctx-val">'+esc(t.instruction)+'</span></div>';
-    if(t.output){
-      html+='<div class="ctx-row" style="margin-top:.5rem"><span class="ctx-lbl">Output</span></div><div class="ctx-output">'+esc(t.output)+'</div>';
-    } else if(t.status==='dispatched'){
-      html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
-    }
-    body.innerHTML=html;
   }
+
+  // ── Task context resize ───────────────────────────────────────────────────────
+  (function(){
+    var handle=ge('tctx-resize');
+    var panel=ge('task-ctx');
+    if(!handle||!panel)return;
+    var startY=0,startH=0,active=false;
+    handle.addEventListener('mousedown',function(e){
+      active=true;startY=e.clientY;startH=tctxH;
+      document.body.style.cursor='ns-resize';
+      document.body.style.userSelect='none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',function(e){
+      if(!active)return;
+      tctxH=Math.max(120,Math.min(700,startH+(startY-e.clientY)));
+      panel.style.height=tctxH+'px';
+    });
+    document.addEventListener('mouseup',function(){
+      if(!active)return;
+      active=false;
+      document.body.style.cursor='';
+      document.body.style.userSelect='';
+    });
+  })();
 
   function openTaskCtxById(id){
     var task=allTasksList.find(function(t){return t.id===id});

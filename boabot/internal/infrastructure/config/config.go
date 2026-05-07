@@ -55,12 +55,13 @@ type BotConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Enabled       bool          `yaml:"enabled"`
-	APIPort       int           `yaml:"api_port"`
-	JWTSecret     string        `yaml:"jwt_secret"`     // generated randomly if empty
-	AdminPassword string        `yaml:"admin_password"` // defaults to "admin" if empty
-	WorkDirs      []string      `yaml:"work_dirs"`      // allowed base directories for board item workspaces
-	Plugins       PluginsConfig `yaml:"plugins"`
+	Enabled        bool          `yaml:"enabled"`
+	APIPort        int           `yaml:"api_port"`
+	JWTSecret      string        `yaml:"jwt_secret"`      // generated randomly if empty
+	AdminPassword  string        `yaml:"admin_password"`  // defaults to "admin" if empty
+	WorkDirs       []string      `yaml:"work_dirs"`       // allowed base directories for board item workspaces
+	RetentionDays  int           `yaml:"retention_days"`  // auto-delete done board items and tasks older than this; default 10
+	Plugins        PluginsConfig `yaml:"plugins"`
 }
 
 // PluginsConfig configures the plugin registry and installer.

@@ -593,6 +593,24 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		}()
 
 		slog.Info("orchestrator dashboard started", "url", fmt.Sprintf("http://localhost:%d/", botCfg.Orchestrator.APIPort))
+
+		// Run retention cleanup immediately on start, then daily.
+		retentionDays := botCfg.Orchestrator.RetentionDays
+		retBoard := tm.sharedBoard
+		retTasks := tm.sharedTaskStore
+		orchestratorlocal.RunRetentionCleanup(ctx, retBoard, retTasks, retentionDays)
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					orchestratorlocal.RunRetentionCleanup(ctx, retBoard, retTasks, retentionDays)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// Wire domain.ModelProvider.

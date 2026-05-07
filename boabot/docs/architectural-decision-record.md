@@ -137,3 +137,15 @@ Keeping the cache in the adapter also means test doubles (`mocks.MockRegistryMan
 **Pool state file persistence.** Pool state is persisted to `<orchestrator-memory>/pool.json` on every mutation using the same atomic write strategy as `SessionFile`. Startup `Reconcile` re-derives liveness by calling the injected `isRunFn` predicate for each record, so the file is used as a hint rather than ground truth.
 
 **Rejected:** Polling the board from a separate goroutine (latency, double-allocation risk); restarting all pool entries on process restart (expensive, breaks warm standby); blocking deallocation until `stopFn` completes under the mutex (could delay board transitions if stop is slow — `stopFn` is called after the entry is removed from the slice, outside the performance-critical path of the lock).
+
+---
+
+## ADR-B014 — ErrPluginNotFound defined in the domain layer, not infrastructure
+
+**Decision:** `ErrPluginNotFound` is defined as `var ErrPluginNotFound = errors.New("plugin not found")` in the `domain` package. The infrastructure store (`LocalPluginStore`) returns `domain.ErrPluginNotFound`. The HTTP server checks `errors.Is(err, domain.ErrPluginNotFound)` to return HTTP 404.
+
+**Rationale:** Sentinel errors that cross layer boundaries must live at the innermost layer that defines the concept — the domain. If `ErrPluginNotFound` were defined in the infrastructure package (`local/plugin`), the HTTP server (another infrastructure adapter) would need to import it, creating a lateral dependency between two infrastructure packages. This violates Clean Architecture: adapters must not depend on each other; both must depend only on the domain.
+
+Placing the sentinel in the domain layer allows any adapter — HTTP server, CLI, future gRPC server — to check it via `errors.Is` by importing only the domain, which is always a legal dependency.
+
+**Rejected:** Infrastructure-local sentinel with re-export (creates lateral infra-to-infra coupling); string comparison on `err.Error()` (fragile and not idiomatic Go); wrapping with a custom type defined in a shared `errors` package (unnecessary indirection; domain package already serves this purpose).

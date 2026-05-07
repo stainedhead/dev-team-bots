@@ -61,19 +61,37 @@ func (uc *InstallUseCase) Install(ctx context.Context, registryName, name, versi
 		return domain.Plugin{}, fmt.Errorf("plugin install: plugin %q not found in registry %q", name, registryName)
 	}
 
-	// If version is empty, use latest.
+	// Resolve manifest and archive URLs. When version is empty, use the pre-computed
+	// latest URLs from the index. When a specific version is requested, validate it
+	// exists in the registry's known versions list and construct version-specific URLs.
+	var manifestURL, archiveURL string
 	if version == "" {
 		version = entry.LatestVersion
+		manifestURL = entry.ManifestURL
+		archiveURL = entry.DownloadURL
+	} else {
+		versionFound := false
+		for _, v := range entry.Versions {
+			if v == version {
+				versionFound = true
+				break
+			}
+		}
+		if !versionFound {
+			return domain.Plugin{}, fmt.Errorf("plugin install: version %s not available in registry", version)
+		}
+		manifestURL = reg.URL + "/" + entry.Name + "/" + version + "/plugin.yaml"
+		archiveURL = reg.URL + "/" + entry.Name + "/" + version + "/" + entry.Name + "-" + version + ".tar.gz"
 	}
 
 	// Fetch manifest.
-	manifest, err := uc.registry.FetchManifest(ctx, entry.ManifestURL)
+	manifest, err := uc.registry.FetchManifest(ctx, manifestURL)
 	if err != nil {
 		return domain.Plugin{}, fmt.Errorf("plugin install: fetch manifest: %w", err)
 	}
 
 	// Fetch archive.
-	archive, err := uc.registry.FetchArchive(ctx, entry.DownloadURL)
+	archive, err := uc.registry.FetchArchive(ctx, archiveURL)
 	if err != nil {
 		return domain.Plugin{}, fmt.Errorf("plugin install: fetch archive: %w", err)
 	}

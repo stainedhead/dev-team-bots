@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	indexCacheTTL      = 5 * time.Minute
+	indexCacheTTL       = 5 * time.Minute
 	defaultFetchTimeout = 10 * time.Second
 	registriesFile      = "registries.json"
+	maxArchiveWireSize  = 20 * 1024 * 1024 // 20 MB compressed
 )
 
 type cachedIndex struct {
@@ -226,9 +227,12 @@ func (m *HTTPRegistryManager) FetchArchive(ctx context.Context, downloadURL stri
 		return nil, fmt.Errorf("registry manager: fetch archive: server returned %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxArchiveWireSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("registry manager: read archive: %w", err)
+	}
+	if len(data) > maxArchiveWireSize {
+		return nil, fmt.Errorf("registry manager: archive exceeds %d byte wire size limit (20 MB)", maxArchiveWireSize)
 	}
 	return data, nil
 }

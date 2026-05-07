@@ -23,6 +23,10 @@ When `orchestrator.enabled: true` is set in config, the same binary additionally
 - Manages user authentication (JWT).
 - Maintains a dynamic pool of tech-lead instances, one per In Progress kanban item, with automatic allocation and deallocation as items change state.
 
+## Plugin Registry
+
+Admins can install versioned capability packages (plugins) from one or more HTTPS-hosted registries. Each plugin declares a set of MCP tools in its `plugin.yaml` manifest; those tools are dynamically added to every bot's `ListTools` response as soon as the plugin is active. The default configuration ships with `stainedhead/shared-plugins` as a trusted first-party registry; additional registries can be added at runtime. Plugins from trusted registries activate immediately after checksum verification; plugins from untrusted registries land in `staged` status and require explicit admin approval before their tools become available.
+
 ## Dynamic Subteam Spawning (Tech-Lead Bots)
 
 Tech-lead bots can spawn and manage named sub-agent goroutines at runtime. Each spawned sub-agent runs in complete isolation with its own message bus and queue router. Spawning and termination are triggered via typed messages on the existing queue. A heartbeat watchdog on each spawned agent ensures stale goroutines are self-terminated automatically. Sub-agent state is persisted to a session file so the tech-lead survives process restarts without losing context.

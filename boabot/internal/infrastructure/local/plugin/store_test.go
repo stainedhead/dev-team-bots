@@ -335,3 +335,104 @@ func TestStore_Reload_MissingEntrypoint_Disabled(t *testing.T) {
 		t.Errorf("expected disabled after failed reload, got %s", got.Status)
 	}
 }
+
+func TestStore_Update_CorruptArchive_RollsBack(t *testing.T) {
+	installDir := t.TempDir()
+	store, err := plugin.NewLocalPluginStore(installDir)
+	if err != nil {
+		t.Fatalf("NewLocalPluginStore: %v", err)
+	}
+
+	// Install v1.0.0.
+	archive, checksum := buildValidArchive(t)
+	manifest := makeManifest("update-plugin", checksum)
+	p, err := store.Install(context.Background(), manifest, archive, "official", true)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Verify plugin directory exists.
+	pluginDir := filepath.Join(installDir, "update-plugin")
+	if _, statErr := os.Stat(pluginDir); os.IsNotExist(statErr) {
+		t.Fatal("plugin dir should exist after install")
+	}
+
+	// Try to update with a corrupt archive (bad gzip bytes).
+	corruptArchive := []byte("this is not a valid tar.gz archive")
+	corruptChecksum := sha256Hex(corruptArchive)
+	newManifest := domain.PluginManifest{
+		Name:      "update-plugin",
+		Version:   "2.0.0",
+		Checksums: map[string]string{"sha256": corruptChecksum},
+	}
+	updateErr := store.Update(context.Background(), p.ID, newManifest, corruptArchive)
+	if updateErr == nil {
+		t.Fatal("expected error when updating with corrupt archive, got nil")
+	}
+
+	// Original plugin directory must still exist.
+	if _, statErr := os.Stat(pluginDir); os.IsNotExist(statErr) {
+		t.Error("original plugin directory was deleted despite failed update — data loss")
+	}
+
+	// Plugin must still be active.
+	got, getErr := store.Get(context.Background(), p.ID)
+	if getErr != nil {
+		t.Fatalf("Get after failed update: %v", getErr)
+	}
+	if got.Status != domain.PluginStatusActive {
+		t.Errorf("expected active status after failed update, got %s", got.Status)
+	}
+	if got.Version != "1.0.0" {
+		t.Errorf("expected version 1.0.0 after failed update, got %s", got.Version)
+	}
+}
+
+func TestStore_Update_Success_OldDirectoryRemoved(t *testing.T) {
+	installDir := t.TempDir()
+	store, err := plugin.NewLocalPluginStore(installDir)
+	if err != nil {
+		t.Fatalf("NewLocalPluginStore: %v", err)
+	}
+
+	// Install v1.0.0.
+	archive, checksum := buildValidArchive(t)
+	manifest := makeManifest("success-update-plugin", checksum)
+	p, err := store.Install(context.Background(), manifest, archive, "official", true)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Update with a valid archive.
+	newArchive, newChecksum := buildValidArchive(t)
+	newManifest := domain.PluginManifest{
+		Name:       "success-update-plugin",
+		Version:    "2.0.0",
+		Entrypoint: "run.sh",
+		Checksums:  map[string]string{"sha256": newChecksum},
+	}
+	if err := store.Update(context.Background(), p.ID, newManifest, newArchive); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Plugin must be at new version.
+	got, getErr := store.Get(context.Background(), p.ID)
+	if getErr != nil {
+		t.Fatalf("Get after update: %v", getErr)
+	}
+	if got.Version != "2.0.0" {
+		t.Errorf("expected version 2.0.0 after update, got %s", got.Version)
+	}
+
+	// Old backup directory must be cleaned up.
+	oldDir := filepath.Join(installDir, "success-update-plugin-old")
+	if _, statErr := os.Stat(oldDir); !os.IsNotExist(statErr) {
+		t.Error("backup directory should be removed after successful update")
+	}
+
+	// Temp directory must be cleaned up.
+	tmpDir := filepath.Join(installDir, "success-update-plugin-update-tmp")
+	if _, statErr := os.Stat(tmpDir); !os.IsNotExist(statErr) {
+		t.Error("temp directory should be removed after successful update")
+	}
+}

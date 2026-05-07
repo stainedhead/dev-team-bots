@@ -1715,3 +1715,196 @@ func TestPool_Endpoint_RequiresAuth(t *testing.T) {
 		t.Fatalf("expected 401 without auth, got %d", resp.StatusCode)
 	}
 }
+
+// ── Plugin 404 tests ──────────────────────────────────────────────────────────
+
+// fakePluginStore is a no-op PluginStore used to enable plugin route registration.
+type fakePluginStore struct{}
+
+func (f *fakePluginStore) List(_ context.Context) ([]domain.Plugin, error) { return nil, nil }
+func (f *fakePluginStore) Get(_ context.Context, _ string) (domain.Plugin, error) {
+	return domain.Plugin{}, nil
+}
+func (f *fakePluginStore) Install(_ context.Context, _ domain.PluginManifest, _ []byte, _ string, _ bool) (domain.Plugin, error) {
+	return domain.Plugin{}, nil
+}
+func (f *fakePluginStore) Approve(_ context.Context, _ string) error { return nil }
+func (f *fakePluginStore) Reject(_ context.Context, _ string) error  { return nil }
+func (f *fakePluginStore) Disable(_ context.Context, _ string) error { return nil }
+func (f *fakePluginStore) Enable(_ context.Context, _ string) error  { return nil }
+func (f *fakePluginStore) Update(_ context.Context, _ string, _ domain.PluginManifest, _ []byte) error {
+	return nil
+}
+func (f *fakePluginStore) Reload(_ context.Context, _ string) error { return nil }
+func (f *fakePluginStore) Remove(_ context.Context, _ string) error { return nil }
+
+// fakePluginManager is a configurable PluginManager for testing.
+type fakePluginManager struct {
+	listFn    func(ctx context.Context) ([]domain.Plugin, error)
+	getFn     func(ctx context.Context, id string) (domain.Plugin, error)
+	approveFn func(ctx context.Context, id, actor string) error
+	rejectFn  func(ctx context.Context, id, actor string) error
+	enableFn  func(ctx context.Context, id, actor string) error
+	disableFn func(ctx context.Context, id, actor string) error
+	reloadFn  func(ctx context.Context, id, actor string) error
+	removeFn  func(ctx context.Context, id, actor string) error
+}
+
+func (f *fakePluginManager) List(ctx context.Context) ([]domain.Plugin, error) {
+	if f.listFn != nil {
+		return f.listFn(ctx)
+	}
+	return []domain.Plugin{}, nil
+}
+func (f *fakePluginManager) Get(ctx context.Context, id string) (domain.Plugin, error) {
+	if f.getFn != nil {
+		return f.getFn(ctx, id)
+	}
+	return domain.Plugin{}, nil
+}
+func (f *fakePluginManager) Approve(ctx context.Context, id, actor string) error {
+	if f.approveFn != nil {
+		return f.approveFn(ctx, id, actor)
+	}
+	return nil
+}
+func (f *fakePluginManager) Reject(ctx context.Context, id, actor string) error {
+	if f.rejectFn != nil {
+		return f.rejectFn(ctx, id, actor)
+	}
+	return nil
+}
+func (f *fakePluginManager) Enable(ctx context.Context, id, actor string) error {
+	if f.enableFn != nil {
+		return f.enableFn(ctx, id, actor)
+	}
+	return nil
+}
+func (f *fakePluginManager) Disable(ctx context.Context, id, actor string) error {
+	if f.disableFn != nil {
+		return f.disableFn(ctx, id, actor)
+	}
+	return nil
+}
+func (f *fakePluginManager) Reload(ctx context.Context, id, actor string) error {
+	if f.reloadFn != nil {
+		return f.reloadFn(ctx, id, actor)
+	}
+	return nil
+}
+func (f *fakePluginManager) Remove(ctx context.Context, id, actor string) error {
+	if f.removeFn != nil {
+		return f.removeFn(ctx, id, actor)
+	}
+	return nil
+}
+
+func newTestServerWithPluginManager(mgr httpserver.PluginManager) *httptest.Server {
+	s := httpserver.New(httpserver.Config{
+		Auth:         &fakeAuth{},
+		Board:        &fakeBoardStore{},
+		Team:         &fakeControlPlane{},
+		Users:        &fakeUserStore{},
+		Skills:       &fakeSkillRegistry{},
+		DLQ:          &fakeDLQStore{},
+		Plugins:      &fakePluginStore{},
+		PluginManage: mgr,
+	})
+	return httptest.NewServer(s.Handler())
+}
+
+func TestPluginsApprove_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		approveFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "plugins/nonexistent-id/approve", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("approve: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestPluginsReject_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		rejectFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "plugins/nonexistent-id/reject", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("reject: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestPluginsEnable_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		enableFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "plugins/nonexistent-id/enable", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("enable: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestPluginsDisable_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		disableFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "plugins/nonexistent-id/disable", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("disable: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestPluginsReload_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		reloadFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "plugins/nonexistent-id/reload", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("reload: expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestPluginsRemove_NotFound(t *testing.T) {
+	mgr := &fakePluginManager{
+		removeFn: func(_ context.Context, _ string, _ string) error {
+			return domain.ErrPluginNotFound
+		},
+	}
+	srv := newTestServerWithPluginManager(mgr)
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodDelete, "plugins/nonexistent-id", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("remove: expected 404, got %d", resp.StatusCode)
+	}
+}

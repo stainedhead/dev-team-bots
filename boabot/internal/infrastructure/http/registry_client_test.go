@@ -195,3 +195,22 @@ func TestHTTPRegistryManager_Add_HTTPS_Persisted(t *testing.T) {
 		t.Errorf("registry %q not persisted after reload", reg.Name)
 	}
 }
+
+func TestFetchArchive_WireSizeLimit(t *testing.T) {
+	// Serve a response that exceeds the 20 MB wire size limit.
+	oversize := make([]byte, 20*1024*1024+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(oversize)
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	_, err := mgr.FetchArchive(context.Background(), srv.URL+"/plugin.tar.gz")
+	if err == nil {
+		t.Fatal("expected wire size limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "wire size") && !strings.Contains(err.Error(), "20") {
+		t.Errorf("expected wire size error, got: %v", err)
+	}
+}

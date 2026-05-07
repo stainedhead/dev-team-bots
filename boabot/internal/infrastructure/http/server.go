@@ -3302,6 +3302,10 @@ func (s *Server) handlePluginsApprove(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Approve(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins approve", err)
 		return
 	}
@@ -3320,6 +3324,10 @@ func (s *Server) handlePluginsReject(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Reject(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins reject", err)
 		return
 	}
@@ -3338,6 +3346,10 @@ func (s *Server) handlePluginsEnable(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Enable(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins enable", err)
 		return
 	}
@@ -3356,6 +3368,10 @@ func (s *Server) handlePluginsDisable(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Disable(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins disable", err)
 		return
 	}
@@ -3374,6 +3390,10 @@ func (s *Server) handlePluginsReload(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Reload(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins reload", err)
 		return
 	}
@@ -3392,6 +3412,10 @@ func (s *Server) handlePluginsRemove(w http.ResponseWriter, r *http.Request) {
 		actor = "system"
 	}
 	if err := s.cfg.PluginManage.Remove(r.Context(), id, actor); err != nil {
+		if errors.Is(err, domain.ErrPluginNotFound) {
+			writeError(w, http.StatusNotFound, "plugin not found")
+			return
+		}
 		writeInternalError(w, "plugins remove", err)
 		return
 	}

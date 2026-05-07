@@ -102,6 +102,122 @@ When a sub-agent is spawned, its record — name, bot type, working directory, b
 
 When more than 5 sub-agents are spawned simultaneously, the `SubTeamManager` logs a warning. This is a soft advisory limit — spawning is not blocked. The warning is intended to surface unusual load before it becomes a resource concern.
 
+## Plugin Registry
+
+The plugin registry system allows admins to browse, install, update, and remove versioned capability packages from one or more hosted registries without restarting the process.
+
+### Plugin Manifest
+
+Every plugin ships a `plugin.yaml` at the root of its `.tar.gz` archive. The manifest describes the plugin and declares what it exposes:
+
+```yaml
+name: my-plugin
+version: 1.0.0
+description: "Does something useful"
+author: your-name
+homepage: https://github.com/org/my-plugin   # optional
+license: MIT                                   # optional
+tags: [utility, data]                          # optional
+min_runtime: 1.0.0                             # advisory only; not enforced
+entrypoint: run.sh                             # executable inside the archive
+checksums:
+  sha256: <hex>
+provides:
+  tools:
+    - name: do_thing
+      description: "Performs the thing"
+      inputSchema:
+        type: object
+        required: [input]
+        properties:
+          input: {type: string}
+permissions:
+  network: [api.example.com]                   # allowed outbound hosts
+  env_vars: [MY_API_KEY]                       # allowed env var names
+  filesystem: false                            # whether filesystem access is permitted
+```
+
+`checksums.sha256` is the SHA-256 hex digest of the `.tar.gz` archive. The installer verifies this before writing any files to disk.
+
+### Registry Protocol
+
+Registries are static HTTPS catalogs. Any HTTPS host (GitHub raw content, S3, etc.) can serve as a registry by exposing:
+
+- `<registry-url>/index.json` — the registry index listing all available plugins.
+- Per-plugin manifest URLs and download URLs referenced in `index.json`.
+
+HTTP URLs are rejected at configuration time. No authenticated or private registries are supported.
+
+The registry index (`index.json`) has the following shape:
+
+```json
+{
+  "registry": "stainedhead/shared-plugins",
+  "generated_at": "2026-05-07T00:00:00Z",
+  "plugins": [
+    {
+      "name": "my-plugin",
+      "description": "Does something useful",
+      "author": "your-name",
+      "latest_version": "1.0.0",
+      "tags": ["utility"],
+      "versions": ["1.0.0", "0.9.0"],
+      "manifest_url": "https://.../my-plugin/1.0.0/plugin.yaml",
+      "download_url": "https://.../my-plugin/1.0.0/my-plugin.tar.gz"
+    }
+  ]
+}
+```
+
+Registry indexes are cached in memory with a 5-minute TTL. A "reload" action bypasses the cache.
+
+### Trust Model
+
+Each configured registry carries a `trusted` flag.
+
+| Trust level | Behaviour after successful checksum verification |
+|---|---|
+| Trusted | Plugin status set to `active` immediately. Tools appear in `ListTools` on the next call. |
+| Untrusted | Plugin status set to `staged`. An admin must call `POST /api/v1/plugins/{id}/approve` before tools are visible to bots. |
+
+Checksum verification runs for all plugins regardless of trust level. A checksum mismatch aborts the install and leaves no files on disk.
+
+### Plugin Lifecycle States
+
+| Status | Meaning |
+|---|---|
+| `downloading` | Archive is being fetched (transient) |
+| `staged` | Installed from an untrusted registry; awaiting admin approval |
+| `active` | Installed and available; tools appear in `ListTools` |
+| `disabled` | Files retained on disk; tools hidden from bots |
+| `update_available` | A newer version exists in the registry |
+| `rejected` | Admin rejected a staged plugin; files removed |
+| `checksum_fail` | SHA-256 mismatch; install aborted |
+
+### Security Constraints
+
+- Archives are extracted to a temporary directory first; the temp dir is atomically renamed to the final location on success. Any failure deletes the temp dir, leaving `install_dir` clean.
+- Zip-slip protection: any archive member whose extracted path escapes `install_dir` aborts the install.
+- Maximum wire size: 20 MB compressed. Maximum extracted size: 50 MB. Both limits are enforced before or during extraction.
+- Plugin entrypoints run in existing subprocess isolation: network is limited to `permissions.network` hosts; env vars are limited to `permissions.env_vars` declarations.
+
+### Tool Name Collision
+
+If two active plugins declare a tool with the same name, the second plugin's tool is silently skipped (not the first) and a warning is logged. The first plugin's tool continues to work. This is evaluated dynamically on each `ListTools` call.
+
+### Admin UI
+
+The admin UI includes a "Plugins & Skills" tab. From this tab an admin can:
+- Browse the catalog for any configured registry.
+- Install a plugin in one click (trusted registries activate immediately).
+- Approve or reject staged plugins from untrusted registries.
+- Enable, disable, reload, or remove installed plugins.
+- View full plugin detail: manifest metadata, tool list with schemas, permissions, and SHA-256 checksum.
+
+### Observability
+
+Every plugin lifecycle event — install, approve, reject, enable, disable, update, reload, remove — emits a structured `slog` line with fields: `plugin_name`, `version`, `registry`, `actor`, `status`, `timestamp`.
+
 ## Tech-Lead Pool Management
 
 The orchestrator maintains a pool of tech-lead instances keyed to In Progress kanban items. The goal is that every active work item always has a dedicated tech-lead standing by to coordinate it, with minimal cold-start latency.

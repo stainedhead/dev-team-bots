@@ -45,12 +45,6 @@ tools:
     - todo_read
     - get_metrics
     - run_command
-  receive_from:
-    - architect
-    - implementer
-    - reviewer
-    - maintainer
-    - tech-lead
 
 
 context:

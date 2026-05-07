@@ -34,9 +34,6 @@ tools:
     - run_command
   http_allowed_hosts:
     - api.github.com
-  receive_from:
-    - orchestrator
-    - tech-lead
 
 
 context:

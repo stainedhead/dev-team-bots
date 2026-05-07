@@ -572,6 +572,151 @@ func TestExecuteTask_ProgressHandler_MultipleToolCalls(t *testing.T) {
 	}
 }
 
+func TestExecuteTask_RulesTracker_PreloadsWorkDir(t *testing.T) {
+	// The RulesTracker should be Reset and UpdateForDir called with task.WorkDir
+	// before any model invocation, so rules appear in the initial context.
+	var capturedMessages []domain.ProviderMessage
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
+			capturedMessages = req.Messages
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{
+		UpdateForDirFn: func(_ context.Context, dir string) domain.RulesUpdate {
+			return domain.RulesUpdate{
+				Add: []domain.RulesEntry{{Dir: dir, File: "AGENTS.md", Content: "# Work rules"}},
+			}
+		},
+	}
+	uc := newExecuteTaskUseCase(provider, &mocks.MCPClient{}, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-rules-1", Instruction: "do work", WorkDir: "/tmp/work"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.Resets != 1 {
+		t.Errorf("expected Reset called once, got %d", rt.Resets)
+	}
+	if len(rt.Dirs) == 0 || rt.Dirs[0] != "/tmp/work" {
+		t.Errorf("expected first UpdateForDir call with WorkDir, got %v", rt.Dirs)
+	}
+	// Rules content should appear in the initial user message.
+	if len(capturedMessages) == 0 {
+		t.Fatal("no messages captured")
+	}
+	if !strings.Contains(capturedMessages[0].Content, "# Work rules") {
+		t.Errorf("rules content not found in initial message: %q", capturedMessages[0].Content)
+	}
+}
+
+func TestExecuteTask_RulesTracker_UpdatesOnToolCallPaths(t *testing.T) {
+	// After each tool call, UpdateForDir should be called with the directory of
+	// the path argument so the model sees rules context updates.
+	callCount := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return domain.InvokeResponse{
+					ToolCalls: []domain.ToolCall{{
+						ID:   "tc-1",
+						Name: "read_file",
+						Args: map[string]any{"path": "/tmp/repo/src/main.go"},
+					}},
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Text: "file content"}}}, nil
+		},
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "read_file"}}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{}
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-rules-2", Instruction: "read a file", WorkDir: "/tmp/repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// UpdateForDir should have been called for the tool call's directory.
+	foundSrc := false
+	for _, d := range rt.Dirs {
+		if d == "/tmp/repo/src" {
+			foundSrc = true
+			break
+		}
+	}
+	if !foundSrc {
+		t.Errorf("expected UpdateForDir called for /tmp/repo/src; got dirs: %v", rt.Dirs)
+	}
+}
+
+func TestExecuteTask_RulesTracker_InjectsRulesAsUserMessage(t *testing.T) {
+	// When a tool call triggers new rules, they should be injected as a user
+	// message so the model sees them before the next invocation.
+	callCount := 0
+	var secondCallMessages []domain.ProviderMessage
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return domain.InvokeResponse{
+					ToolCalls: []domain.ToolCall{{
+						ID:   "tc-1",
+						Name: "read_file",
+						Args: map[string]any{"path": "/tmp/repo/src/foo.go"},
+					}},
+				}, nil
+			}
+			secondCallMessages = req.Messages
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Text: "ok"}}}, nil
+		},
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "read_file"}}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{
+		UpdateForDirFn: func(_ context.Context, dir string) domain.RulesUpdate {
+			if strings.Contains(dir, "src") {
+				return domain.RulesUpdate{
+					Add: []domain.RulesEntry{{Dir: dir, File: "AGENTS.md", Content: "# Src rules"}},
+				}
+			}
+			return domain.RulesUpdate{}
+		},
+	}
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-rules-3", Instruction: "read something"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	foundRulesMsg := false
+	for _, msg := range secondCallMessages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "# Src rules") {
+			foundRulesMsg = true
+			break
+		}
+	}
+	if !foundRulesMsg {
+		t.Errorf("expected rules injection as user message in second call; messages: %+v", secondCallMessages)
+	}
+}
+
 func TestExecuteTask_MemoryReadError_SkipsMemory(t *testing.T) {
 	provider := &mocks.ModelProvider{}
 	embedder := &mocks.Embedder{

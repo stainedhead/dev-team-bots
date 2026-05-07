@@ -28,6 +28,7 @@ import (
 	localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
+	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
@@ -630,6 +631,11 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 	// Wire mid-task ask channel so the bot can answer questions between tool calls.
 	worker.WithAskChannel(tm.askRouter.getOrCreate(entry.Name))
+
+	// Wire rules tracker so the bot loads AGENTS.md / CLAUDE.md hierarchically.
+	if len(tm.cfg.AllowedWorkDirs) > 0 {
+		worker.WithRulesTracker(localrules.NewTracker(tm.cfg.AllowedWorkDirs))
+	}
 
 	workerFactory := &simpleWorkerFactory{worker: worker}
 

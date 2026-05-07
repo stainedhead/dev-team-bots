@@ -161,6 +161,7 @@ func (u *RunAgentUseCase) handleTask(ctx context.Context, rm domain.ReceivedMess
 		BoardItemID: p.BoardItemID,
 		Instruction: p.Instruction,
 		Source:      string(rm.Message.From),
+		WorkDir:     p.WorkDir,
 	})
 	if err != nil {
 		slog.Error("task execution error", "task_id", p.TaskID, "err", err)

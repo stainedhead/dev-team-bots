@@ -290,3 +290,34 @@ func (m *SubTeamManager) TearDownAll(ctx context.Context) error {
 	}
 	return nil
 }
+
+// RulesTracker is a test double for domain.RulesTracker.
+type RulesTracker struct {
+	UpdateForDirFn func(ctx context.Context, dir string) domain.RulesUpdate
+	ResetFn        func()
+
+	mu     sync.Mutex
+	Dirs   []string // dirs passed to UpdateForDir in order
+	Resets int      // number of Reset calls
+}
+
+func (m *RulesTracker) UpdateForDir(ctx context.Context, dir string) domain.RulesUpdate {
+	m.mu.Lock()
+	m.Dirs = append(m.Dirs, dir)
+	fn := m.UpdateForDirFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, dir)
+	}
+	return domain.RulesUpdate{}
+}
+
+func (m *RulesTracker) Reset() {
+	m.mu.Lock()
+	m.Resets++
+	fn := m.ResetFn
+	m.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}

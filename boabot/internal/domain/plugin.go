@@ -2,8 +2,12 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrPluginNotFound is returned by PluginStore when a plugin ID does not exist.
+var ErrPluginNotFound = errors.New("plugin not found")
 
 // Plugin represents an installed plugin in the system.
 type Plugin struct {

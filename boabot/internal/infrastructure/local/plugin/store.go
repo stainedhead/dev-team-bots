@@ -16,9 +16,6 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
-// ErrPluginNotFound is returned when a plugin ID is not found.
-var ErrPluginNotFound = errors.New("plugin not found")
-
 // ErrPluginAlreadyInstalled is returned when a plugin with that name is already
 // in a non-terminal state.
 var ErrPluginAlreadyInstalled = errors.New("plugin with that name already installed")
@@ -160,7 +157,7 @@ func (s *LocalPluginStore) Get(_ context.Context, id string) (domain.Plugin, err
 	p, ok := s.index[id]
 	s.mu.RUnlock()
 	if !ok {
-		return domain.Plugin{}, ErrPluginNotFound
+		return domain.Plugin{}, domain.ErrPluginNotFound
 	}
 	return p, nil
 }
@@ -223,7 +220,7 @@ func (s *LocalPluginStore) Approve(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 	p.Status = domain.PluginStatusActive
 	s.index[id] = p
@@ -236,7 +233,7 @@ func (s *LocalPluginStore) Reject(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 	delete(s.index, id)
 	_ = os.RemoveAll(filepath.Join(s.installDir, p.Name))
@@ -249,7 +246,7 @@ func (s *LocalPluginStore) Disable(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 	p.Status = domain.PluginStatusDisabled
 	s.index[id] = p
@@ -262,7 +259,7 @@ func (s *LocalPluginStore) Enable(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 	p.Status = domain.PluginStatusActive
 	s.index[id] = p
@@ -275,16 +272,43 @@ func (s *LocalPluginStore) Update(_ context.Context, id string, manifest domain.
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 
-	// Remove old dir, re-extract.
-	_ = os.RemoveAll(filepath.Join(s.installDir, p.Name))
+	// Atomic update: extract to tmp, rename current to -old, rename tmp to current, remove -old.
+	// If extraction fails, the current directory is untouched. If rename fails after saving -old,
+	// restore -old before returning the error.
+	currentDir := filepath.Join(s.installDir, p.Name)
+	tmpDir := filepath.Join(s.installDir, p.Name+"-update-tmp")
+	oldDir := filepath.Join(s.installDir, p.Name+"-old")
 
-	_, err := Extract(s.installDir, manifest.Name, manifest, archive)
-	if err != nil {
+	// Clean up any stale tmp/old dirs from a previous crashed update.
+	_ = os.RemoveAll(tmpDir)
+	_ = os.RemoveAll(oldDir)
+
+	// Step 1: extract to tmp (current dir untouched; if this fails, nothing is lost).
+	if _, err := Extract(s.installDir, p.Name+"-update-tmp", manifest, archive); err != nil {
+		_ = os.RemoveAll(tmpDir)
 		return fmt.Errorf("plugin store: update extract: %w", err)
 	}
+
+	// Step 2: rename current → old (saves the existing installation).
+	if err := os.Rename(currentDir, oldDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return fmt.Errorf("plugin store: update rename current to old: %w", err)
+	}
+
+	// Step 3: rename tmp → current (promotes the new version).
+	if err := os.Rename(tmpDir, currentDir); err != nil {
+		// Restore: rename old back to current.
+		if restoreErr := os.Rename(oldDir, currentDir); restoreErr != nil {
+			return fmt.Errorf("plugin store: update rename new failed (%w); restore also failed: %v", err, restoreErr)
+		}
+		return fmt.Errorf("plugin store: update rename new to current: %w", err)
+	}
+
+	// Step 4: remove old (best-effort).
+	_ = os.RemoveAll(oldDir)
 
 	p.Version = manifest.Version
 	p.Description = manifest.Description
@@ -306,7 +330,7 @@ func (s *LocalPluginStore) Reload(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 
 	// Re-read manifest.
@@ -333,7 +357,7 @@ func (s *LocalPluginStore) Remove(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	p, ok := s.index[id]
 	if !ok {
-		return ErrPluginNotFound
+		return domain.ErrPluginNotFound
 	}
 	delete(s.index, id)
 	_ = os.RemoveAll(filepath.Join(s.installDir, p.Name))

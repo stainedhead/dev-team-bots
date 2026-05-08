@@ -1767,6 +1767,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
     /* ── Sidebar ── */
     aside{width:210px;flex-shrink:0;background:#0a1020;border-right:1px solid #1a2744;display:flex;flex-direction:column;overflow:hidden}
+    .sb-icon-bg{flex-shrink:0;height:160px;background:url('/imgs/boabot-icon.png') center/130px no-repeat;opacity:.06;pointer-events:none}
     .sb-hdr{padding:.5rem .75rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#334155;border-bottom:1px solid #1a2744;flex-shrink:0}
     .bot-list{flex:1;overflow-y:auto;padding:.375rem}
     .bcard{padding:.5rem .625rem;border-radius:.35rem;margin-bottom:.3rem;background:#0f1829;border:1px solid #1a2744;cursor:default}
@@ -2034,6 +2035,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <aside>
     <div class="sb-hdr">Team Roster</div>
     <div class="bot-list" id="roster"><div class="nil" style="padding:1rem">Loading…</div></div>
+    <div class="sb-icon-bg"></div>
   </aside>
 
   <main>

@@ -3411,20 +3411,25 @@ const kanbanHTML = `<!DOCTYPE html>
   document.addEventListener('DOMContentLoaded',function(){
     mpInit();loadPluginCmds();
     document.querySelectorAll('dialog').forEach(makeDraggable);
+    function firstSelOpt(sel){
+      if(!sel)return '';
+      for(var i=0;i<sel.options.length;i++){if(sel.options[i].value)return sel.options[i].value;}
+      return '';
+    }
     function getAtWorkDir(){
       var sel=ge('at-workdir-sel'),txt=ge('at-workdir-txt');
-      var base=sel?sel.value:'';
+      var base=(sel&&sel.value)||firstSelOpt(sel);
       var sub=txt&&txt.style.display!=='none'?txt.value.trim().replace(/^@/,'').trimEnd():'';
       return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
     }
     function getNiWorkDir(){
       var sel=ge('ni-workdir-sel'),txt=ge('ni-workdir-txt');
-      var base=sel?sel.value:'';
+      var base=(sel&&sel.value)||firstSelOpt(sel);
       var sub=txt&&txt.style.display!=='none'?txt.value.trim().replace(/^@/,'').trimEnd():'';
       return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
     }
-    function getNiRootDir(){var sel=ge('ni-workdir-sel');return sel?sel.value:'';}
-    function getAtRootDir(){var sel=ge('at-workdir-sel');return sel?sel.value:'';}
+    function getNiRootDir(){var sel=ge('ni-workdir-sel');return(sel&&sel.value)||firstSelOpt(sel);}
+    function getAtRootDir(){var sel=ge('at-workdir-sel');return(sel&&sel.value)||firstSelOpt(sel);}
     var bCtxDir=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
     // Register mention keydown handlers FIRST so mpOnKeydown fires before send handlers.
     // Note: bctx-desc is dynamically recreated by loadBoardCtx() so it is attached there instead.

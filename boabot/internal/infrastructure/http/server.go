@@ -2462,7 +2462,7 @@ const kanbanHTML = `<!DOCTYPE html>
     var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,e=ge('ni-err');
     e.style.display='none';
     if(!title){e.textContent='Title is required';e.style.display='block';return}
-    var root=ge('ni-workdir-sel').value,sub=ge('ni-workdir-txt').value.trim();
+    var root=ge('ni-workdir-sel').value,sub=ge('ni-workdir-txt').value.trim().replace(/^@/,'').trimEnd();
     var workdir=root?(sub?root+'/'+sub:root):'';
     var body={title:title,description:desc,assigned_to:bot};
     if(workdir)body.work_dir=workdir;
@@ -2927,7 +2927,7 @@ const kanbanHTML = `<!DOCTYPE html>
     var e=ge('at-err');
     e.style.display='none';
     if(!instruction){e.textContent='Instruction is required';e.style.display='block';return}
-    var root=ge('at-workdir-sel').value,sub=ge('at-workdir-txt').value.trim();
+    var root=ge('at-workdir-sel').value,sub=ge('at-workdir-txt').value.trim().replace(/^@/,'').trimEnd();
     var workDir=root?(sub?root+'/'+sub:root):'';
     var body={instruction:instruction};
     if(title){body.title=title}
@@ -3335,6 +3335,30 @@ const kanbanHTML = `<!DOCTYPE html>
     el.addEventListener('blur',function(){setTimeout(mpClose,160);});
   }
 
+  // attachPathMention is like attachMention but only triggers @ (not /) so that
+  // typing / in a sub-path field never opens the skill-command popup.
+  function attachPathMention(el,workDirFn){
+    if(!el)return;
+    el.addEventListener('input',function(){
+      var v=el.value;
+      var cursor=typeof el.selectionStart==='number'?el.selectionStart:v.length;
+      if(mpMode==='file'&&mpEl===el){
+        if(cursor<=mpPos){mpClose();return;}
+        mpText=v.slice(mpPos+1,cursor);mpLoadFile(mpText);return;
+      }
+      if(cursor<1)return;
+      if(v[cursor-1]!=='@')return;
+      var prevCh=cursor>1?v[cursor-2]:'';
+      if(prevCh&&!/[\s\n\r\t]/.test(prevCh))return;
+      var wd=typeof workDirFn==='function'?workDirFn():'';
+      if(!wd)return;
+      mpMode='file';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir=wd;
+      if(!mpPop)mpInit();mpLoadFile('');
+    });
+    el.addEventListener('keydown',mpOnKeydown);
+    el.addEventListener('blur',function(){setTimeout(mpClose,160);});
+  }
+
   function loadPluginCmds(){
     var cmds=[];
     var p1=api('GET','/api/v1/plugins',null).then(function(plugins){
@@ -3390,15 +3414,17 @@ const kanbanHTML = `<!DOCTYPE html>
     function getAtWorkDir(){
       var sel=ge('at-workdir-sel'),txt=ge('at-workdir-txt');
       var base=sel?sel.value:'';
-      var sub=txt&&txt.style.display!=='none'?txt.value.trim():'';
+      var sub=txt&&txt.style.display!=='none'?txt.value.trim().replace(/^@/,'').trimEnd():'';
       return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
     }
     function getNiWorkDir(){
       var sel=ge('ni-workdir-sel'),txt=ge('ni-workdir-txt');
       var base=sel?sel.value:'';
-      var sub=txt&&txt.style.display!=='none'?txt.value.trim():'';
+      var sub=txt&&txt.style.display!=='none'?txt.value.trim().replace(/^@/,'').trimEnd():'';
       return base?(base+(sub?'/'+sub.replace(/^\/+/,''):'')):'';
     }
+    function getNiRootDir(){var sel=ge('ni-workdir-sel');return sel?sel.value:'';}
+    function getAtRootDir(){var sel=ge('at-workdir-sel');return sel?sel.value:'';}
     var bCtxDir=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
     // Register mention keydown handlers FIRST so mpOnKeydown fires before send handlers.
     // Note: bctx-desc is dynamically recreated by loadBoardCtx() so it is attached there instead.
@@ -3406,8 +3432,10 @@ const kanbanHTML = `<!DOCTYPE html>
     attachMention(ge('board-ctx-ask-input'),bCtxDir);
     attachMention(ge('ni-title'),getNiWorkDir);
     attachMention(ge('ni-desc'),getNiWorkDir);
+    attachPathMention(ge('ni-workdir-txt'),getNiRootDir);
     attachMention(ge('at-title'),getAtWorkDir);
     attachMention(ge('at-instr'),getAtWorkDir);
+    attachPathMention(ge('at-workdir-txt'),getAtRootDir);
     // Ask input: Enter triggers boardAsk only when mention popup is not active.
     var askIn=ge('board-ctx-ask-input');
     if(askIn)askIn.addEventListener('keydown',function(e){

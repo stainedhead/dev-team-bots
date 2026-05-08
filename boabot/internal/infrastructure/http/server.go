@@ -2487,12 +2487,15 @@ const kanbanHTML = `<!DOCTYPE html>
       var tags=p.tags&&p.tags.length
         ?'<div class="reg-card-tags">'+p.tags.map(function(t){return '<span class="reg-tag">'+esc(t)+'</span>';}).join('')+'</div>'
         :'';
+      var installBtn=p.download_url
+        ?'<button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>'
+        :'<button class="btn btn-sm" disabled title="No installable archive — this is a Claude Code plugin" style="background:#1e3a5f;color:#475569;cursor:not-allowed">No archive</button>';
       return '<div class="reg-card">'+
         '<div class="reg-card-name">'+esc(p.name)+'</div>'+
         '<div class="reg-card-version">'+esc(p.latest_version)+'</div>'+
         '<div class="reg-card-desc">'+esc(p.description)+'</div>'+
         tags+
-        '<div><button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button></div>'+
+        '<div>'+installBtn+'</div>'+
         '</div>';
     }).join('');
   }
@@ -3872,6 +3875,10 @@ func (s *Server) handlePluginsInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.cfg.PluginInstall.Install(r.Context(), req.Registry, req.Name, req.Version, actor)
 	if err != nil {
+		if strings.Contains(err.Error(), "no download URL available") {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 		writeInternalError(w, "plugins install", err)
 		return
 	}

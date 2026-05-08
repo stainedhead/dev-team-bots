@@ -61,11 +61,13 @@ func (uc *InstallUseCase) Install(ctx context.Context, registryName, name, versi
 		return domain.Plugin{}, fmt.Errorf("plugin install: plugin %q not found in registry %q", name, registryName)
 	}
 
-	// Resolve manifest and archive URLs. When version is empty, use the pre-computed
-	// latest URLs from the index. When a specific version is requested, validate it
-	// exists in the registry's known versions list and construct version-specific URLs.
+	// Resolve manifest and archive URLs.
+	// When version is empty or matches the index's latest version, use the
+	// pre-computed URLs from the index entry (which are already resolved to raw
+	// content URLs for GitHub registries). For other versions, construct URLs
+	// relative to the registry.
 	var manifestURL, archiveURL string
-	if version == "" {
+	if version == "" || version == entry.LatestVersion {
 		version = entry.LatestVersion
 		manifestURL = entry.ManifestURL
 		archiveURL = entry.DownloadURL
@@ -82,6 +84,10 @@ func (uc *InstallUseCase) Install(ctx context.Context, registryName, name, versi
 		}
 		manifestURL = reg.URL + "/" + entry.Name + "/" + version + "/plugin.yaml"
 		archiveURL = reg.URL + "/" + entry.Name + "/" + version + "/" + entry.Name + "-" + version + ".tar.gz"
+	}
+
+	if archiveURL == "" {
+		return domain.Plugin{}, fmt.Errorf("plugin install: no download URL available for %q — this registry entry may not support archive-based installation", name)
 	}
 
 	// Fetch manifest.

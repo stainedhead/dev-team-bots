@@ -1382,23 +1382,39 @@ func (s *Server) handleTaskAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, userMsg)
 
-	if s.cfg.AskRouter != nil {
-		title := task.Title
-		if title == "" {
-			title = "(no title)"
+	replyFn := func(reply string) {
+		botMsg := domain.ChatMessage{
+			ThreadID:  threadID,
+			BotName:   task.BotName,
+			Direction: domain.ChatDirectionInbound,
+			Content:   reply,
 		}
-		s.cfg.AskRouter.Enqueue(task.BotName, domain.AskRequest{
-			Question: fmt.Sprintf("Regarding task '%s': %s", title, req.Content),
-			ReplyFn: func(reply string) {
-				botMsg := domain.ChatMessage{
-					ThreadID:  threadID,
-					BotName:   task.BotName,
-					Direction: domain.ChatDirectionInbound,
-					Content:   reply,
-				}
-				_ = s.cfg.Chat.Append(context.Background(), botMsg)
-			},
+		_ = s.cfg.Chat.Append(context.Background(), botMsg)
+	}
+
+	title := task.Title
+	if title == "" {
+		title = "(no title)"
+	}
+	question := fmt.Sprintf("Regarding task '%s': %s", title, req.Content)
+
+	// Try mid-task interrupt first; if the bot is not actively running fall back
+	// to dispatching a new task so the question is always answered.
+	routed := s.cfg.AskRouter != nil && s.cfg.AskRouter.Enqueue(task.BotName, domain.AskRequest{
+		Question: question,
+		ReplyFn:  replyFn,
+	})
+	if !routed && s.cfg.Dispatcher != nil {
+		// Build instruction with task context and any prior conversation history.
+		instruction := buildTaskAskInstruction(task, req.Content, func() []domain.ChatMessage {
+			msgs, _ := s.cfg.Chat.List(ctx, threadID)
+			return msgs
 		})
+		dispatched, dispErr := s.cfg.Dispatcher.Dispatch(ctx, task.BotName, instruction, nil,
+			domain.DirectTaskSourceChat, threadID, task.WorkDir)
+		if dispErr == nil {
+			userMsg.TaskID = dispatched.ID
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, userMsg)
@@ -1423,6 +1439,38 @@ func (s *Server) handleTaskMessages(w http.ResponseWriter, r *http.Request) {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// buildTaskAskInstruction assembles the prompt for a fallback task-ask dispatch.
+// It includes the original task context followed by conversation history so the
+// bot can answer questions about a completed task.
+func buildTaskAskInstruction(task domain.DirectTask, question string, history func() []domain.ChatMessage) string {
+	var sb strings.Builder
+	title := task.Title
+	if title == "" {
+		title = "(no title)"
+	}
+	sb.WriteString(fmt.Sprintf("You are being asked a follow-up question about a task you previously completed.\n\nTask title: %s\n\nOriginal task instruction:\n%s\n\n", title, task.Instruction))
+
+	msgs := history()
+	// msgs is newest-first; reverse for chronological, skip the just-appended outbound message.
+	var prior []domain.ChatMessage
+	for i := len(msgs) - 1; i >= 1 && len(prior) < 10; i-- {
+		prior = append(prior, msgs[i])
+	}
+	if len(prior) > 0 {
+		sb.WriteString("Prior conversation:\n")
+		for _, m := range prior {
+			who := "Operator"
+			if m.Direction == domain.ChatDirectionInbound {
+				who = task.BotName
+			}
+			sb.WriteString(fmt.Sprintf("%s: %s\n", who, m.Content))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("Operator: %s", question))
+	return sb.String()
 }
 
 // ── chat handlers ─────────────────────────────────────────────────────────────
@@ -1915,6 +1963,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .tctx-instr{font-size:.78rem;color:#cbd5e1;line-height:1.5;margin-bottom:.5rem;white-space:pre-wrap;word-break:break-word}
     .tctx-prompt-link{font-size:.7rem;color:#60a5fa;cursor:pointer;text-decoration:none;display:inline-block;margin-bottom:.35rem}
     .tctx-prompt-link:hover{text-decoration:underline}
+    .tctx-body-text{font-size:.85rem;color:#cbd5e1;line-height:1.55;white-space:pre-wrap;word-break:break-word;margin-bottom:.6rem}
     .tctx-prompt{background:#050d1a;border:1px solid #1a2744;border-radius:.3rem;padding:.5rem .65rem;font-size:.72rem;color:#64748b;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;margin-bottom:.5rem}
     .ctx-output{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;white-space:pre-wrap;font-family:monospace;font-size:.74rem;line-height:1.5;color:#94a3b8;max-height:160px;overflow-y:auto}
     .ctx-ask-row{display:flex;gap:.5rem;padding:.5rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
@@ -3591,6 +3640,11 @@ const kanbanHTML = `<!DOCTYPE html>
     // Note: bctx-desc is dynamically recreated by loadBoardCtx() so it is attached there instead.
     attachMention(ge('chat-input'),bCtxDir);
     attachMention(ge('board-ctx-ask-input'),bCtxDir);
+    var tCtxDir=function(){
+      if(taskCtxTask&&taskCtxTask.work_dir)return taskCtxTask.work_dir;
+      return allWorkDirs&&allWorkDirs.length?allWorkDirs[0]:'';
+    };
+    attachMention(ge('task-ctx-ask-input'),tCtxDir);
     attachMention(ge('ni-title'),getNiWorkDir);
     attachMention(ge('ni-desc'),getNiWorkDir);
     attachPathMention(ge('ni-workdir-txt'),getNiRootDir);
@@ -3601,6 +3655,10 @@ const kanbanHTML = `<!DOCTYPE html>
     var askIn=ge('board-ctx-ask-input');
     if(askIn)askIn.addEventListener('keydown',function(e){
       if(e.key==='Enter'&&(!mpMode||!mpItems.length))boardAsk();
+    });
+    var tAskIn=ge('task-ctx-ask-input');
+    if(tAskIn)tAskIn.addEventListener('keydown',function(e){
+      if(e.key==='Enter'&&(!mpMode||!mpItems.length))taskAsk();
     });
     // Chat: Enter sends or runs bash; Shift+Enter newline.
     var ta=ge('chat-input');
@@ -3970,14 +4028,30 @@ const kanbanHTML = `<!DOCTYPE html>
       +(t.dispatched_at?'<span class="tctx-time">· Dispatched '+ago(t.dispatched_at)+'</span>':'')
       +(t.completed_at?'<span class="tctx-time">· Completed '+ago(t.completed_at)+'</span>':'')
       +'</div>';
-    var titleBlock=t.title
-      ?'<div class="tctx-section-title">'+esc(t.title)+'</div>'
-      :'';
+    // Derive a human-readable title and body from the stored fields.
+    // For board-dispatched tasks the Title field is empty; extract it from the instruction.
+    var dispTitle=t.title||'';
+    var dispBody='';
+    if(t.instruction){
+      if(!dispTitle||t.source==='board'){
+        var tm=/\nTitle: ([^\n]+)/.exec(t.instruction);
+        if(tm)dispTitle=tm[1].trim();
+      }
+      if(t.source==='board'){
+        var dm=/\nDescription: ([\s\S]+?)\n\nItem ID:/.exec(t.instruction);
+        if(dm)dispBody=dm[1].trim();
+      } else {
+        // Operator / chat tasks: the instruction IS what was entered.
+        dispBody=t.instruction;
+      }
+    }
+    var titleBlock='<div class="tctx-section-title">'+esc(dispTitle||'(no title)')+'</div>';
+    var bodyBlock=dispBody?'<div class="tctx-body-text">'+esc(dispBody)+'</div>':'';
     var promptBlock=t.instruction
       ?'<a class="tctx-prompt-link" onclick="toggleTctxPrompt(this)">Review prompt &#x25BE;</a>'
        +'<div class="tctx-prompt" style="display:none">'+esc(t.instruction)+'</div>'
       :'';
-    body.innerHTML=meta+titleBlock+promptBlock;
+    body.innerHTML=meta+titleBlock+bodyBlock+promptBlock;
   }
 
   function toggleTctxPrompt(link){

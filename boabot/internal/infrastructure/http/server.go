@@ -5,6 +5,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -85,12 +88,17 @@ type Config struct {
 
 // Server is the orchestrator HTTP server.
 type Server struct {
-	cfg Config
+	cfg           Config
+	processedIcon []byte // icon with dark pixels made transparent, cached at startup
 }
 
 // New creates a Server with the given config.
 func New(cfg Config) *Server {
-	return &Server{cfg: cfg}
+	s := &Server{cfg: cfg}
+	if len(cfg.IconPNG) > 0 {
+		s.processedIcon = makeDarkPixelsTransparent(cfg.IconPNG)
+	}
+	return s
 }
 
 // Handler returns the root http.Handler for the server.
@@ -1715,7 +1723,36 @@ func extractSlashCommand(s string) string {
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(s.cfg.IconPNG)
+	_, _ = w.Write(s.processedIcon)
+}
+
+// makeDarkPixelsTransparent decodes a PNG and sets any pixel whose luminance
+// falls below 50/255 to fully transparent. This lets CSS filters (invert, hue-rotate)
+// work correctly against a dark UI without producing a light rectangular halo.
+func makeDarkPixelsTransparent(pngBytes []byte) []byte {
+	src, err := png.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return pngBytes
+	}
+	bounds := src.Bounds()
+	dst := image.NewRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, a := src.At(x, y).RGBA()
+			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
+			luma := (uint32(r8)*299 + uint32(g8)*587 + uint32(b8)*114) / 1000
+			if luma < 50 {
+				dst.Set(x, y, color.RGBA{})
+			} else {
+				dst.Set(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
+			}
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return pngBytes
+	}
+	return buf.Bytes()
 }
 
 // ── Kanban web UI ─────────────────────────────────────────────────────────────
@@ -1767,7 +1804,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
     /* ── Sidebar ── */
     aside{width:210px;flex-shrink:0;background:#0a1020;border-right:1px solid #1a2744;display:flex;flex-direction:column;overflow:hidden}
-    .sb-icon-bg{flex-shrink:0;height:160px;background:url('/imgs/boabot-icon.png') center/130px no-repeat;opacity:.32;pointer-events:none}
+    .sb-icon-bg{flex-shrink:0;height:160px;background:url('/imgs/boabot-icon.png') center/130px no-repeat;opacity:.46;pointer-events:none;filter:invert(1) sepia(1) saturate(4) hue-rotate(190deg)}
     .sb-hdr{padding:.5rem .75rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#334155;border-bottom:1px solid #1a2744;flex-shrink:0}
     .bot-list{flex:1;overflow-y:auto;padding:.375rem}
     .bcard{padding:.5rem .625rem;border-radius:.35rem;margin-bottom:.3rem;background:#0f1829;border:1px solid #1a2744;cursor:default}

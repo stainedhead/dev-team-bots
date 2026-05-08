@@ -74,6 +74,7 @@ type Config struct {
 	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
 	AllowedWorkDirs []string            // whitelisted base directories for item working directories
 	TaskLogBase     string              // base directory for per-task log directories (optional)
+	IconPNG         []byte             // optional branding icon served at /imgs/boabot-icon.png
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -95,6 +96,11 @@ func New(cfg Config) *Server {
 // Handler returns the root http.Handler for the server.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// Static assets
+	if len(s.cfg.IconPNG) > 0 {
+		mux.HandleFunc("GET /imgs/boabot-icon.png", s.handleIcon)
+	}
 
 	// Public
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
@@ -1706,6 +1712,12 @@ func extractSlashCommand(s string) string {
 	return cmd
 }
 
+func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(s.cfg.IconPNG)
+}
+
 // ── Kanban web UI ─────────────────────────────────────────────────────────────
 
 const kanbanHTML = `<!DOCTYPE html>
@@ -1714,13 +1726,15 @@ const kanbanHTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BaoBot Control</title>
+  <link rel="icon" type="image/png" href="/imgs/boabot-icon.png">
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:system-ui,-apple-system,sans-serif;background:#080e1a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
     /* ── Header ── */
     header{padding:.6rem 1.25rem;background:#0d1424;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.75rem;flex-shrink:0;z-index:10}
-    .logo{font-size:1rem;font-weight:700;color:#60a5fa;letter-spacing:-.02em;white-space:nowrap}
+    .logo{font-size:1rem;font-weight:700;color:#60a5fa;letter-spacing:-.02em;white-space:nowrap;display:flex;align-items:center;gap:.5rem}
+    .logo img{width:1.75rem;height:1.75rem;border-radius:.3rem;object-fit:cover}
     .logo span{color:#475569;font-weight:400}
     .hdr-mid{flex:1;display:flex;align-items:center;gap:.75rem}
     .hpill{padding:.15rem .6rem;border-radius:9999px;font-size:.7rem;font-weight:600}
@@ -2000,7 +2014,7 @@ const kanbanHTML = `<!DOCTYPE html>
 </head>
 <body class="locked">
 <header>
-  <div class="logo">BaoBot <span>Control</span></div>
+  <div class="logo"><img src="/imgs/boabot-icon.png" alt="BaoBot">BaoBot <span>Control</span></div>
   <div class="hdr-mid">
     <span id="hpill" class="hpill hpill-warn">loading…</span>
     <span class="tick" id="tick">–</span>

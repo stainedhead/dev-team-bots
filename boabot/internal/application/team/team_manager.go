@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/stainedhead/dev-team-bots/boabot/imgs"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
 	appplugin "github.com/stainedhead/dev-team-bots/boabot/internal/application/plugin"
@@ -556,6 +557,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			AskRouter:       tm.askRouter,
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 			TaskLogBase:     taskLogBase,
+			IconPNG:         imgs.BoabotIcon,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.

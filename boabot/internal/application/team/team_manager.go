@@ -34,6 +34,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
+	slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
 )
 
 // TeamConfig is the parsed team.yaml structure.
@@ -123,6 +124,10 @@ type TeamManager struct {
 	dynamicBots   map[string]*dynamicBot
 	dynamicBotsMu sync.Mutex
 
+	// slackMonitor is the optional Slack Socket Mode channel monitor.
+	// Set via WithSlackMonitor; nil means Slack integration is disabled.
+	slackMonitor *slackinfra.Monitor
+
 	// askRouter routes mid-task user questions to running bots.
 	askRouter *teamAskRouter
 
@@ -162,6 +167,21 @@ func (tm *TeamManager) AskRouter() domain.AskRouter { return tm.askRouter }
 
 // Registry returns the BotRegistry so callers can inspect running bots.
 func (tm *TeamManager) Registry() *BotRegistry { return tm.registry }
+
+// WithSlackMonitor attaches an optional Slack Socket Mode monitor that
+// receives DMs and @mentions and posts results back to Slack.
+func (tm *TeamManager) WithSlackMonitor(m *slackinfra.Monitor) {
+	tm.slackMonitor = m
+}
+
+// slackMonitors returns the Slack monitor as a []domain.ChannelMonitor slice,
+// or nil if no monitor has been configured.
+func (tm *TeamManager) slackMonitors() []domain.ChannelMonitor {
+	if tm.slackMonitor == nil {
+		return nil
+	}
+	return []domain.ChannelMonitor{tm.slackMonitor}
+}
 
 // Run reads team.yaml, starts all enabled bots, blocks until ctx is cancelled,
 // then calls Shutdown.  It returns an error if the team file cannot be parsed
@@ -715,7 +735,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		q,
 		tm.bus,
 		workerFactory,
-		nil, // no channel monitors for now
+		tm.slackMonitors(),
 		orchestratorName,
 	)
 
@@ -781,6 +801,17 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 					}
 				}
 			}
+
+			// Forward the result to the Slack monitor so it can post a reply.
+			if tm.slackMonitor != nil {
+				tm.slackMonitor.HandleResult(handlerCtx, p)
+			}
+		})
+	} else if tm.slackMonitor != nil {
+		// In non-orchestrator mode, install a minimal result handler just for Slack.
+		slackMon := tm.slackMonitor
+		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
+			slackMon.HandleResult(handlerCtx, p)
 		})
 	}
 

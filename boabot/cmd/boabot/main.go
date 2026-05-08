@@ -17,6 +17,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+	slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
 )
 
 var version = "dev"
@@ -99,6 +100,23 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 
 	mgr := team.NewTeamManager(managerCfg, router, b)
+
+	// Wire the Slack Socket Mode monitor when all three credentials are present.
+	if cfg.Slack.BotToken != "" && cfg.Slack.AppToken != "" && cfg.Slack.BotName != "" {
+		// Ensure the target bot's queue is registered before we try to obtain it.
+		// (All enabled bots are registered inside mgr.Run, but the monitor needs
+		// a queue reference at construction time — we register it here so the
+		// router has it before Run is called.)
+		router.Register(cfg.Slack.BotName, 0)
+		slackMon := slackinfra.New(slackinfra.Config{
+			BotToken: cfg.Slack.BotToken,
+			AppToken: cfg.Slack.AppToken,
+			BotName:  cfg.Slack.BotName,
+		}, router.QueueFor(cfg.Slack.BotName))
+		mgr.WithSlackMonitor(slackMon)
+		slog.Info("slack socket mode monitor configured", "bot", cfg.Slack.BotName)
+	}
+
 	return mgr.Run(ctx)
 }
 

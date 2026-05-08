@@ -14,6 +14,16 @@ type Config struct {
 	Team         TeamFileConfig     `yaml:"team"`
 	Memory       MemoryConfig       `yaml:"memory"`
 	Backup       BackupConfig       `yaml:"backup"`
+	Slack        SlackConfig        `yaml:"slack"`
+}
+
+// SlackConfig holds the Slack Socket Mode connection settings.
+// All fields are optional; the monitor is only activated when BotToken,
+// AppToken, and BotName are all non-empty.
+type SlackConfig struct {
+	BotToken string `yaml:"bot_token"` // xoxb-...
+	AppToken string `yaml:"app_token"` // xapp-... (Socket Mode)
+	BotName  string `yaml:"bot_name"`  // which bot handles Slack messages
 }
 
 // TeamFileConfig holds paths used by TeamManager to locate team.yaml and the

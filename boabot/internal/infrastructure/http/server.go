@@ -1658,8 +1658,11 @@ const kanbanHTML = `<!DOCTYPE html>
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
     /* ── Plugin & Skills panels ── */
-    .plugin-panel{flex:1;min-height:100px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-    .plugin-panel-body{flex:1;overflow-y:auto;min-height:0}
+    #pane-plugins.on{overflow-y:auto}
+    .plugin-panel{display:flex;flex-direction:column;min-width:0}
+    .plugin-panel-body{height:240px;min-height:60px;overflow:auto;flex-shrink:0}
+    .plugin-resize-handle{height:8px;cursor:row-resize;flex-shrink:0;border-top:2px solid #1a2744;border-bottom:2px solid #1a2744;margin:2px 0;transition:background .15s;position:relative}
+    .plugin-resize-handle:hover,.plugin-resize-handle.prd-active{background:#1e3a5f}
     /* ── Plugin detail slide-in ── */
     #plugin-detail-panel h3{margin:0 0 1rem;font-size:.95rem;color:#93c5fd;padding-bottom:.6rem;border-bottom:1px solid #1a2744}
     #plugin-detail-panel p{margin:.4rem 0;font-size:.82rem;color:#cbd5e1}
@@ -1974,7 +1977,7 @@ const kanbanHTML = `<!DOCTYPE html>
         </div>
       </div>
 
-      <div style="border-top:1px solid #1a2744;margin:4px 0;flex-shrink:0"></div>
+      <div class="plugin-resize-handle"></div>
 
       <!-- Installed Plugins -->
       <div class="plugin-panel">
@@ -1994,7 +1997,7 @@ const kanbanHTML = `<!DOCTYPE html>
         <div id="plugin-detail-content"></div>
       </div>
 
-      <div style="border-top:1px solid #1a2744;margin:4px 0;flex-shrink:0"></div>
+      <div class="plugin-resize-handle"></div>
 
       <!-- Uploaded Skills (Legacy) -->
       <div class="plugin-panel">
@@ -3794,6 +3797,37 @@ const kanbanHTML = `<!DOCTYPE html>
   loadWorkDirs();
   refreshAll();
   startTick();
+
+  // ── Plugin panel drag-to-resize ───────────────────────────────────────────
+  (function(){
+    var dragBody=null,startY=0,startH=0,activeHandle=null;
+    document.addEventListener('mousedown',function(e){
+      var h=e.target.closest('.plugin-resize-handle');
+      if(!h)return;
+      // Walk back through siblings to find the preceding .plugin-panel
+      var prev=h.previousElementSibling;
+      while(prev&&!prev.classList.contains('plugin-panel')){prev=prev.previousElementSibling;}
+      if(!prev)return;
+      dragBody=prev.querySelector('.plugin-panel-body');
+      if(!dragBody)return;
+      activeHandle=h;
+      startY=e.clientY;
+      startH=dragBody.offsetHeight;
+      h.classList.add('prd-active');
+      document.body.style.userSelect='none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove',function(e){
+      if(!dragBody)return;
+      dragBody.style.height=Math.max(60,startH+(e.clientY-startY))+'px';
+    });
+    document.addEventListener('mouseup',function(){
+      if(!dragBody)return;
+      if(activeHandle)activeHandle.classList.remove('prd-active');
+      document.body.style.userSelect='';
+      dragBody=null;activeHandle=null;
+    });
+  })();
 </script>
 </body>
 </html>`

@@ -68,22 +68,20 @@ func TestHTTPRegistryManager_FetchIndex_UsesCache(t *testing.T) {
 
 	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
 
-	// First call should hit the server.
+	// First call: tries marketplace.json (404) then index.json (success) = 2 HTTP calls.
 	_, err := mgr.FetchIndex(context.Background(), srv.URL, false)
 	if err != nil {
 		t.Fatalf("first FetchIndex: %v", err)
 	}
-	if callCount != 1 {
-		t.Errorf("expected 1 HTTP call, got %d", callCount)
-	}
+	firstCallCount := callCount
 
-	// Second call without force should use cache.
+	// Second call without force should use cache — no additional HTTP calls.
 	_, err = mgr.FetchIndex(context.Background(), srv.URL, false)
 	if err != nil {
 		t.Fatalf("second FetchIndex: %v", err)
 	}
-	if callCount != 1 {
-		t.Errorf("expected still 1 HTTP call after cached fetch, got %d", callCount)
+	if callCount != firstCallCount {
+		t.Errorf("expected no additional HTTP calls after cached fetch, got %d extra", callCount-firstCallCount)
 	}
 }
 
@@ -100,12 +98,14 @@ func TestHTTPRegistryManager_FetchIndex_ForceBypassesCache(t *testing.T) {
 	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
 
 	_, _ = mgr.FetchIndex(context.Background(), srv.URL, false)
+	firstCallCount := callCount
 	_, err := mgr.FetchIndex(context.Background(), srv.URL, true)
 	if err != nil {
 		t.Fatalf("forced FetchIndex: %v", err)
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 HTTP calls with force=true, got %d", callCount)
+	// force=true must make at least one additional HTTP call (cache bypassed).
+	if callCount <= firstCallCount {
+		t.Errorf("expected additional HTTP calls with force=true, call count unchanged at %d", callCount)
 	}
 }
 
@@ -193,6 +193,84 @@ func TestHTTPRegistryManager_Add_HTTPS_Persisted(t *testing.T) {
 	}
 	if !found2 {
 		t.Errorf("registry %q not persisted after reload", reg.Name)
+	}
+}
+
+func TestHTTPRegistryManager_FetchIndex_MarketplaceJSON(t *testing.T) {
+	marketplace := `{
+		"name": "my-marketplace",
+		"plugins": [
+			{
+				"name": "dev-flow",
+				"source": "./plugins/dev-flow",
+				"description": "Workflow plugin",
+				"version": "1.2.3",
+				"author": {"name": "alice", "email": "alice@example.com"},
+				"keywords": ["workflow", "prd"]
+			}
+		]
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.claude-plugin/marketplace.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(marketplace))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	result, err := mgr.FetchIndex(context.Background(), srv.URL, false)
+	if err != nil {
+		t.Fatalf("FetchIndex: %v", err)
+	}
+	if result.Registry != "my-marketplace" {
+		t.Errorf("got registry %q, want %q", result.Registry, "my-marketplace")
+	}
+	if len(result.Plugins) != 1 {
+		t.Fatalf("got %d plugins, want 1", len(result.Plugins))
+	}
+	p := result.Plugins[0]
+	if p.Name != "dev-flow" {
+		t.Errorf("plugin name: got %q, want %q", p.Name, "dev-flow")
+	}
+	if p.LatestVersion != "1.2.3" {
+		t.Errorf("version: got %q, want %q", p.LatestVersion, "1.2.3")
+	}
+	if p.Author != "alice" {
+		t.Errorf("author: got %q, want %q", p.Author, "alice")
+	}
+	if len(p.Tags) != 2 {
+		t.Errorf("tags: got %d, want 2", len(p.Tags))
+	}
+	if !strings.Contains(p.ManifestURL, "plugins/dev-flow/.claude-plugin/plugin.json") {
+		t.Errorf("manifest_url %q does not contain expected path", p.ManifestURL)
+	}
+}
+
+func TestHTTPRegistryManager_FetchIndex_FallsBackToIndexJSON(t *testing.T) {
+	idx := makeTestIndex("fallback-registry")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index.json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(idx)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	result, err := mgr.FetchIndex(context.Background(), srv.URL, false)
+	if err != nil {
+		t.Fatalf("FetchIndex: %v", err)
+	}
+	if result.Registry != idx.Registry {
+		t.Errorf("got registry %q, want %q", result.Registry, idx.Registry)
 	}
 }
 

@@ -136,30 +136,86 @@ func (m *HTTPRegistryManager) Remove(_ context.Context, name string) error {
 	return nil
 }
 
-// resolveIndexURL converts a registry URL to a fetchable index.json URL.
-// GitHub repo URLs (github.com/owner/repo[.git]) are rewritten to
-// raw.githubusercontent.com so the index.json can be fetched directly.
-// Other URLs have /index.json appended.
-func resolveIndexURL(registryURL string) []string {
+// indexCandidate is a URL to try when fetching a registry index, plus the
+// format expected at that URL.
+type indexCandidate struct {
+	url    string
+	format string // "index" or "marketplace"
+}
+
+// resolveIndexCandidates returns ordered candidates for fetching a registry index.
+// GitHub repo URLs (with or without .git suffix) are rewritten to
+// raw.githubusercontent.com and both main and master branches are tried.
+// For all URLs, .claude-plugin/marketplace.json is tried before index.json.
+func resolveIndexCandidates(registryURL string) []indexCandidate {
 	base := strings.TrimRight(registryURL, "/")
 	base = strings.TrimSuffix(base, ".git")
 
-	// Detect github.com URLs and try main then master branches.
 	if strings.HasPrefix(base, "https://github.com/") {
 		parts := strings.SplitN(strings.TrimPrefix(base, "https://github.com/"), "/", 2)
 		if len(parts) == 2 {
 			raw := "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1]
-			return []string{
-				raw + "/main/index.json",
-				raw + "/master/index.json",
+			return []indexCandidate{
+				{raw + "/main/.claude-plugin/marketplace.json", "marketplace"},
+				{raw + "/master/.claude-plugin/marketplace.json", "marketplace"},
+				{raw + "/main/index.json", "index"},
+				{raw + "/master/index.json", "index"},
 			}
 		}
 	}
-	return []string{base + "/index.json"}
+	return []indexCandidate{
+		{base + "/.claude-plugin/marketplace.json", "marketplace"},
+		{base + "/index.json", "index"},
+	}
+}
+
+// marketplaceAuthor is the author field in a .claude-plugin/marketplace.json entry.
+type marketplaceAuthor struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// marketplaceEntry is one plugin entry in a .claude-plugin/marketplace.json file.
+type marketplaceEntry struct {
+	Name        string            `json:"name"`
+	Source      string            `json:"source"`
+	Description string            `json:"description"`
+	Version     string            `json:"version"`
+	Author      marketplaceAuthor `json:"author"`
+	Keywords    []string          `json:"keywords"`
+	Category    string            `json:"category"`
+}
+
+// marketplaceIndex is the top-level structure of a .claude-plugin/marketplace.json file.
+type marketplaceIndex struct {
+	Name    string             `json:"name"`
+	Plugins []marketplaceEntry `json:"plugins"`
+}
+
+// marketplaceToRegistryIndex converts a marketplace.json to a domain.RegistryIndex.
+// rawBase is the raw content base URL (e.g. https://raw.githubusercontent.com/owner/repo/main)
+// used to resolve relative source paths into manifest URLs.
+func marketplaceToRegistryIndex(mp marketplaceIndex, rawBase string) domain.RegistryIndex {
+	entries := make([]domain.RegistryEntry, 0, len(mp.Plugins))
+	for _, p := range mp.Plugins {
+		src := strings.TrimPrefix(strings.TrimPrefix(p.Source, "./"), "/")
+		manifestURL := strings.TrimRight(rawBase, "/") + "/" + src + "/.claude-plugin/plugin.json"
+		entries = append(entries, domain.RegistryEntry{
+			Name:          p.Name,
+			Description:   p.Description,
+			Author:        p.Author.Name,
+			LatestVersion: p.Version,
+			Tags:          p.Keywords,
+			Versions:      []string{p.Version},
+			ManifestURL:   manifestURL,
+		})
+	}
+	return domain.RegistryIndex{Registry: mp.Name, Plugins: entries}
 }
 
 // FetchIndex fetches the registry index for the registry at registryURL.
-// GitHub repo URLs are automatically rewritten to raw content URLs.
+// GitHub repo URLs are automatically rewritten to raw content URLs and both
+// .claude-plugin/marketplace.json and index.json formats are tried in order.
 // If force is false and a cached copy is still fresh (< 5 min), returns the cache.
 func (m *HTTPRegistryManager) FetchIndex(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error) {
 	cacheKey := strings.TrimRight(strings.TrimSuffix(registryURL, ".git"), "/")
@@ -173,10 +229,10 @@ func (m *HTTPRegistryManager) FetchIndex(ctx context.Context, registryURL string
 		}
 	}
 
-	candidates := resolveIndexURL(registryURL)
+	candidates := resolveIndexCandidates(registryURL)
 	var lastErr error
-	for _, indexURL := range candidates {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
+	for _, c := range candidates {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 		if err != nil {
 			return domain.RegistryIndex{}, fmt.Errorf("registry manager: build request: %w", err)
 		}
@@ -186,19 +242,36 @@ func (m *HTTPRegistryManager) FetchIndex(ctx context.Context, registryURL string
 			lastErr = fmt.Errorf("registry manager: fetch index: %w", err)
 			continue
 		}
-		defer func() { _ = resp.Body.Close() }() //nolint:gocritic // deferred in loop intentionally; one fires
 
 		if resp.StatusCode == http.StatusNotFound {
-			lastErr = fmt.Errorf("registry manager: fetch index: server returned 404 at %s", indexURL)
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("registry manager: fetch index: not found at %s", c.url)
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_ = resp.Body.Close()
 			return domain.RegistryIndex{}, fmt.Errorf("registry manager: fetch index: server returned %d", resp.StatusCode)
 		}
 
 		var idx domain.RegistryIndex
-		if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
-			return domain.RegistryIndex{}, fmt.Errorf("registry manager: decode index: %w", err)
+		if c.format == "marketplace" {
+			var mp marketplaceIndex
+			err = json.NewDecoder(resp.Body).Decode(&mp)
+			_ = resp.Body.Close()
+			if err != nil {
+				lastErr = fmt.Errorf("registry manager: decode marketplace: %w", err)
+				continue
+			}
+			// Derive the raw content base from the candidate URL by stripping the file path.
+			rawBase := c.url[:strings.LastIndex(c.url, "/.claude-plugin/marketplace.json")]
+			idx = marketplaceToRegistryIndex(mp, rawBase)
+		} else {
+			err = json.NewDecoder(resp.Body).Decode(&idx)
+			_ = resp.Body.Close()
+			if err != nil {
+				lastErr = fmt.Errorf("registry manager: decode index: %w", err)
+				continue
+			}
 		}
 
 		m.mu.Lock()

@@ -426,12 +426,13 @@ func (m *PluginStore) Remove(ctx context.Context, id string) error {
 
 // RegistryManager is a hand-written mock for domain.RegistryManager.
 type RegistryManager struct {
-	ListFn          func(ctx context.Context) ([]domain.PluginRegistry, error)
-	AddFn           func(ctx context.Context, reg domain.PluginRegistry) error
-	RemoveFn        func(ctx context.Context, name string) error
-	FetchIndexFn    func(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error)
-	FetchManifestFn func(ctx context.Context, manifestURL string) (domain.PluginManifest, error)
-	FetchArchiveFn  func(ctx context.Context, downloadURL string) ([]byte, error)
+	ListFn              func(ctx context.Context) ([]domain.PluginRegistry, error)
+	AddFn               func(ctx context.Context, reg domain.PluginRegistry) error
+	RemoveFn            func(ctx context.Context, name string) error
+	FetchIndexFn        func(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error)
+	FetchManifestFn     func(ctx context.Context, manifestURL string) (domain.PluginManifest, error)
+	FetchArchiveFn      func(ctx context.Context, downloadURL string) ([]byte, error)
+	FetchClaudePluginFn func(ctx context.Context, manifestURL string) (domain.PluginManifest, []byte, error)
 }
 
 func (m *RegistryManager) List(ctx context.Context) ([]domain.PluginRegistry, error) {
@@ -474,4 +475,11 @@ func (m *RegistryManager) FetchArchive(ctx context.Context, downloadURL string) 
 		return m.FetchArchiveFn(ctx, downloadURL)
 	}
 	return nil, nil
+}
+
+func (m *RegistryManager) FetchClaudePlugin(ctx context.Context, manifestURL string) (domain.PluginManifest, []byte, error) {
+	if m.FetchClaudePluginFn != nil {
+		return m.FetchClaudePluginFn(ctx, manifestURL)
+	}
+	return domain.PluginManifest{}, nil, nil
 }

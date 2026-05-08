@@ -261,6 +261,100 @@ func TestInstallUseCase_VersionPinned_NotAvailable(t *testing.T) {
 	}
 }
 
+func TestInstallUseCase_ClaudeCodePlugin_CallsFetchClaudePlugin(t *testing.T) {
+	reg := domain.PluginRegistry{Name: "marketplace", URL: "https://github.com/stainedhead/shared-plugins", Trusted: true}
+	manifest := domain.PluginManifest{
+		Name:       "dev-flow",
+		Version:    "1.2.3",
+		Entrypoint: ".claude-plugin/plugin.json",
+		Checksums:  map[string]string{"sha256": "abc123"},
+	}
+	archive := []byte("fake tar.gz")
+
+	var fetchClaudeCalled bool
+	var capturedManifestURL string
+
+	registryMgr := &mocks.RegistryManager{
+		ListFn: func(_ context.Context) ([]domain.PluginRegistry, error) {
+			return []domain.PluginRegistry{reg}, nil
+		},
+		FetchIndexFn: func(_ context.Context, _ string, _ bool) (domain.RegistryIndex, error) {
+			return domain.RegistryIndex{
+				Registry: "marketplace",
+				Plugins: []domain.RegistryEntry{
+					{
+						Name:          "dev-flow",
+						LatestVersion: "1.2.3",
+						ManifestURL:   "https://raw.githubusercontent.com/stainedhead/shared-plugins/main/plugins/dev-flow/.claude-plugin/plugin.json",
+						DownloadURL:   "",
+					},
+				},
+			}, nil
+		},
+		FetchClaudePluginFn: func(_ context.Context, url string) (domain.PluginManifest, []byte, error) {
+			fetchClaudeCalled = true
+			capturedManifestURL = url
+			return manifest, archive, nil
+		},
+	}
+
+	var installManifest domain.PluginManifest
+	pluginStore := &mocks.PluginStore{
+		InstallFn: func(_ context.Context, m domain.PluginManifest, _ []byte, _ string, _ bool) (domain.Plugin, error) {
+			installManifest = m
+			return domain.Plugin{ID: "x", Name: m.Name, Status: domain.PluginStatusActive}, nil
+		},
+	}
+
+	uc := plugin.NewInstallUseCase(pluginStore, registryMgr)
+	p, err := uc.Install(context.Background(), "marketplace", "dev-flow", "", "admin")
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !fetchClaudeCalled {
+		t.Error("expected FetchClaudePlugin to be called")
+	}
+	if !strings.Contains(capturedManifestURL, "/.claude-plugin/plugin.json") {
+		t.Errorf("manifest URL should contain /.claude-plugin/plugin.json, got: %s", capturedManifestURL)
+	}
+	if p.Name != "dev-flow" {
+		t.Errorf("got name %q, want %q", p.Name, "dev-flow")
+	}
+	if installManifest.Entrypoint != ".claude-plugin/plugin.json" {
+		t.Errorf("entrypoint: got %q, want %q", installManifest.Entrypoint, ".claude-plugin/plugin.json")
+	}
+}
+
+func TestInstallUseCase_NoArchive_NotClaudePlugin_ReturnsError(t *testing.T) {
+	reg := domain.PluginRegistry{Name: "registry", URL: "https://example.com", Trusted: true}
+
+	registryMgr := &mocks.RegistryManager{
+		ListFn: func(_ context.Context) ([]domain.PluginRegistry, error) {
+			return []domain.PluginRegistry{reg}, nil
+		},
+		FetchIndexFn: func(_ context.Context, _ string, _ bool) (domain.RegistryIndex, error) {
+			return domain.RegistryIndex{
+				Registry: "registry",
+				Plugins: []domain.RegistryEntry{
+					{
+						Name:          "some-tool",
+						LatestVersion: "1.0.0",
+						ManifestURL:   "https://example.com/some-tool/plugin.yaml",
+						DownloadURL:   "",
+					},
+				},
+			}, nil
+		},
+	}
+	pluginStore := &mocks.PluginStore{}
+
+	uc := plugin.NewInstallUseCase(pluginStore, registryMgr)
+	_, err := uc.Install(context.Background(), "registry", "some-tool", "", "admin")
+	if err == nil {
+		t.Fatal("expected error for no download URL on non-Claude-Code entry")
+	}
+}
+
 func TestInstallUseCase_StoreError_Propagated(t *testing.T) {
 	reg := domain.PluginRegistry{Name: "official", URL: "https://example.com", Trusted: true}
 	storeErr := errors.New("checksum mismatch")

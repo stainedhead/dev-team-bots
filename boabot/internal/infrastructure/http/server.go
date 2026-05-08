@@ -1657,10 +1657,24 @@ const kanbanHTML = `<!DOCTYPE html>
     .pill-off{background:#991b1b;color:#fecaca}
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
+    /* ── Plugin & Skills panels ── */
+    .plugin-panel{flex:1;min-height:100px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+    .plugin-panel-body{flex:1;overflow-y:auto;min-height:0}
+    /* ── Plugin detail slide-in ── */
+    #plugin-detail-panel h3{margin:0 0 1rem;font-size:.95rem;color:#93c5fd;padding-bottom:.6rem;border-bottom:1px solid #1a2744}
+    #plugin-detail-panel p{margin:.4rem 0;font-size:.82rem;color:#cbd5e1}
+    #plugin-detail-panel b{color:#94a3b8;font-weight:600}
+    #plugin-detail-panel hr{border:none;border-top:1px solid #1a2744;margin:.75rem 0}
+    #plugin-detail-panel ul{margin:.35rem 0;padding-left:1.25rem;font-size:.82rem;color:#94a3b8}
+    #plugin-detail-panel li{margin:.2rem 0}
+    #plugin-detail-panel a{color:#60a5fa;text-decoration:none}
+    #plugin-detail-panel a:hover{text-decoration:underline}
+    #plugin-detail-panel pre{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;color:#86efac;font-size:.7rem;overflow:auto;margin:.35rem 0}
+    #plugin-detail-panel .pd-section-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#475569;margin:.9rem 0 .4rem}
     /* ── Registry browser ── */
     .reg-toolbar-input{padding:.3rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
     .reg-toolbar-input::placeholder{color:#475569}
-    #registry-cards{display:flex;flex-wrap:wrap;gap:12px;padding:12px}
+    #registry-cards{display:flex;flex-wrap:wrap;gap:12px;padding:12px;align-content:flex-start}
     .reg-card{background:#0f1829;border:1px solid #1a2744;border-radius:.45rem;padding:14px;min-width:220px;max-width:260px;display:flex;flex-direction:column;gap:6px}
     .reg-card-name{font-weight:600;font-size:.85rem;color:#93c5fd}
     .reg-card-version{font-size:.72rem;color:#475569}
@@ -1930,17 +1944,21 @@ const kanbanHTML = `<!DOCTYPE html>
     <div class="pane" id="pane-plugins">
 
       <!-- Registry Browser -->
-      <div class="sec-hdr">
-        <div class="sec-title">Registry Browser</div>
-        <div class="sec-acts">
-          <select id="registry-select" class="reg-toolbar-input" onchange="onRegistryChange()" style="margin-right:8px"></select>
-          <input type="text" id="registry-search" class="reg-toolbar-input" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px" />
-          <button class="btn btn-secondary btn-sm" onclick="refreshRegistry()">Refresh</button>
-          <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
-          <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
+      <div class="plugin-panel">
+        <div class="sec-hdr">
+          <div class="sec-title">Registry Browser</div>
+          <div class="sec-acts">
+            <select id="registry-select" class="reg-toolbar-input" onchange="onRegistryChange()" style="margin-right:8px"></select>
+            <input type="text" id="registry-search" class="reg-toolbar-input" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px" />
+            <button class="btn btn-secondary btn-sm" onclick="refreshRegistry()">Refresh</button>
+            <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
+            <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
+          </div>
+        </div>
+        <div class="plugin-panel-body">
+          <div id="registry-cards"><div class="empty-state">Select a registry above</div></div>
         </div>
       </div>
-      <div id="registry-cards"><div class="empty-state">Select a registry above</div></div>
 
       <!-- Add Registry Modal -->
       <div id="add-registry-modal" class="reg-modal-backdrop">
@@ -1956,34 +1974,43 @@ const kanbanHTML = `<!DOCTYPE html>
         </div>
       </div>
 
-      <hr style="margin:12px 0"/>
+      <div style="border-top:1px solid #1a2744;margin:4px 0;flex-shrink:0"></div>
 
       <!-- Installed Plugins -->
-      <div class="sec-hdr">
-        <div class="sec-title">Installed Plugins</div>
-        <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadPlugins()">Refresh</button></div>
+      <div class="plugin-panel">
+        <div class="sec-hdr">
+          <div class="sec-title">Installed Plugins</div>
+          <div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadPlugins()">Refresh</button></div>
+        </div>
+        <div class="plugin-panel-body">
+          <div id="plugins-body"><div class="empty-state">Loading…</div></div>
+        </div>
       </div>
-      <div id="plugins-body"><div class="empty-state">Loading…</div></div>
 
       <!-- Plugin Detail Side Panel -->
-      <div id="plugin-detail-panel" style="display:none;position:fixed;top:0;right:0;width:400px;height:100%;background:#fff;box-shadow:-2px 0 8px rgba(0,0,0,0.15);overflow:auto;padding:20px;z-index:500">
-        <button onclick="ge('plugin-detail-panel').style.display='none'" style="float:right;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
-        <h3 id="plugin-detail-name" style="margin-top:0"></h3>
+      <div id="plugin-detail-panel" style="display:none;position:fixed;top:0;right:0;width:380px;height:100%;background:#0d1424;border-left:1px solid #1a2744;overflow:auto;padding:1.25rem;z-index:500;color:#e2e8f0">
+        <button onclick="ge('plugin-detail-panel').style.display='none'" style="float:right;background:none;border:none;font-size:1.1rem;cursor:pointer;color:#475569;line-height:1;padding:.2rem .4rem;border-radius:.25rem" onmouseover="this.style.color='#e2e8f0'" onmouseout="this.style.color='#475569'">✕</button>
+        <h3 id="plugin-detail-name"></h3>
         <div id="plugin-detail-content"></div>
       </div>
 
-      <hr style="margin:12px 0"/>
+      <div style="border-top:1px solid #1a2744;margin:4px 0;flex-shrink:0"></div>
 
       <!-- Uploaded Skills (Legacy) -->
-      <div class="sec-hdr">
-        <div class="sec-title">Manually Uploaded Skills (Legacy)</div>
-        <div class="sec-acts">
-          <button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button>
+      <div class="plugin-panel">
+        <div class="sec-hdr">
+          <div class="sec-title">Manually Uploaded Skills (Legacy)</div>
+          <div class="sec-acts">
+            <button class="btn btn-secondary btn-sm" onclick="ge('skill-upload-inp').click()">Upload Skill</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadSkills()">Refresh</button>
+          </div>
+        </div>
+        <input type="file" id="skill-upload-inp" accept=".md,.zip" style="display:none" onchange="uploadSkill(this)"/>
+        <div class="plugin-panel-body">
+          <div id="skills-body"><div class="empty-state">Loading…</div></div>
         </div>
       </div>
-      <input type="file" id="skill-upload-inp" accept=".md,.zip" style="display:none" onchange="uploadSkill(this)"/>
-      <div id="skills-body"><div class="empty-state">Loading…</div></div>
+
     </div>
 
     <!-- DLQ -->
@@ -2479,17 +2506,45 @@ const kanbanHTML = `<!DOCTYPE html>
     }).catch(function(e){ge('registry-cards').innerHTML='<div class="empty-state">Error: '+e.message+'</div>';});
   }
 
+  var installedNames={};
+  var installedById={};
+
+  function setInstallButtonState(btn,installed){
+    if(installed){
+      btn.className='btn btn-secondary btn-sm';
+      btn.disabled=true;
+      btn.textContent='✓ Installed';
+      btn.removeAttribute('onclick');
+    }else{
+      var name=btn.getAttribute('data-install-name');
+      var ver=btn.getAttribute('data-install-version');
+      var reg=ge('registry-select').value;
+      btn.className='btn btn-primary btn-sm';
+      btn.disabled=false;
+      btn.textContent='Install';
+      btn.setAttribute('onclick','installPlugin(\''+esc(reg)+'\',\''+esc(name)+'\',\''+esc(ver)+'\')');
+    }
+  }
+
+  function syncInstallButtons(){
+    document.querySelectorAll('[data-install-name]').forEach(function(btn){
+      setInstallButtonState(btn,!!installedNames[btn.getAttribute('data-install-name')]);
+    });
+  }
+
   function renderRegistryCards(plugins){
     var q=(ge('registry-search').value||'').toLowerCase();
-    var filtered=plugins.filter(function(p){return !q||p.name.toLowerCase().includes(q)||p.description.toLowerCase().includes(q);});
+    var reg=ge('registry-select').value;
+    var filtered=plugins.filter(function(p){return !q||p.name.toLowerCase().includes(q)||(p.description||'').toLowerCase().includes(q);});
     if(!filtered.length){ge('registry-cards').innerHTML='<div class="empty-state">No plugins found</div>';return;}
     ge('registry-cards').innerHTML=filtered.map(function(p){
       var tags=p.tags&&p.tags.length
         ?'<div class="reg-card-tags">'+p.tags.map(function(t){return '<span class="reg-tag">'+esc(t)+'</span>';}).join('')+'</div>'
         :'';
-      var installBtn=p.download_url
-        ?'<button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>'
-        :'<button class="btn btn-sm" disabled title="No installable archive — this is a Claude Code plugin" style="background:#1e3a5f;color:#475569;cursor:not-allowed">No archive</button>';
+      var instd=!!installedNames[p.name];
+      var installBtn=instd
+        ?'<button class="btn btn-secondary btn-sm" disabled data-install-name="'+esc(p.name)+'" data-install-version="'+esc(p.latest_version)+'">✓ Installed</button>'
+        :'<button class="btn btn-primary btn-sm" data-install-name="'+esc(p.name)+'" data-install-version="'+esc(p.latest_version)+'" onclick="installPlugin(\''+esc(reg)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>';
       return '<div class="reg-card">'+
         '<div class="reg-card-name">'+esc(p.name)+'</div>'+
         '<div class="reg-card-version">'+esc(p.latest_version)+'</div>'+
@@ -2524,7 +2579,10 @@ const kanbanHTML = `<!DOCTYPE html>
   function installPlugin(registry,name,version){
     if(!token){alert('Login required');return;}
     api('POST','/api/v1/plugins',{registry:registry,name:name,version:version}).then(function(p){
-      alert('Plugin "'+name+'" installation initiated (status: '+p.status+')');
+      installedNames[p.name]=true;
+      installedById[p.id]=p.name;
+      var btn=document.querySelector('[data-install-name="'+name+'"]');
+      if(btn)setInstallButtonState(btn,true);
       loadPlugins();
     }).catch(function(e){alert('Install failed: '+e.message);});
   }
@@ -2537,6 +2595,11 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function renderPluginsTable(plugins){
     var el=ge('plugins-body');
+    installedNames={};installedById={};
+    (plugins||[]).forEach(function(p){
+      if(p.status!=='rejected'){installedNames[p.name]=true;installedById[p.id]=p.name;}
+    });
+    syncInstallButtons();
     if(!plugins.length){el.innerHTML='<div class="empty-state">No plugins installed</div>';return;}
     var rows=plugins.map(function(p){
       var acts='';
@@ -2565,7 +2628,18 @@ const kanbanHTML = `<!DOCTYPE html>
   function pluginAction(action,id){
     var method=action==='remove'?'DELETE':'POST';
     var path='/api/v1/plugins/'+id+(action!=='remove'?'/'+action:'');
-    api(method,path,null).then(function(){loadPlugins();}).catch(function(e){alert('Error: '+e.message);});
+    api(method,path,null).then(function(){
+      if(action==='remove'){
+        var name=installedById[id];
+        if(name){
+          delete installedNames[name];
+          delete installedById[id];
+          var btn=document.querySelector('[data-install-name="'+name+'"]');
+          if(btn)setInstallButtonState(btn,false);
+        }
+      }
+      loadPlugins();
+    }).catch(function(e){alert('Error: '+e.message);});
   }
 
   function showPluginDetail(id){
@@ -2574,22 +2648,29 @@ const kanbanHTML = `<!DOCTYPE html>
       var m=p.manifest||{};
       var tools=(m.provides&&m.provides.tools)||[];
       var perms=m.permissions||{};
+      var noPerms=!perms.filesystem&&!(perms.network||[]).length&&!(perms.env_vars||[]).length;
       ge('plugin-detail-content').innerHTML=
         '<p><b>Author:</b> '+esc(m.author||'—')+'</p>'+
         '<p><b>Description:</b> '+esc(m.description||'—')+'</p>'+
         '<p><b>Status:</b> <span style="color:'+statusColor(p.status)+'">'+esc(p.status)+'</span></p>'+
         '<p><b>Registry:</b> '+esc(p.registry||'—')+'</p>'+
-        '<p><b>Entrypoint:</b> '+esc(m.entrypoint||'—')+'</p>'+
+        '<p><b>Entrypoint:</b> <span style="font-family:monospace;font-size:.78rem">'+esc(m.entrypoint||'—')+'</span></p>'+
         (m.homepage?'<p><b>Homepage:</b> <a href="'+esc(m.homepage)+'" target="_blank">'+esc(m.homepage)+'</a></p>':'')+
-        '<hr/><b>Tools provided:</b>'+
-        (tools.length?'<ul>'+tools.map(function(t){return '<li><b>'+esc(t.name)+'</b> — '+esc(t.description||'')+'</li>';}).join('')+'</ul>':'<p>None</p>')+
-        '<hr/><b>Permissions:</b>'+
-        '<ul>'+
-        (perms.filesystem?'<li>Filesystem access</li>':'')+
-        ((perms.network||[]).map(function(n){return '<li>Network: '+esc(n)+'</li>';}).join(''))+
-        ((perms.env_vars||[]).map(function(e){return '<li>Env var: '+esc(e)+'</li>';}).join(''))+
-        '</ul>'+
-        (m.checksums?'<hr/><b>Checksums:</b><pre style="font-size:11px;overflow:auto">'+esc(JSON.stringify(m.checksums,null,2))+'</pre>':'');
+        '<hr/>'+
+        '<div class="pd-section-title">Tools provided</div>'+
+        (tools.length
+          ?'<ul>'+tools.map(function(t){return '<li><span style="color:#e2e8f0;font-weight:500">'+esc(t.Name||t.name)+'</span><span style="color:#475569"> — </span>'+esc(t.Description||t.description||'')+'</li>';}).join('')+'</ul>'
+          :'<p style="color:#475569">None</p>')+
+        '<hr/>'+
+        '<div class="pd-section-title">Permissions</div>'+
+        (noPerms
+          ?'<p style="color:#475569">None declared</p>'
+          :'<ul>'+
+            (perms.filesystem?'<li>Filesystem access</li>':'')+
+            ((perms.network||[]).map(function(n){return '<li>Network: <span style="font-family:monospace;font-size:.78rem">'+esc(n)+'</span></li>';}).join(''))+
+            ((perms.env_vars||[]).map(function(ev){return '<li>Env var: <span style="font-family:monospace;font-size:.78rem">'+esc(ev)+'</span></li>';}).join(''))+
+            '</ul>')+
+        (m.checksums?'<hr/><div class="pd-section-title">Checksums</div><pre>'+esc(JSON.stringify(m.checksums,null,2))+'</pre>':'');
       ge('plugin-detail-panel').style.display='block';
     }).catch(function(e){alert('Error: '+e.message);});
   }

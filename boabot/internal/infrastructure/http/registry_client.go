@@ -1,13 +1,19 @@
 package httpserver
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -344,4 +350,181 @@ func (m *HTTPRegistryManager) FetchArchive(ctx context.Context, downloadURL stri
 		return nil, fmt.Errorf("registry manager: archive exceeds %d byte wire size limit (20 MB)", maxArchiveWireSize)
 	}
 	return data, nil
+}
+
+// --- Claude Code plugin support ---
+
+// claudePluginJSON is the format of .claude-plugin/plugin.json.
+type claudePluginJSON struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Author      struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"author"`
+	Keywords []string `json:"keywords"`
+	Category string   `json:"category"`
+}
+
+// claudePackageJSON holds the Claude-specific block inside a plugin's package.json.
+type claudePackageJSON struct {
+	Claude struct {
+		Skills []string `json:"skills"`
+	} `json:"claude"`
+}
+
+// skillFrontmatter is the YAML frontmatter block at the top of a skill markdown file.
+type skillFrontmatter struct {
+	Description string `yaml:"description"`
+}
+
+// parseSkillDescription extracts the description field from YAML frontmatter in a
+// skill markdown file (between leading "---\n" delimiters).
+func parseSkillDescription(content []byte) string {
+	s := string(content)
+	if !strings.HasPrefix(s, "---\n") {
+		return ""
+	}
+	rest := s[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return ""
+	}
+	var fm skillFrontmatter
+	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+		return ""
+	}
+	return fm.Description
+}
+
+// packClaudePluginFiles packs a map of relative-path → content into a tar.gz archive.
+// Paths are sorted for deterministic output.
+func packClaudePluginFiles(files map[string][]byte) ([]byte, error) {
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	for _, p := range paths {
+		data := files[p]
+		hdr := &tar.Header{
+			Name:     p,
+			Typeflag: tar.TypeReg,
+			Mode:     0o644,
+			Size:     int64(len(data)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// fetchRaw fetches a URL and returns the raw response body, capped at maxArchiveWireSize.
+func (m *HTTPRegistryManager) fetchRaw(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: build request: %w", url, err)
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch %s: server returned %d", url, resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxArchiveWireSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: read body: %w", url, err)
+	}
+	return data, nil
+}
+
+// FetchClaudePlugin downloads a Claude Code plugin from its .claude-plugin/plugin.json
+// manifest URL. It fetches plugin.json, package.json, and all skill markdown files listed
+// under claude.skills, packs them into a tar.gz archive, and returns a synthetic
+// PluginManifest with the archive's SHA-256 checksum set.
+func (m *HTTPRegistryManager) FetchClaudePlugin(ctx context.Context, manifestURL string) (domain.PluginManifest, []byte, error) {
+	sep := "/.claude-plugin/plugin.json"
+	idx := strings.LastIndex(manifestURL, sep)
+	if idx < 0 {
+		return domain.PluginManifest{}, nil, fmt.Errorf("claude plugin: manifest URL does not contain %q", sep)
+	}
+	baseURL := manifestURL[:idx]
+
+	// Fetch .claude-plugin/plugin.json.
+	pluginJSONData, err := m.fetchRaw(ctx, manifestURL)
+	if err != nil {
+		return domain.PluginManifest{}, nil, fmt.Errorf("claude plugin: fetch plugin.json: %w", err)
+	}
+	var cpj claudePluginJSON
+	if err := json.Unmarshal(pluginJSONData, &cpj); err != nil {
+		return domain.PluginManifest{}, nil, fmt.Errorf("claude plugin: parse plugin.json: %w", err)
+	}
+
+	files := map[string][]byte{
+		".claude-plugin/plugin.json": pluginJSONData,
+	}
+
+	// Fetch package.json — optional; if missing or malformed, skills list is empty.
+	var skills []string
+	if pkgData, pkgErr := m.fetchRaw(ctx, baseURL+"/package.json"); pkgErr == nil {
+		files["package.json"] = pkgData
+		var pkg claudePackageJSON
+		if json.Unmarshal(pkgData, &pkg) == nil {
+			skills = pkg.Claude.Skills
+		}
+	}
+
+	// Fetch each skill file and extract its description from YAML frontmatter.
+	tools := make([]domain.MCPTool, 0, len(skills))
+	for _, skillPath := range skills {
+		skillData, err := m.fetchRaw(ctx, baseURL+"/"+skillPath)
+		if err != nil {
+			continue
+		}
+		files[skillPath] = skillData
+		name := strings.TrimSuffix(filepath.Base(skillPath), ".md")
+		desc := parseSkillDescription(skillData)
+		tools = append(tools, domain.MCPTool{
+			Name:        name,
+			Description: desc,
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		})
+	}
+
+	// Pack all files into a tar.gz archive.
+	archive, err := packClaudePluginFiles(files)
+	if err != nil {
+		return domain.PluginManifest{}, nil, fmt.Errorf("claude plugin: pack archive: %w", err)
+	}
+
+	sum := sha256.Sum256(archive)
+	manifest := domain.PluginManifest{
+		Name:        cpj.Name,
+		Version:     cpj.Version,
+		Description: cpj.Description,
+		Author:      cpj.Author.Name,
+		Tags:        cpj.Keywords,
+		Entrypoint:  ".claude-plugin/plugin.json",
+		Provides:    domain.PluginProvides{Tools: tools},
+		Checksums:   map[string]string{"sha256": hex.EncodeToString(sum[:])},
+	}
+
+	return manifest, archive, nil
 }

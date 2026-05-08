@@ -130,4 +130,8 @@ type RegistryManager interface {
 	FetchManifest(ctx context.Context, manifestURL string) (PluginManifest, error)
 	// FetchArchive downloads a plugin archive from downloadURL.
 	FetchArchive(ctx context.Context, downloadURL string) ([]byte, error)
+	// FetchClaudePlugin downloads a Claude Code plugin from its .claude-plugin/plugin.json
+	// manifest URL, packs the skill files into a tar.gz archive, and returns a synthetic
+	// PluginManifest with Checksums["sha256"] set from the packed archive.
+	FetchClaudePlugin(ctx context.Context, manifestURL string) (PluginManifest, []byte, error)
 }

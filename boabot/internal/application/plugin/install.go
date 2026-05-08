@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -86,20 +87,28 @@ func (uc *InstallUseCase) Install(ctx context.Context, registryName, name, versi
 		archiveURL = reg.URL + "/" + entry.Name + "/" + version + "/" + entry.Name + "-" + version + ".tar.gz"
 	}
 
+	var manifest domain.PluginManifest
+	var archive []byte
+
 	if archiveURL == "" {
-		return domain.Plugin{}, fmt.Errorf("plugin install: no download URL available for %q — this registry entry may not support archive-based installation", name)
-	}
-
-	// Fetch manifest.
-	manifest, err := uc.registry.FetchManifest(ctx, manifestURL)
-	if err != nil {
-		return domain.Plugin{}, fmt.Errorf("plugin install: fetch manifest: %w", err)
-	}
-
-	// Fetch archive.
-	archive, err := uc.registry.FetchArchive(ctx, archiveURL)
-	if err != nil {
-		return domain.Plugin{}, fmt.Errorf("plugin install: fetch archive: %w", err)
+		if !strings.Contains(manifestURL, "/.claude-plugin/plugin.json") {
+			return domain.Plugin{}, fmt.Errorf("plugin install: no download URL available for %q — this registry entry may not support archive-based installation", name)
+		}
+		// Claude Code plugin: download skill files and pack a synthetic archive.
+		manifest, archive, err = uc.registry.FetchClaudePlugin(ctx, manifestURL)
+		if err != nil {
+			return domain.Plugin{}, fmt.Errorf("plugin install: fetch claude plugin: %w", err)
+		}
+	} else {
+		// Standard archive-based plugin.
+		manifest, err = uc.registry.FetchManifest(ctx, manifestURL)
+		if err != nil {
+			return domain.Plugin{}, fmt.Errorf("plugin install: fetch manifest: %w", err)
+		}
+		archive, err = uc.registry.FetchArchive(ctx, archiveURL)
+		if err != nil {
+			return domain.Plugin{}, fmt.Errorf("plugin install: fetch archive: %w", err)
+		}
 	}
 
 	// Install via store (handles checksum verification, zip-slip, size limit).

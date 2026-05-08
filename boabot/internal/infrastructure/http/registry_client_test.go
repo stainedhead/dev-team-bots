@@ -292,3 +292,139 @@ func TestFetchArchive_WireSizeLimit(t *testing.T) {
 		t.Errorf("expected wire size error, got: %v", err)
 	}
 }
+
+func TestFetchClaudePlugin_FullFlow(t *testing.T) {
+	pluginJSON := `{"name":"dev-flow","version":"1.2.3","description":"Workflow plugin","author":{"name":"alice","email":"alice@example.com"},"keywords":["workflow","prd"]}`
+	packageJSON := `{"name":"dev-flow","claude":{"skills":["commands/dev-flow.md","commands/write-flow-analys.md"]}}`
+	skillMD := "---\ndescription: Create a spec from a PRD\n---\n\n# Dev Flow\nSkill content here."
+	skill2MD := "---\ndescription: Write flow analysis report\n---\n\n# Write Flow Analysis"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/plugins/dev-flow/.claude-plugin/plugin.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(pluginJSON))
+		case "/plugins/dev-flow/package.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(packageJSON))
+		case "/plugins/dev-flow/commands/dev-flow.md":
+			_, _ = w.Write([]byte(skillMD))
+		case "/plugins/dev-flow/commands/write-flow-analys.md":
+			_, _ = w.Write([]byte(skill2MD))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	manifestURL := srv.URL + "/plugins/dev-flow/.claude-plugin/plugin.json"
+
+	manifest, archive, err := mgr.FetchClaudePlugin(context.Background(), manifestURL)
+	if err != nil {
+		t.Fatalf("FetchClaudePlugin: %v", err)
+	}
+	if manifest.Name != "dev-flow" {
+		t.Errorf("name: got %q, want %q", manifest.Name, "dev-flow")
+	}
+	if manifest.Version != "1.2.3" {
+		t.Errorf("version: got %q, want %q", manifest.Version, "1.2.3")
+	}
+	if manifest.Author != "alice" {
+		t.Errorf("author: got %q, want %q", manifest.Author, "alice")
+	}
+	if len(manifest.Tags) != 2 {
+		t.Errorf("tags: got %d, want 2", len(manifest.Tags))
+	}
+	if manifest.Entrypoint != ".claude-plugin/plugin.json" {
+		t.Errorf("entrypoint: got %q, want %q", manifest.Entrypoint, ".claude-plugin/plugin.json")
+	}
+	if manifest.Checksums["sha256"] == "" {
+		t.Error("expected sha256 checksum to be set")
+	}
+	if len(archive) == 0 {
+		t.Error("expected non-empty archive")
+	}
+	if len(manifest.Provides.Tools) != 2 {
+		t.Fatalf("got %d tools, want 2", len(manifest.Provides.Tools))
+	}
+	if manifest.Provides.Tools[0].Name != "dev-flow" {
+		t.Errorf("tool[0] name: got %q, want %q", manifest.Provides.Tools[0].Name, "dev-flow")
+	}
+	if manifest.Provides.Tools[0].Description != "Create a spec from a PRD" {
+		t.Errorf("tool[0] desc: got %q, want %q", manifest.Provides.Tools[0].Description, "Create a spec from a PRD")
+	}
+	if manifest.Provides.Tools[1].Name != "write-flow-analys" {
+		t.Errorf("tool[1] name: got %q, want %q", manifest.Provides.Tools[1].Name, "write-flow-analys")
+	}
+}
+
+func TestFetchClaudePlugin_MissingPackageJSON_NoSkills(t *testing.T) {
+	pluginJSON := `{"name":"simple-tool","version":"0.1.0","description":"No skills","author":{"name":"bob"}}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.claude-plugin/plugin.json" {
+			_, _ = w.Write([]byte(pluginJSON))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	manifest, archive, err := mgr.FetchClaudePlugin(context.Background(), srv.URL+"/.claude-plugin/plugin.json")
+	if err != nil {
+		t.Fatalf("FetchClaudePlugin: %v", err)
+	}
+	if manifest.Name != "simple-tool" {
+		t.Errorf("name: got %q, want %q", manifest.Name, "simple-tool")
+	}
+	if len(manifest.Provides.Tools) != 0 {
+		t.Errorf("expected 0 tools (no package.json), got %d", len(manifest.Provides.Tools))
+	}
+	if len(archive) == 0 {
+		t.Error("expected non-empty archive even with no skills")
+	}
+	if manifest.Checksums["sha256"] == "" {
+		t.Error("expected sha256 checksum even with no skills")
+	}
+}
+
+func TestFetchClaudePlugin_ChecksumDeterministic(t *testing.T) {
+	pluginJSON := `{"name":"det-tool","version":"1.0.0","description":"Deterministic","author":{"name":"alice"}}`
+	packageJSON := `{"claude":{"skills":["commands/cmd.md"]}}`
+	skillMD := "---\ndescription: A command\n---\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.claude-plugin/plugin.json":
+			_, _ = w.Write([]byte(pluginJSON))
+		case "/package.json":
+			_, _ = w.Write([]byte(packageJSON))
+		case "/commands/cmd.md":
+			_, _ = w.Write([]byte(skillMD))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	mgr := httpserver.NewHTTPRegistryManager(t.TempDir(), nil)
+	url := srv.URL + "/.claude-plugin/plugin.json"
+
+	m1, a1, err := mgr.FetchClaudePlugin(context.Background(), url)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	m2, a2, err := mgr.FetchClaudePlugin(context.Background(), url)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if m1.Checksums["sha256"] != m2.Checksums["sha256"] {
+		t.Errorf("checksum not deterministic: %q vs %q", m1.Checksums["sha256"], m2.Checksums["sha256"])
+	}
+	if string(a1) != string(a2) {
+		t.Error("archive bytes not deterministic across two calls")
+	}
+}

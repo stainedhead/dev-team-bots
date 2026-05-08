@@ -136,10 +136,33 @@ func (m *HTTPRegistryManager) Remove(_ context.Context, name string) error {
 	return nil
 }
 
-// FetchIndex fetches the registry index from registryURL/index.json.
+// resolveIndexURL converts a registry URL to a fetchable index.json URL.
+// GitHub repo URLs (github.com/owner/repo[.git]) are rewritten to
+// raw.githubusercontent.com so the index.json can be fetched directly.
+// Other URLs have /index.json appended.
+func resolveIndexURL(registryURL string) []string {
+	base := strings.TrimRight(registryURL, "/")
+	base = strings.TrimSuffix(base, ".git")
+
+	// Detect github.com URLs and try main then master branches.
+	if strings.HasPrefix(base, "https://github.com/") {
+		parts := strings.SplitN(strings.TrimPrefix(base, "https://github.com/"), "/", 2)
+		if len(parts) == 2 {
+			raw := "https://raw.githubusercontent.com/" + parts[0] + "/" + parts[1]
+			return []string{
+				raw + "/main/index.json",
+				raw + "/master/index.json",
+			}
+		}
+	}
+	return []string{base + "/index.json"}
+}
+
+// FetchIndex fetches the registry index for the registry at registryURL.
+// GitHub repo URLs are automatically rewritten to raw content URLs.
 // If force is false and a cached copy is still fresh (< 5 min), returns the cache.
 func (m *HTTPRegistryManager) FetchIndex(ctx context.Context, registryURL string, force bool) (domain.RegistryIndex, error) {
-	cacheKey := strings.TrimRight(registryURL, "/")
+	cacheKey := strings.TrimRight(strings.TrimSuffix(registryURL, ".git"), "/")
 
 	if !force {
 		m.mu.RLock()
@@ -150,32 +173,45 @@ func (m *HTTPRegistryManager) FetchIndex(ctx context.Context, registryURL string
 		}
 	}
 
-	indexURL := strings.TrimRight(registryURL, "/") + "/index.json"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
-	if err != nil {
-		return domain.RegistryIndex{}, fmt.Errorf("registry manager: build request: %w", err)
+	candidates := resolveIndexURL(registryURL)
+	var lastErr error
+	for _, indexURL := range candidates {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
+		if err != nil {
+			return domain.RegistryIndex{}, fmt.Errorf("registry manager: build request: %w", err)
+		}
+
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("registry manager: fetch index: %w", err)
+			continue
+		}
+		defer func() { _ = resp.Body.Close() }() //nolint:gocritic // deferred in loop intentionally; one fires
+
+		if resp.StatusCode == http.StatusNotFound {
+			lastErr = fmt.Errorf("registry manager: fetch index: server returned 404 at %s", indexURL)
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return domain.RegistryIndex{}, fmt.Errorf("registry manager: fetch index: server returned %d", resp.StatusCode)
+		}
+
+		var idx domain.RegistryIndex
+		if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
+			return domain.RegistryIndex{}, fmt.Errorf("registry manager: decode index: %w", err)
+		}
+
+		m.mu.Lock()
+		m.cache[cacheKey] = cachedIndex{index: idx, fetchedAt: time.Now()}
+		m.mu.Unlock()
+
+		return idx, nil
 	}
 
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return domain.RegistryIndex{}, fmt.Errorf("registry manager: fetch index: %w", err)
+	if lastErr != nil {
+		return domain.RegistryIndex{}, lastErr
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return domain.RegistryIndex{}, fmt.Errorf("registry manager: fetch index: server returned %d", resp.StatusCode)
-	}
-
-	var idx domain.RegistryIndex
-	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
-		return domain.RegistryIndex{}, fmt.Errorf("registry manager: decode index: %w", err)
-	}
-
-	m.mu.Lock()
-	m.cache[cacheKey] = cachedIndex{index: idx, fetchedAt: time.Now()}
-	m.mu.Unlock()
-
-	return idx, nil
+	return domain.RegistryIndex{}, fmt.Errorf("registry manager: fetch index: no candidates resolved")
 }
 
 // FetchManifest downloads and parses a plugin manifest from manifestURL.

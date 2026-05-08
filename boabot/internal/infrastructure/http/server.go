@@ -1917,9 +1917,9 @@ const kanbanHTML = `<!DOCTYPE html>
         <div class="sec-acts">
           <select id="registry-select" onchange="onRegistryChange()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
           <input type="text" id="registry-search" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc" />
-          <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
-          <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
           <button class="btn btn-secondary btn-sm" onclick="refreshRegistry()">Refresh</button>
+          <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
+          <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
         </div>
       </div>
       <div id="registry-cards" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;"><div class="empty-state">Select a registry above</div></div>
@@ -2392,7 +2392,8 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function loadRegistries(){
     api('GET','/api/v1/registries',null).then(function(regs){
-      registryData=regs||[];
+      regs=(regs||[]).slice().sort(function(a,b){return a.name.localeCompare(b.name);});
+      registryData=regs;
       var sel=ge('registry-select');
       if(!sel)return;
       var prev=sel.value;
@@ -2402,13 +2403,15 @@ const kanbanHTML = `<!DOCTYPE html>
         opt.value=r.name;opt.textContent=r.name+(r.trusted?' (trusted)':'');
         sel.appendChild(opt);
       });
+      // Restore previous selection, fall back to first registry, or clear.
       if(prev&&regs.some(function(r){return r.name===prev;})){
         sel.value=prev;
-        loadRegistryIndex();
-      } else {
-        ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';
-        updateRegistryDeleteBtn();
+      } else if(regs.length){
+        sel.value=regs[0].name;
       }
+      updateRegistryDeleteBtn();
+      if(sel.value){loadRegistryIndex();}
+      else{ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';}
     }).catch(function(){});
   }
 

@@ -1728,7 +1728,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .reg-modal-box .reg-modal-check{font-size:.78rem;color:#94a3b8;display:flex;align-items:center;gap:.4rem;margin-bottom:16px}
     .reg-modal-box .reg-modal-acts{display:flex;gap:8px}
     /* ── Command / file mention popup ── */
-    .mp-pop{position:fixed;z-index:9999;background:#0f1829;border:1px solid #253a5e;border-radius:.4rem;overflow-y:auto;max-height:230px;min-width:320px;max-width:540px;box-shadow:0 6px 24px rgba(0,0,0,.65);display:none}
+    .mp-pop{position:fixed;inset:auto;margin:0;padding:0;border:1px solid #253a5e;z-index:9999;background:#0f1829;border-radius:.4rem;overflow-y:auto;max-height:230px;min-width:320px;max-width:540px;box-shadow:0 6px 24px rgba(0,0,0,.65);display:none}
     .mp-pop:popover-open{display:block}
     .mp-item{display:flex;align-items:baseline;padding:.28rem .65rem;cursor:pointer;gap:.6rem;line-height:1.4}
     .mp-item:hover,.mp-sel{background:#1e3a5f}
@@ -3203,13 +3203,15 @@ const kanbanHTML = `<!DOCTYPE html>
   function mpPosition(){
     if(!mpEl||!mpPop)return;
     var r=mpEl.getBoundingClientRect();
+    // Reset any UA popover defaults that could interfere with explicit positioning.
+    mpPop.style.right='auto';mpPop.style.margin='0';
     var left=Math.max(4,r.left);
     if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
     mpPop.style.left=left+'px';
     if(window.innerHeight-r.bottom<240&&r.top>240){
-      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
+      mpPop.style.top='auto';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
     } else {
-      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
+      mpPop.style.bottom='auto';mpPop.style.top=(r.bottom+2)+'px';
     }
     if(mpPopoverOK)try{mpPop.showPopover();}catch(e){mpPop.style.display='block';}
     else mpPop.style.display='block';

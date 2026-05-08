@@ -3303,13 +3303,21 @@ const kanbanHTML = `<!DOCTYPE html>
     if(mpMode==='file'&&it.isDir){
       var newText=it.path+'/';
       mpText=newText;
-      mpEl.value=before+'@'+newText+after;
-      mpEl.selectionStart=mpEl.selectionEnd=mpPos+1+newText.length;
+      // Insert without @ — adjust mpPos so mpPos+1 still points to start of path text.
+      mpEl.value=before+newText+after;
+      mpPos=before.length-1;
+      mpEl.selectionStart=mpEl.selectionEnd=before.length+newText.length;
       mpLoadFile(newText);mpEl.focus();
       return;
     }
-    var trigChar=mpMode==='cmd'?'/':'@';
-    var insert=trigChar+it.path;
+    if(mpMode==='file'){
+      // File selected — insert bare path, no @ prefix.
+      mpEl.value=before+it.path+' '+after;
+      mpEl.selectionStart=mpEl.selectionEnd=before.length+it.path.length+1;
+      mpClose();mpEl.focus();
+      return;
+    }
+    var insert='/'+it.path;
     mpEl.value=before+insert+' '+after;
     mpEl.selectionStart=mpEl.selectionEnd=before.length+insert.length+1;
     mpClose();mpEl.focus();

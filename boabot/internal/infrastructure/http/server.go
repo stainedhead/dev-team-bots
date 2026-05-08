@@ -1657,6 +1657,24 @@ const kanbanHTML = `<!DOCTYPE html>
     .pill-off{background:#991b1b;color:#fecaca}
     .pill-admin{background:#312e81;color:#a5b4fc}
     .pill-user{background:#1e293b;color:#64748b}
+    /* ── Registry browser ── */
+    .reg-toolbar-input{padding:.3rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+    .reg-toolbar-input::placeholder{color:#475569}
+    #registry-cards{display:flex;flex-wrap:wrap;gap:12px;padding:12px}
+    .reg-card{background:#0f1829;border:1px solid #1a2744;border-radius:.45rem;padding:14px;min-width:220px;max-width:260px;display:flex;flex-direction:column;gap:6px}
+    .reg-card-name{font-weight:600;font-size:.85rem;color:#93c5fd}
+    .reg-card-version{font-size:.72rem;color:#475569}
+    .reg-card-desc{font-size:.78rem;color:#94a3b8;flex:1}
+    .reg-card-tags{display:flex;flex-wrap:wrap;gap:4px}
+    .reg-tag{background:#1e3a5f;color:#93c5fd;font-size:.67rem;padding:.15rem .45rem;border-radius:.75rem;white-space:nowrap}
+    /* ── Registry modal ── */
+    .reg-modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center}
+    .reg-modal-box{background:#0f1829;border:1px solid #253a5e;border-radius:.5rem;padding:24px;min-width:380px;box-shadow:0 12px 40px rgba(0,0,0,.8)}
+    .reg-modal-box h3{margin:0 0 16px;font-size:.95rem;color:#e2e8f0}
+    .reg-modal-box label{display:block;font-size:.78rem;color:#94a3b8;margin-bottom:10px}
+    .reg-modal-box input[type=text]{display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem}
+    .reg-modal-box .reg-modal-check{font-size:.78rem;color:#94a3b8;display:flex;align-items:center;gap:.4rem;margin-bottom:16px}
+    .reg-modal-box .reg-modal-acts{display:flex;gap:8px}
     /* ── Command / file mention popup ── */
     .mp-pop{position:fixed;z-index:9999;background:#0f1829;border:1px solid #253a5e;border-radius:.4rem;overflow-y:auto;max-height:230px;min-width:320px;max-width:540px;box-shadow:0 6px 24px rgba(0,0,0,.65);display:none}
     .mp-item{display:flex;align-items:baseline;padding:.28rem .65rem;cursor:pointer;gap:.6rem;line-height:1.4}
@@ -1915,23 +1933,23 @@ const kanbanHTML = `<!DOCTYPE html>
       <div class="sec-hdr">
         <div class="sec-title">Registry Browser</div>
         <div class="sec-acts">
-          <select id="registry-select" onchange="onRegistryChange()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
-          <input type="text" id="registry-search" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc" />
+          <select id="registry-select" class="reg-toolbar-input" onchange="onRegistryChange()" style="margin-right:8px"></select>
+          <input type="text" id="registry-search" class="reg-toolbar-input" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px" />
           <button class="btn btn-secondary btn-sm" onclick="refreshRegistry()">Refresh</button>
           <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
           <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
         </div>
       </div>
-      <div id="registry-cards" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;"><div class="empty-state">Select a registry above</div></div>
+      <div id="registry-cards"><div class="empty-state">Select a registry above</div></div>
 
       <!-- Add Registry Modal -->
-      <div id="add-registry-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
-        <div style="background:#fff;padding:24px;border-radius:8px;min-width:400px">
-          <h3 style="margin-top:0">Add Registry</h3>
-          <div style="margin-bottom:12px"><label>Name<br/><input id="reg-name" type="text" style="width:100%;box-sizing:border-box;padding:6px" /></label></div>
-          <div style="margin-bottom:12px"><label>URL (https://)<br/><input id="reg-url" type="text" style="width:100%;box-sizing:border-box;padding:6px" placeholder="https://..." /></label></div>
-          <div style="margin-bottom:16px"><label><input id="reg-trusted" type="checkbox" /> Trusted registry</label></div>
-          <div style="display:flex;gap:8px">
+      <div id="add-registry-modal" class="reg-modal-backdrop">
+        <div class="reg-modal-box">
+          <h3>Add Registry</h3>
+          <label>Name<input id="reg-name" type="text" placeholder="my-registry" /></label>
+          <label>URL (https://)<input id="reg-url" type="text" placeholder="https://github.com/owner/repo" /></label>
+          <div class="reg-modal-check"><input id="reg-trusted" type="checkbox" /><span>Trusted registry</span></div>
+          <div class="reg-modal-acts">
             <button class="btn btn-primary btn-sm" onclick="addRegistry()">Add</button>
             <button class="btn btn-secondary btn-sm" onclick="ge('add-registry-modal').style.display='none'">Cancel</button>
           </div>
@@ -2466,12 +2484,15 @@ const kanbanHTML = `<!DOCTYPE html>
     var filtered=plugins.filter(function(p){return !q||p.name.toLowerCase().includes(q)||p.description.toLowerCase().includes(q);});
     if(!filtered.length){ge('registry-cards').innerHTML='<div class="empty-state">No plugins found</div>';return;}
     ge('registry-cards').innerHTML=filtered.map(function(p){
-      return '<div style="background:#f9f9f9;border:1px solid #ddd;border-radius:6px;padding:14px;min-width:220px;max-width:260px">'+
-        '<div style="font-weight:600;margin-bottom:4px">'+esc(p.name)+'</div>'+
-        '<div style="font-size:12px;color:#666;margin-bottom:8px">'+esc(p.latest_version)+'</div>'+
-        '<div style="font-size:13px;margin-bottom:10px">'+esc(p.description)+'</div>'+
-        (p.tags&&p.tags.length?'<div style="font-size:11px;color:#888;margin-bottom:8px">'+p.tags.map(function(t){return '<span style="background:#e8e8e8;padding:2px 6px;border-radius:10px;margin-right:4px">'+esc(t)+'</span>'}).join('')+'</div>':'')+
-        '<button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button>'+
+      var tags=p.tags&&p.tags.length
+        ?'<div class="reg-card-tags">'+p.tags.map(function(t){return '<span class="reg-tag">'+esc(t)+'</span>';}).join('')+'</div>'
+        :'';
+      return '<div class="reg-card">'+
+        '<div class="reg-card-name">'+esc(p.name)+'</div>'+
+        '<div class="reg-card-version">'+esc(p.latest_version)+'</div>'+
+        '<div class="reg-card-desc">'+esc(p.description)+'</div>'+
+        tags+
+        '<div><button class="btn btn-primary btn-sm" onclick="installPlugin(\''+esc(ge('registry-select').value)+'\',\''+esc(p.name)+'\',\''+esc(p.latest_version)+'\')">Install</button></div>'+
         '</div>';
     }).join('');
   }
@@ -2482,7 +2503,7 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function showAddRegistryModal(){
-    ge('add-registry-modal').style.display='flex';
+    var m=ge('add-registry-modal');if(m)m.style.display='flex';
   }
 
   function addRegistry(){

@@ -503,8 +503,17 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// If status moved to in-progress and a bot is assigned, dispatch a task.
 	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
-		instruction := fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
-			updated.Title, updated.Description, updated.ID)
+		var instruction string
+		if cmd := extractSlashCommand(updated.Title); cmd != "" {
+			instruction = fmt.Sprintf("Run the following skill command: /%s\n\nBoard item context:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
+				cmd, updated.Title, updated.Description, updated.ID)
+		} else if cmd := extractSlashCommand(updated.Description); cmd != "" {
+			instruction = fmt.Sprintf("Run the following skill command: /%s\n\nBoard item context:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
+				cmd, updated.Title, updated.Description, updated.ID)
+		} else {
+			instruction = fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
+				updated.Title, updated.Description, updated.ID)
+		}
 		if updated.WorkDir != "" {
 			instruction += fmt.Sprintf("\n\nWorking directory: %s\nYou may read and write files in this directory to complete your work. If it is a git repository you may also use git commands.", updated.WorkDir)
 		}
@@ -1545,6 +1554,32 @@ func isValidWorkItemStatus(status string) bool {
 		return true
 	}
 	return false
+}
+
+// extractSlashCommand returns the command name if s starts with a slash command
+// (e.g. "/devflow:implm-frm-prd"), otherwise returns "". Only the first token
+// is checked so extra arguments are ignored.
+func extractSlashCommand(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "/") {
+		return ""
+	}
+	s = s[1:]
+	end := strings.IndexAny(s, " \t\n\r")
+	if end == -1 {
+		end = len(s)
+	}
+	cmd := s[:end]
+	if cmd == "" {
+		return ""
+	}
+	for _, c := range cmd {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == ':' || c == '-' || c == '_' || c == '.') {
+			return ""
+		}
+	}
+	return cmd
 }
 
 // ── Kanban web UI ─────────────────────────────────────────────────────────────
@@ -3280,17 +3315,22 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function loadPluginCmds(){
-    api('GET','/api/v1/plugins',null)
-      .then(function(plugins){
-        pluginCmds=[];
-        (plugins||[]).forEach(function(p){
-          if(p.status==='active'&&p.manifest&&p.manifest.provides&&p.manifest.provides.tools){
-            p.manifest.provides.tools.forEach(function(t){
-              pluginCmds.push({name:p.name+':'+t.name,desc:t.description||''});
-            });
-          }
-        });
-      }).catch(function(){});
+    var cmds=[];
+    var p1=api('GET','/api/v1/plugins',null).then(function(plugins){
+      (plugins||[]).forEach(function(p){
+        if(p.status==='active'&&p.manifest&&p.manifest.provides&&p.manifest.provides.tools){
+          p.manifest.provides.tools.forEach(function(t){
+            cmds.push({name:p.name+':'+t.name,desc:t.description||''});
+          });
+        }
+      });
+    }).catch(function(){});
+    var p2=token?api('GET','/api/v1/skills',null).then(function(skills){
+      (skills||[]).forEach(function(s){
+        if(s.status==='active'){cmds.push({name:s.name,desc:s.summary||''});}
+      });
+    }).catch(function(){}):Promise.resolve();
+    Promise.all([p1,p2]).then(function(){pluginCmds=cmds;});
   }
 
   // Enter sends; Shift+Enter inserts newline.
@@ -3769,7 +3809,7 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function refreshAll(){
-    loadBoard(); loadTeam(); loadThreads();
+    loadBoard(); loadTeam(); loadThreads(); loadPluginCmds();
     if(activeTab==='tasks')loadTasks();
     if(activeTab==='chat')loadChat();
     if(activeTab==='plugins'){loadPlugins();loadRegistries();}

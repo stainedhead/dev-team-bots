@@ -1698,8 +1698,10 @@ const kanbanHTML = `<!DOCTYPE html>
     .convo-chip button:hover{color:#e2e8f0}
     .convo-add{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.72rem;padding:.15rem .4rem;cursor:pointer}
     .chat-input-row{display:flex;gap:.5rem;padding:.75rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
-    .chat-input-row textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px}
-    .chat-input-row textarea.bash-mode{border-color:#b45309;background:#120e00;color:#fcd34d}
+    .chat-input-wrap{position:relative;flex:1;display:flex}
+    .chat-input-wrap textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px;width:100%;box-sizing:border-box}
+    .chat-input-wrap textarea.bash-mode{border-color:#b45309;background:#120e00;color:#fcd34d;padding-left:1.4rem}
+    #chat-bash-prefix{position:absolute;left:.45rem;top:.42rem;color:#ef4444;font-weight:700;font-size:.95rem;line-height:1;pointer-events:none;display:none;font-family:monospace}
     .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
     /* ── Bash result overlay ── */
     .bash-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center}
@@ -1895,7 +1897,10 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="chat-hist" id="chat-hist"></div>
           <div class="convo-bar" id="convo-bar"></div>
           <div class="chat-input-row">
-            <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+            <div class="chat-input-wrap">
+              <span id="chat-bash-prefix">!</span>
+              <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+            </div>
             <button class="btn btn-primary" onclick="chatSendOrBash()">Send</button>
           </div>
         </div>
@@ -2904,8 +2909,16 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function checkBashMode(el){
     if(!el)return;
-    if(isBashMode(el)){el.classList.add('bash-mode');el.placeholder='! bash command… (Enter to run, @ for file)';}
-    else{el.classList.remove('bash-mode');el.placeholder='Message… (Enter to send, Shift+Enter for newline)';}
+    var pfx=ge('chat-bash-prefix');
+    if(isBashMode(el)){
+      el.classList.add('bash-mode');
+      el.placeholder='bash command… (Enter to run, @ for file)';
+      if(pfx)pfx.style.display='block';
+    } else {
+      el.classList.remove('bash-mode');
+      el.placeholder='Message… (Enter to send, Shift+Enter for newline)';
+      if(pfx)pfx.style.display='none';
+    }
   }
 
   var bashOverlay=null;

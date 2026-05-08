@@ -3194,20 +3194,16 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function mpPosition(){
     if(!mpEl||!mpPop)return;
+    // position:fixed inside a top-layer element (showModal dialog) is still
+    // viewport-relative, so always use viewport coordinates directly.
     var r=mpEl.getBoundingClientRect();
-    var offL=0,offT=0;
-    var par=mpPop.parentNode;
-    if(par&&par!==document.body){
-      var pr=par.getBoundingClientRect();
-      offL=pr.left;offT=pr.top;
-    }
-    var left=Math.max(4,r.left-offL);
-    if(left+320>window.innerWidth-offL)left=Math.max(4,window.innerWidth-offL-324);
+    var left=Math.max(4,r.left);
+    if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
     mpPop.style.left=left+'px';
-    if(window.innerHeight-r.bottom<240&&r.top-offT>240){
-      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-offT-r.top+2)+'px';
+    if(window.innerHeight-r.bottom<240&&r.top>240){
+      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
     } else {
-      mpPop.style.bottom='';mpPop.style.top=(r.bottom-offT+2)+'px';
+      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
     }
     mpPop.style.display='block';
   }

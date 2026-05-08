@@ -27,6 +27,7 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 - [`user-docs/orchestrator.md`](user-docs/orchestrator.md) — running in orchestrator mode
 - [`user-docs/subteam-spawning.md`](user-docs/subteam-spawning.md) — tech-lead subteam spawning
 - [`user-docs/pool-management.md`](user-docs/pool-management.md) — orchestrator tech-lead pool
+- [`user-docs/AWS-Bedrock-Adoption-Config.md`](user-docs/AWS-Bedrock-Adoption-Config.md) — AWS Bedrock authentication (SSO, service account, machine identity)
 
 ### Plugin Registry
 

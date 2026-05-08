@@ -1729,6 +1729,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .reg-modal-box .reg-modal-acts{display:flex;gap:8px}
     /* ── Command / file mention popup ── */
     .mp-pop{position:fixed;z-index:9999;background:#0f1829;border:1px solid #253a5e;border-radius:.4rem;overflow-y:auto;max-height:230px;min-width:320px;max-width:540px;box-shadow:0 6px 24px rgba(0,0,0,.65);display:none}
+    .mp-pop:popover-open{display:block}
     .mp-item{display:flex;align-items:baseline;padding:.28rem .65rem;cursor:pointer;gap:.6rem;line-height:1.4}
     .mp-item:hover,.mp-sel{background:#1e3a5f}
     .mp-name{color:#e2e8f0;font-family:monospace;font-size:.74rem;flex-shrink:0;white-space:nowrap}
@@ -3169,54 +3170,54 @@ const kanbanHTML = `<!DOCTYPE html>
   var mpMode=null,mpEl=null,mpPos=0,mpText='',mpItems=[],mpIdx=0,mpWorkDir='',mpPop=null;
   var pluginCmds=[];
 
+  // Whether the browser supports the Popover API — used to put mpPop into the
+  // top layer independently of any showModal() dialog, giving truly
+  // viewport-relative position:fixed coordinates.
+  var mpPopoverOK='showPopover' in HTMLElement.prototype;
+
   function mpInit(){
     if(mpPop)return;
     mpPop=document.createElement('div');
     mpPop.className='mp-pop';
+    if(mpPopoverOK)mpPop.setAttribute('popover','manual');
     document.body.appendChild(mpPop);
     document.addEventListener('mousedown',function(e){if(mpPop&&!mpPop.contains(e.target))mpClose();});
   }
 
-  function mpClose(){
-    mpMode=null;mpEl=null;mpItems=[];mpIdx=0;
-    if(mpPop)mpPop.style.display='none';
+  function mpHide(){
+    if(!mpPop)return;
+    if(mpPopoverOK)try{mpPop.hidePopover();}catch(e){}
+    else mpPop.style.display='none';
   }
 
-  // Move mpPop into the dialog that owns el (if any) so it renders in the
-  // top layer alongside the dialog. The dialog has transform:translate(-50%,-50%)
-  // which makes position:fixed children relative to the dialog, not the viewport.
-  // Switch to position:absolute (unambiguously dialog-relative) when inside a dialog.
-  function mpEnsureHost(el){
-    var dlg=el.closest('dialog[open]');
-    var host=dlg||document.body;
-    if(mpPop.parentNode!==host)host.appendChild(mpPop);
-    mpPop.style.position=(host!==document.body)?'absolute':'';
+  function mpVisible(){
+    if(!mpPop)return false;
+    if(mpPopoverOK)return mpPop.matches(':popover-open');
+    return mpPop.style.display!=='none';
+  }
+
+  function mpClose(){
+    mpMode=null;mpEl=null;mpItems=[];mpIdx=0;mpHide();
   }
 
   function mpPosition(){
     if(!mpEl||!mpPop)return;
     var r=mpEl.getBoundingClientRect();
-    var par=mpPop.parentNode;
-    var offL=0,offT=0,cH=window.innerHeight,cW=window.innerWidth;
-    if(par&&par!==document.body){
-      var pr=par.getBoundingClientRect();
-      offL=pr.left;offT=pr.top;cH=pr.height;cW=pr.width;
-    }
-    var left=Math.max(4,r.left-offL);
-    if(left+320>cW-4)left=Math.max(4,cW-324);
+    var left=Math.max(4,r.left);
+    if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
     mpPop.style.left=left+'px';
-    var spaceBelow=cH-(r.bottom-offT);
-    if(spaceBelow<240&&(r.top-offT)>240){
-      mpPop.style.top='';mpPop.style.bottom=(cH-(r.top-offT)+2)+'px';
+    if(window.innerHeight-r.bottom<240&&r.top>240){
+      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
     } else {
-      mpPop.style.bottom='';mpPop.style.top=(r.bottom-offT+2)+'px';
+      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
     }
-    mpPop.style.display='block';
+    if(mpPopoverOK)try{mpPop.showPopover();}catch(e){mpPop.style.display='block';}
+    else mpPop.style.display='block';
   }
 
   function mpRender(items){
     mpItems=items;mpIdx=0;
-    if(!items.length){if(mpPop)mpPop.style.display='none';return;}
+    if(!items.length){mpHide();return;}
     if(!mpPop)mpInit();
     mpPop.innerHTML='';
     items.forEach(function(it,i){
@@ -3304,17 +3305,17 @@ const kanbanHTML = `<!DOCTYPE html>
       if(!pluginCmds.length)return;
       if(isBashMode(el))return; // bash mode: no command picker
       mpMode='cmd';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir='';
-      if(!mpPop)mpInit();mpEnsureHost(el);mpLoadCmd('');
+      if(!mpPop)mpInit();mpLoadCmd('');
     } else {
       var wd=typeof workDirFn==='function'?workDirFn():'';
       if(!wd)return;
       mpMode='file';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir=wd;
-      if(!mpPop)mpInit();mpEnsureHost(el);mpLoadFile('');
+      if(!mpPop)mpInit();mpLoadFile('');
     }
   }
 
   function mpOnKeydown(e){
-    if(!mpMode||!mpPop||mpPop.style.display==='none'||mpEl!==e.target)return;
+    if(!mpMode||!mpPop||!mpVisible()||mpEl!==e.target)return;
     if(e.key==='ArrowDown'){e.preventDefault();mpMove(1);}
     else if(e.key==='ArrowUp'){e.preventDefault();mpMove(-1);}
     else if(e.key==='Tab'){
@@ -3338,7 +3339,7 @@ const kanbanHTML = `<!DOCTYPE html>
       (plugins||[]).forEach(function(p){
         if(p.status==='active'&&p.manifest&&p.manifest.provides&&p.manifest.provides.tools){
           p.manifest.provides.tools.forEach(function(t){
-            cmds.push({name:p.name+':'+(t.Name||t.name||''),desc:t.Description||t.description||''});
+            cmds.push({name:p.name+':'+t.name,desc:t.description||''});
           });
         }
       });
@@ -3377,9 +3378,6 @@ const kanbanHTML = `<!DOCTYPE html>
     document.addEventListener('mouseup',function(){active=false;});
     dlgEl.addEventListener('close',function(){
       dlgEl.style.left='';dlgEl.style.top='';dlgEl.style.transform='';
-      if(mpPop&&mpPop.parentNode===dlgEl){
-        document.body.appendChild(mpPop);mpPop.style.position='';
-      }
     });
   }
 

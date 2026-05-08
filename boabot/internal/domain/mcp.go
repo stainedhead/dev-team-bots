@@ -8,9 +8,9 @@ type MCPClient interface {
 }
 
 type MCPTool struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
+	Name        string         `json:"name"         yaml:"name"`
+	Description string         `json:"description"  yaml:"description"`
+	InputSchema map[string]any `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
 }
 
 type MCPToolResult struct {

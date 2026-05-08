@@ -2027,6 +2027,7 @@ const kanbanHTML = `<!DOCTYPE html>
       <button class="tab on" onclick="tab('board')">Board</button>
       <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
       <button class="tab" onclick="tab('chat')" id="t-chat">Chat</button>
+      <div style="flex:1"></div>
       <button class="tab" onclick="tab('plugins')" id="t-plugins">Plugins &amp; Skills</button>
       <button class="tab" onclick="tab('dlq')" id="t-dlq">Dead Letter Queue</button>
       <button class="tab" onclick="tab('users')" id="t-users" style="display:none">Users</button>

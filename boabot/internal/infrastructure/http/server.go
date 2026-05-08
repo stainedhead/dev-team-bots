@@ -3182,16 +3182,32 @@ const kanbanHTML = `<!DOCTYPE html>
     if(mpPop)mpPop.style.display='none';
   }
 
+  // Move mpPop into the dialog that owns el (if any) so it renders in the
+  // top layer alongside the dialog. position:fixed inside a transformed
+  // ancestor is relative to that ancestor, not the viewport, so mpPosition()
+  // must subtract the parent's bounding-rect offset.
+  function mpEnsureHost(el){
+    var dlg=el.closest('dialog[open]');
+    var host=dlg||document.body;
+    if(mpPop.parentNode!==host)host.appendChild(mpPop);
+  }
+
   function mpPosition(){
     if(!mpEl||!mpPop)return;
     var r=mpEl.getBoundingClientRect();
-    var left=Math.max(4,r.left);
-    if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
+    var offL=0,offT=0;
+    var par=mpPop.parentNode;
+    if(par&&par!==document.body){
+      var pr=par.getBoundingClientRect();
+      offL=pr.left;offT=pr.top;
+    }
+    var left=Math.max(4,r.left-offL);
+    if(left+320>window.innerWidth-offL)left=Math.max(4,window.innerWidth-offL-324);
     mpPop.style.left=left+'px';
-    if(window.innerHeight-r.bottom<240&&r.top>240){
-      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
+    if(window.innerHeight-r.bottom<240&&r.top-offT>240){
+      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-offT-r.top+2)+'px';
     } else {
-      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
+      mpPop.style.bottom='';mpPop.style.top=(r.bottom-offT+2)+'px';
     }
     mpPop.style.display='block';
   }
@@ -3286,12 +3302,12 @@ const kanbanHTML = `<!DOCTYPE html>
       if(!pluginCmds.length)return;
       if(isBashMode(el))return; // bash mode: no command picker
       mpMode='cmd';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir='';
-      if(!mpPop)mpInit();mpLoadCmd('');
+      if(!mpPop)mpInit();mpEnsureHost(el);mpLoadCmd('');
     } else {
       var wd=typeof workDirFn==='function'?workDirFn():'';
       if(!wd)return;
       mpMode='file';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir=wd;
-      if(!mpPop)mpInit();mpLoadFile('');
+      if(!mpPop)mpInit();mpEnsureHost(el);mpLoadFile('');
     }
   }
 
@@ -3359,6 +3375,7 @@ const kanbanHTML = `<!DOCTYPE html>
     document.addEventListener('mouseup',function(){active=false;});
     dlgEl.addEventListener('close',function(){
       dlgEl.style.left='';dlgEl.style.top='';dlgEl.style.transform='';
+      if(mpPop&&mpPop.parentNode===dlgEl)document.body.appendChild(mpPop);
     });
   }
 

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -170,6 +171,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/chat/{bot}", s.auth(s.handleChatBotList))
 	mux.HandleFunc("POST /api/v1/chat/{bot}", s.auth(s.handleChatSend))
 
+	// Shell (bash mode in chat UI)
+	mux.HandleFunc("POST /api/v1/shell", s.auth(s.handleShell))
+
 	// Tech-lead pool
 	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
 
@@ -320,6 +324,56 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Command string `json:"command"`
+		WorkDir string `json:"work_dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Command == "" {
+		writeError(w, http.StatusBadRequest, "command required")
+		return
+	}
+	// WorkDir is optional; default to first allowed dir or temp.
+	workDir := req.WorkDir
+	if workDir == "" && len(s.cfg.AllowedWorkDirs) > 0 {
+		workDir = s.cfg.AllowedWorkDirs[0]
+	}
+	if workDir == "" {
+		workDir = os.TempDir()
+	}
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid work_dir")
+		return
+	}
+	// Security: work_dir must be within an allowed directory (if any are configured).
+	if len(s.cfg.AllowedWorkDirs) > 0 && !isAllowedWorkDir(abs, s.cfg.AllowedWorkDirs) {
+		writeError(w, http.StatusForbidden, "work_dir not within an allowed work directory")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", req.Command)
+	cmd.Dir = abs
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	runErr := cmd.Run()
+	output := buf.String()
+
+	type shellResp struct {
+		Output  string `json:"output"`
+		IsError bool   `json:"is_error"`
+	}
+	writeJSON(w, http.StatusOK, shellResp{Output: output, IsError: runErr != nil})
 }
 
 // ── board handlers ────────────────────────────────────────────────────────────
@@ -1645,7 +1699,18 @@ const kanbanHTML = `<!DOCTYPE html>
     .convo-add{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.72rem;padding:.15rem .4rem;cursor:pointer}
     .chat-input-row{display:flex;gap:.5rem;padding:.75rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
     .chat-input-row textarea{flex:1;padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.82rem;resize:none;height:56px}
+    .chat-input-row textarea.bash-mode{border-color:#b45309;background:#120e00;color:#fcd34d}
     .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+    /* ── Bash result overlay ── */
+    .bash-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center}
+    .bash-box{background:#0a1020;border:1px solid #253a5e;border-radius:.5rem;width:min(780px,94vw);max-height:70vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.8)}
+    .bash-hdr{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid #1a2744;flex-shrink:0}
+    .bash-cmd{flex:1;font-family:monospace;font-size:.8rem;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .bash-close{background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;line-height:1;padding:.1rem .3rem}
+    .bash-close:hover{color:#e2e8f0}
+    .bash-body{flex:1;overflow-y:auto;padding:.75rem 1rem;font-family:monospace;font-size:.78rem;white-space:pre-wrap;word-break:break-all;color:#e2e8f0;user-select:text;-webkit-user-select:text}
+    .bash-body.bash-err{color:#fca5a5}
+    .bash-loading{color:#64748b;font-style:italic}
 
     /* ── Thread sidebar ── */
     .thread-sidebar{width:220px;border-right:1px solid #1a2744;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
@@ -1831,7 +1896,7 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="convo-bar" id="convo-bar"></div>
           <div class="chat-input-row">
             <textarea id="chat-input" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
-            <button class="btn btn-primary" onclick="sendChat()">Send</button>
+            <button class="btn btn-primary" onclick="chatSendOrBash()">Send</button>
           </div>
         </div>
       </div>
@@ -2832,6 +2897,71 @@ const kanbanHTML = `<!DOCTYPE html>
     Promise.all(promises).then(function(){startFastPoll();loadChat()});
   }
 
+  // ── Bash mode (chat-input only) ──────────────────────────────────────────────
+  function isBashMode(el){
+    return el&&el.id==='chat-input'&&el.value.length>0&&el.value[0]==='!';
+  }
+
+  function checkBashMode(el){
+    if(!el)return;
+    if(isBashMode(el)){el.classList.add('bash-mode');el.placeholder='! bash command… (Enter to run, @ for file)';}
+    else{el.classList.remove('bash-mode');el.placeholder='Message… (Enter to send, Shift+Enter for newline)';}
+  }
+
+  var bashOverlay=null;
+  function showBashResult(cmd,output,isErr,loading){
+    if(!bashOverlay){
+      bashOverlay=document.createElement('div');
+      bashOverlay.className='bash-overlay';
+      bashOverlay.innerHTML='<div class="bash-box"><div class="bash-hdr"><span class="bash-cmd"></span><button class="bash-close" title="Close">✕</button></div><div class="bash-body"></div></div>';
+      bashOverlay.querySelector('.bash-close').addEventListener('click',closeBashResult);
+      bashOverlay.addEventListener('mousedown',function(e){if(e.target===bashOverlay)closeBashResult();});
+      document.body.appendChild(bashOverlay);
+    }
+    var cmdEl=bashOverlay.querySelector('.bash-cmd');
+    var bodyEl=bashOverlay.querySelector('.bash-body');
+    cmdEl.textContent='$ '+cmd;
+    if(loading){
+      bodyEl.className='bash-body bash-loading';
+      bodyEl.textContent='Running…';
+    } else {
+      bodyEl.className='bash-body'+(isErr?' bash-err':'');
+      bodyEl.textContent=output||'(no output)';
+    }
+    bashOverlay.style.display='flex';
+  }
+
+  function closeBashResult(){
+    if(bashOverlay)bashOverlay.style.display='none';
+  }
+
+  function runBashCmd(el){
+    var raw=el.value;
+    // Strip leading '!' and trim.
+    var cmd=raw.slice(1).trim();
+    if(!cmd)return;
+    var workDir='';
+    // Try to get the current work dir from the board context item.
+    if(boardCtxItem&&boardCtxItem.work_dir)workDir=boardCtxItem.work_dir;
+    showBashResult(cmd,'',false,true);
+    api('POST','/api/v1/shell',{command:cmd,work_dir:workDir})
+      .then(function(res){
+        showBashResult(cmd,res.output,res.is_error,false);
+      })
+      .catch(function(e){
+        showBashResult(cmd,'Error: '+e.message,true,false);
+      });
+    el.value='';
+    checkBashMode(el);
+  }
+
+  function chatSendOrBash(){
+    var el=ge('chat-input');
+    if(!el)return;
+    if(isBashMode(el)){runBashCmd(el);}
+    else{sendChat();}
+  }
+
   // ── Command & file mention popup ─────────────────────────────────────────────
   var mpMode=null,mpEl=null,mpPos=0,mpText='',mpItems=[],mpIdx=0,mpWorkDir='',mpPop=null;
   var pluginCmds=[];
@@ -2951,6 +3081,7 @@ const kanbanHTML = `<!DOCTYPE html>
     if(prevCh&&!/[\s\n\r\t]/.test(prevCh))return;
     if(ch==='/'){
       if(!pluginCmds.length)return;
+      if(isBashMode(el))return; // bash mode: no command picker
       mpMode='cmd';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir='';
       if(!mpPop)mpInit();mpLoadCmd('');
     } else {
@@ -3023,11 +3154,13 @@ const kanbanHTML = `<!DOCTYPE html>
     if(askIn)askIn.addEventListener('keydown',function(e){
       if(e.key==='Enter'&&(!mpMode||!mpItems.length))boardAsk();
     });
-    // Chat: Enter sends; Shift+Enter newline.
+    // Chat: Enter sends or runs bash; Shift+Enter newline.
     var ta=ge('chat-input');
     if(ta){
+      ta.addEventListener('input',function(){checkBashMode(ta);});
       ta.addEventListener('keydown',function(e){
-        if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
+        if(e.key==='Escape'&&isBashMode(ta)){ta.value='';checkBashMode(ta);return;}
+        if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();chatSendOrBash();}
       });
     }
   });

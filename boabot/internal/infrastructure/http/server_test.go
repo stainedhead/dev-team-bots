@@ -1908,3 +1908,122 @@ func TestPluginsRemove_NotFound(t *testing.T) {
 		t.Errorf("remove: expected 404, got %d", resp.StatusCode)
 	}
 }
+
+// ── Shell endpoint ────────────────────────────────────────────────────────────
+
+func newTestServerWithWorkDirs(dirs []string) *httptest.Server {
+	s := httpserver.New(httpserver.Config{
+		Auth:            &fakeAuth{},
+		Board:           &fakeBoardStore{},
+		Team:            &fakeControlPlane{},
+		Users:           &fakeUserStore{},
+		Skills:          &fakeSkillRegistry{},
+		DLQ:             &fakeDLQStore{},
+		AllowedWorkDirs: dirs,
+	})
+	return httptest.NewServer(s.Handler())
+}
+
+func TestShell_Success(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServerWithWorkDirs([]string{dir})
+	defer srv.Close()
+
+	body := `{"command":"echo hello","work_dir":"` + dir + `"}`
+	resp := doJSON(t, srv, http.MethodPost, "shell", body)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result struct {
+		Output  string `json:"output"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.IsError {
+		t.Errorf("expected is_error=false")
+	}
+	if !strings.Contains(result.Output, "hello") {
+		t.Errorf("expected output to contain 'hello', got %q", result.Output)
+	}
+}
+
+func TestShell_CommandError_ReturnsIsError(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServerWithWorkDirs([]string{dir})
+	defer srv.Close()
+
+	body := `{"command":"exit 1","work_dir":"` + dir + `"}`
+	resp := doJSON(t, srv, http.MethodPost, "shell", body)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result struct {
+		IsError bool `json:"is_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !result.IsError {
+		t.Errorf("expected is_error=true for non-zero exit")
+	}
+}
+
+func TestShell_ForbiddenDir_Returns403(t *testing.T) {
+	allowed := t.TempDir()
+	forbidden := t.TempDir()
+	srv := newTestServerWithWorkDirs([]string{allowed})
+	defer srv.Close()
+
+	body := `{"command":"echo hi","work_dir":"` + forbidden + `"}`
+	resp := doJSON(t, srv, http.MethodPost, "shell", body)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestShell_NoCommand_Returns400(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServerWithWorkDirs([]string{dir})
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodPost, "shell", `{"command":"","work_dir":"`+dir+`"}`)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestShell_Unauthenticated_Returns401(t *testing.T) {
+	dir := t.TempDir()
+	s := httpserver.New(httpserver.Config{
+		Auth:            &fakeAuth{validateTokenFn: func(_ string) (domainauth.Claims, error) { return domainauth.Claims{}, errors.New("bad") }},
+		Board:           &fakeBoardStore{},
+		Team:            &fakeControlPlane{},
+		Users:           &fakeUserStore{},
+		Skills:          &fakeSkillRegistry{},
+		DLQ:             &fakeDLQStore{},
+		AllowedWorkDirs: []string{dir},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/shell", strings.NewReader(`{"command":"echo hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}

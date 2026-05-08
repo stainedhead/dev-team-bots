@@ -1738,9 +1738,9 @@ const kanbanHTML = `<!DOCTYPE html>
     .empty-state{text-align:center;padding:3rem;color:#1e2d4a;font-style:italic;font-size:.8rem}
 
     /* ── Dialogs ── */
-    dialog{background:#0f1829;color:#e2e8f0;border:1px solid #1a2744;border-radius:.625rem;padding:1.375rem;min-width:min(560px,95vw);box-shadow:0 20px 60px #000a}
+    dialog{background:#0f1829;color:#e2e8f0;border:1px solid #1a2744;border-radius:.625rem;padding:1.375rem;min-width:min(560px,95vw);box-shadow:0 20px 60px #000a;position:fixed;margin:0;top:50%;left:50%;transform:translate(-50%,-50%)}
     dialog::backdrop{background:#000b}
-    dialog h2{font-size:.95rem;font-weight:600;margin-bottom:1rem}
+    dialog h2{font-size:.95rem;font-weight:600;margin-bottom:1rem;cursor:move;user-select:none;padding-bottom:.5rem;margin-bottom:.75rem;border-bottom:1px solid #1a2744}
     .fg{margin-bottom:.75rem}
     .fl{display:block;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:.3rem}
     .fi{width:100%;padding:.6rem .75rem;background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.9rem}
@@ -3333,9 +3333,39 @@ const kanbanHTML = `<!DOCTYPE html>
     Promise.all([p1,p2]).then(function(){pluginCmds=cmds;});
   }
 
+  // ── Draggable dialogs ─────────────────────────────────────────────────────────
+  function makeDraggable(dlgEl){
+    var handle=dlgEl.querySelector('h2');
+    if(!handle)return;
+    var startX=0,startY=0,startL=0,startT=0,active=false;
+    handle.addEventListener('mousedown',function(e){
+      if(e.button!==0)return;
+      var r=dlgEl.getBoundingClientRect();
+      dlgEl.style.transform='none';
+      dlgEl.style.left=r.left+'px';
+      dlgEl.style.top=r.top+'px';
+      startX=e.clientX;startY=e.clientY;startL=r.left;startT=r.top;
+      active=true;e.preventDefault();
+    });
+    document.addEventListener('mousemove',function(e){
+      if(!active)return;
+      var l=startL+(e.clientX-startX);
+      var t=startT+(e.clientY-startY);
+      // clamp so dialog can't be dragged fully off-screen
+      l=Math.max(0,Math.min(l,window.innerWidth-dlgEl.offsetWidth));
+      t=Math.max(0,Math.min(t,window.innerHeight-dlgEl.offsetHeight));
+      dlgEl.style.left=l+'px';dlgEl.style.top=t+'px';
+    });
+    document.addEventListener('mouseup',function(){active=false;});
+    dlgEl.addEventListener('close',function(){
+      dlgEl.style.left='';dlgEl.style.top='';dlgEl.style.transform='';
+    });
+  }
+
   // Enter sends; Shift+Enter inserts newline.
   document.addEventListener('DOMContentLoaded',function(){
     mpInit();loadPluginCmds();
+    document.querySelectorAll('dialog').forEach(makeDraggable);
     function getAtWorkDir(){
       var sel=ge('at-workdir-sel'),txt=ge('at-workdir-txt');
       var base=sel?sel.value:'';

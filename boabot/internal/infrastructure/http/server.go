@@ -3183,27 +3183,33 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // Move mpPop into the dialog that owns el (if any) so it renders in the
-  // top layer alongside the dialog. position:fixed inside a transformed
-  // ancestor is relative to that ancestor, not the viewport, so mpPosition()
-  // must subtract the parent's bounding-rect offset.
+  // top layer alongside the dialog. The dialog has transform:translate(-50%,-50%)
+  // which makes position:fixed children relative to the dialog, not the viewport.
+  // Switch to position:absolute (unambiguously dialog-relative) when inside a dialog.
   function mpEnsureHost(el){
     var dlg=el.closest('dialog[open]');
     var host=dlg||document.body;
     if(mpPop.parentNode!==host)host.appendChild(mpPop);
+    mpPop.style.position=(host!==document.body)?'absolute':'';
   }
 
   function mpPosition(){
     if(!mpEl||!mpPop)return;
-    // position:fixed inside a top-layer element (showModal dialog) is still
-    // viewport-relative, so always use viewport coordinates directly.
     var r=mpEl.getBoundingClientRect();
-    var left=Math.max(4,r.left);
-    if(left+320>window.innerWidth)left=Math.max(4,window.innerWidth-324);
+    var par=mpPop.parentNode;
+    var offL=0,offT=0,cH=window.innerHeight,cW=window.innerWidth;
+    if(par&&par!==document.body){
+      var pr=par.getBoundingClientRect();
+      offL=pr.left;offT=pr.top;cH=pr.height;cW=pr.width;
+    }
+    var left=Math.max(4,r.left-offL);
+    if(left+320>cW-4)left=Math.max(4,cW-324);
     mpPop.style.left=left+'px';
-    if(window.innerHeight-r.bottom<240&&r.top>240){
-      mpPop.style.top='';mpPop.style.bottom=(window.innerHeight-r.top+2)+'px';
+    var spaceBelow=cH-(r.bottom-offT);
+    if(spaceBelow<240&&(r.top-offT)>240){
+      mpPop.style.top='';mpPop.style.bottom=(cH-(r.top-offT)+2)+'px';
     } else {
-      mpPop.style.bottom='';mpPop.style.top=(r.bottom+2)+'px';
+      mpPop.style.bottom='';mpPop.style.top=(r.bottom-offT+2)+'px';
     }
     mpPop.style.display='block';
   }
@@ -3332,7 +3338,7 @@ const kanbanHTML = `<!DOCTYPE html>
       (plugins||[]).forEach(function(p){
         if(p.status==='active'&&p.manifest&&p.manifest.provides&&p.manifest.provides.tools){
           p.manifest.provides.tools.forEach(function(t){
-            cmds.push({name:p.name+':'+t.name,desc:t.description||''});
+            cmds.push({name:p.name+':'+(t.Name||t.name||''),desc:t.Description||t.description||''});
           });
         }
       });
@@ -3371,7 +3377,9 @@ const kanbanHTML = `<!DOCTYPE html>
     document.addEventListener('mouseup',function(){active=false;});
     dlgEl.addEventListener('close',function(){
       dlgEl.style.left='';dlgEl.style.top='';dlgEl.style.transform='';
-      if(mpPop&&mpPop.parentNode===dlgEl)document.body.appendChild(mpPop);
+      if(mpPop&&mpPop.parentNode===dlgEl){
+        document.body.appendChild(mpPop);mpPop.style.position='';
+      }
     });
   }
 

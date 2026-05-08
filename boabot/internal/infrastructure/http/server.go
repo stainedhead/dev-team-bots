@@ -1915,10 +1915,11 @@ const kanbanHTML = `<!DOCTYPE html>
       <div class="sec-hdr">
         <div class="sec-title">Registry Browser</div>
         <div class="sec-acts">
-          <select id="registry-select" onchange="loadRegistryIndex()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
+          <select id="registry-select" onchange="onRegistryChange()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"></select>
           <input type="text" id="registry-search" placeholder="Search plugins…" oninput="filterRegistryCards()" style="margin-right:8px;padding:4px 8px;border-radius:4px;border:1px solid #ccc" />
           <button class="btn btn-secondary btn-sm" onclick="showAddRegistryModal()">Add Registry</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadRegistries()">Refresh</button>
+          <button id="registry-delete-btn" class="btn btn-sm" style="display:none;background:#7f1d1d;color:#fca5a5;margin-right:4px" onclick="deleteRegistry()">Delete</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshRegistry()">Refresh</button>
         </div>
       </div>
       <div id="registry-cards" style="display:flex;flex-wrap:wrap;gap:12px;padding:12px;"><div class="empty-state">Select a registry above</div></div>
@@ -2401,8 +2402,51 @@ const kanbanHTML = `<!DOCTYPE html>
         opt.value=r.name;opt.textContent=r.name+(r.trusted?' (trusted)':'');
         sel.appendChild(opt);
       });
-      if(prev)sel.value=prev;
+      if(prev&&regs.some(function(r){return r.name===prev;})){
+        sel.value=prev;
+        loadRegistryIndex();
+      } else {
+        ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';
+        updateRegistryDeleteBtn();
+      }
     }).catch(function(){});
+  }
+
+  function onRegistryChange(){
+    updateRegistryDeleteBtn();
+    loadRegistryIndex();
+  }
+
+  function updateRegistryDeleteBtn(){
+    var btn=ge('registry-delete-btn');
+    if(!btn)return;
+    btn.style.display=ge('registry-select').value?'inline-flex':'none';
+  }
+
+  function refreshRegistry(){
+    var name=ge('registry-select').value;
+    if(name){
+      // Force-fetch the index from the remote, then reload the list.
+      ge('registry-cards').innerHTML='<div class="empty-state">Refreshing…</div>';
+      api('GET','/api/v1/registries/'+encodeURIComponent(name)+'/index?force=true',null)
+        .then(function(idx){renderRegistryCards(idx.plugins||[]);})
+        .catch(function(e){ge('registry-cards').innerHTML='<div class="empty-state">Error: '+e.message+'</div>';});
+    } else {
+      loadRegistries();
+    }
+  }
+
+  function deleteRegistry(){
+    var name=ge('registry-select').value;
+    if(!name)return;
+    if(!confirm('Remove registry "'+name+'"?'))return;
+    api('DELETE','/api/v1/registries/'+encodeURIComponent(name),null)
+      .then(function(){
+        ge('registry-select').value='';
+        updateRegistryDeleteBtn();
+        ge('registry-cards').innerHTML='<div class="empty-state">Select a registry above</div>';
+        loadRegistries();
+      }).catch(function(e){alert('Delete failed: '+e.message);});
   }
 
   function loadRegistryIndex(){

@@ -10,6 +10,8 @@ orchestrator:
   work_dirs:
     - /Users/iggybdda/Code
     - /tmp
+  plugins:
+    install_dir: /Users/iggybdda/Code/stainedhead/Golang/dev-team-bots/boabot/bin/plugins
 
 models:
   default: ollama-chat

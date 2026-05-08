@@ -1754,10 +1754,21 @@ const kanbanHTML = `<!DOCTYPE html>
     /* ── Chat ── */
     .chat-wrap{display:flex;flex-direction:column;flex:1;overflow:hidden}
     .chat-hist{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.5rem}
-    .chat-bubble{max-width:70%;padding:.5rem .75rem;border-radius:.5rem;font-size:.8rem;line-height:1.4}
+    .chat-bubble{max-width:80%;padding:.5rem .75rem;border-radius:.5rem;font-size:.8rem;line-height:1.5}
     .chat-out{background:#1e3a5f;color:#e2e8f0;align-self:flex-end;border-bottom-right-radius:.125rem}
     .chat-in{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:.125rem}
     .chat-meta{font-size:.62rem;color:#475569;margin-top:.2rem}
+    .chat-bubble h1,.chat-bubble h2,.chat-bubble h3,.chat-bubble h4,.ask-msg-body h1,.ask-msg-body h2,.ask-msg-body h3,.ask-msg-body h4{margin:.6rem 0 .25rem;font-weight:700;line-height:1.2}
+    .chat-bubble h1,.ask-msg-body h1{font-size:1.1em}.chat-bubble h2,.ask-msg-body h2{font-size:1em}.chat-bubble h3,.ask-msg-body h3{font-size:.95em}.chat-bubble h4,.ask-msg-body h4{font-size:.9em}
+    .chat-bubble p,.ask-msg-body p{margin:.25rem 0}
+    .chat-bubble ul,.chat-bubble ol,.ask-msg-body ul,.ask-msg-body ol{margin:.25rem 0 .25rem 1.2rem;padding:0}
+    .chat-bubble li,.ask-msg-body li{margin:.1rem 0}
+    .chat-bubble code,.ask-msg-body code{background:#0a1020;border:1px solid #1a2744;border-radius:.2rem;padding:.05em .3em;font-family:monospace;font-size:.9em}
+    .chat-bubble pre,.ask-msg-body pre{background:#0a1020;border:1px solid #1a2744;border-radius:.3rem;padding:.5rem .65rem;overflow-x:auto;margin:.35rem 0}
+    .chat-bubble pre code,.ask-msg-body pre code{background:none;border:none;padding:0;font-size:.82em}
+    .chat-bubble blockquote,.ask-msg-body blockquote{border-left:3px solid #334155;margin:.25rem 0;padding:.1rem .6rem;color:#94a3b8}
+    .chat-bubble hr,.ask-msg-body hr{border:none;border-top:1px solid #1a2744;margin:.4rem 0}
+    .chat-bubble strong,.ask-msg-body strong{font-weight:700}.chat-bubble em,.ask-msg-body em{font-style:italic}
     .chat-thinking{display:flex;gap:4px;align-items:center;padding:.4rem .6rem}
     .chat-thinking span{width:7px;height:7px;border-radius:50%;background:#475569;animation:blink 1.4s infinite both}
     .chat-thinking span:nth-child(2){animation-delay:.2s}
@@ -2165,7 +2176,7 @@ const kanbanHTML = `<!DOCTYPE html>
         var isUser=m.direction==='outbound';
         html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
           +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
-          +'<div class="ask-msg-body">'+esc(m.content)+'</div>'
+          +'<div class="ask-msg-body">'+renderMd(m.content)+'</div>'
           +'</div>';
       });
       html+='</div>';
@@ -2186,6 +2197,48 @@ const kanbanHTML = `<!DOCTYPE html>
 
   // ── Util ────────────────────────────────────────────────────────────────────
   function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+  function renderMd(raw){
+    if(!raw)return'';
+    function inl(s){
+      s=s.replace(/\x60([^\x60]+)\x60/g,'<code>$1</code>');
+      s=s.replace(/\*\*\*([^*]+)\*\*\*/g,'<strong><em>$1</em></strong>');
+      s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+      s=s.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+      s=s.replace(/_([^_\n]+)_/g,'<em>$1</em>');
+      s=s.replace(/~~([^~]+)~~/g,'<del>$1</del>');
+      return s;
+    }
+    var fence='\x60\x60\x60';
+    var lines=raw.split('\n'),out='',inCode=false,codeBuf='',inList='',listBuf='';
+    function flushList(){
+      if(!inList)return;
+      out+='<'+(inList==='ul'?'ul':'ol')+'>'+listBuf+'</'+(inList==='ul'?'ul':'ol')+'>';
+      inList='';listBuf='';
+    }
+    for(var i=0;i<lines.length;i++){
+      var line=lines[i];
+      if(line.indexOf(fence)===0){
+        if(!inCode){flushList();codeBuf='';inCode=true;}
+        else{out+='<pre><code>'+esc(codeBuf.replace(/\n$/,''))+'</code></pre>';inCode=false;}
+        continue;
+      }
+      if(inCode){codeBuf+=line+'\n';continue;}
+      if(/^([-*_] *){3,}$/.test(line.trim())){flushList();out+='<hr>';continue;}
+      var hm=line.match(/^(#{1,6}) +(.*)/);
+      if(hm){flushList();var lv=hm[1].length;out+='<h'+lv+'>'+inl(esc(hm[2]))+'</h'+lv+'>';continue;}
+      if(line.indexOf('> ')===0){flushList();out+='<blockquote>'+inl(esc(line.slice(2)))+'</blockquote>';continue;}
+      var ulm=line.match(/^[*-] +(.*)/);
+      if(ulm){if(inList==='ol')flushList();inList='ul';listBuf+='<li>'+inl(esc(ulm[1]))+'</li>';continue;}
+      var olm=line.match(/^\d+\. +(.*)/);
+      if(olm){if(inList==='ul')flushList();inList='ol';listBuf+='<li>'+inl(esc(olm[1]))+'</li>';continue;}
+      if(!line.trim()){flushList();out+='<br>';continue;}
+      flushList();out+='<p>'+inl(esc(line))+'</p>';
+    }
+    flushList();
+    if(inCode)out+='<pre><code>'+esc(codeBuf)+'</code></pre>';
+    return out;
+  }
   function dlg(id){document.getElementById(id).showModal()}
   function cls(id){document.getElementById(id).close()}
   function ge(id){return document.getElementById(id)}
@@ -3048,7 +3101,7 @@ const kanbanHTML = `<!DOCTYPE html>
     wrap.style.alignItems=isOut?'flex-end':'flex-start';
     var bubble=document.createElement('div');
     bubble.className='chat-bubble '+(isOut?'chat-out':'chat-in');
-    bubble.textContent=msg.content||'';
+    bubble.innerHTML=renderMd(msg.content||'');
     var meta=document.createElement('div');
     meta.className='chat-meta';
     meta.textContent=esc(msg.bot_name)+' • '+ago(msg.created_at);
@@ -3430,7 +3483,10 @@ const kanbanHTML = `<!DOCTYPE html>
     }
     function getNiRootDir(){var sel=ge('ni-workdir-sel');return(sel&&sel.value)||firstSelOpt(sel);}
     function getAtRootDir(){var sel=ge('at-workdir-sel');return(sel&&sel.value)||firstSelOpt(sel);}
-    var bCtxDir=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
+    var bCtxDir=function(){
+      if(boardCtxItem&&boardCtxItem.work_dir)return boardCtxItem.work_dir;
+      return allWorkDirs&&allWorkDirs.length?allWorkDirs[0]:'';
+    };
     // Register mention keydown handlers FIRST so mpOnKeydown fires before send handlers.
     // Note: bctx-desc is dynamically recreated by loadBoardCtx() so it is attached there instead.
     attachMention(ge('chat-input'),bCtxDir);

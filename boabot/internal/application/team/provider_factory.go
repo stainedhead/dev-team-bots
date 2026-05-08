@@ -1,11 +1,14 @@
 package team
 
 import (
-	"errors"
+	"context"
 	"fmt"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/anthropic"
+	bedrock "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/aws/bedrock"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/codeagent"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	openaiinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
@@ -60,9 +63,12 @@ func buildProvider(pc config.ProviderConfig) (domain.ModelProvider, error) {
 		return p, nil
 
 	case "bedrock":
-		return nil, errors.New(
-			"team: bedrock provider requires AWS SDK setup; use ANTHROPIC_API_KEY for local mode",
-		)
+		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("team: build bedrock provider %q: load AWS config: %w", pc.Name, err)
+		}
+		client := bedrockruntime.NewFromConfig(awsCfg)
+		return bedrock.NewProvider(client, pc.ModelID), nil
 
 	case "openai":
 		p, err := openaiinfra.NewProvider(pc.Endpoint, pc.ModelID)

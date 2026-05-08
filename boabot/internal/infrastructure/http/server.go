@@ -149,6 +149,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tasks/{id}", s.auth(s.handleTaskGet))
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.auth(s.adminOnly(s.handleTaskDelete)))
 	mux.HandleFunc("POST /api/v1/tasks/{id}/run", s.auth(s.handleTaskRunNow))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/ask", s.auth(s.handleTaskAsk))
+	mux.HandleFunc("GET /api/v1/tasks/{id}/messages", s.auth(s.handleTaskMessages))
 	mux.HandleFunc("POST /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskCreate))
 	mux.HandleFunc("GET /api/v1/bots/{name}/tasks", s.auth(s.handleBotTaskList))
 
@@ -1349,6 +1351,80 @@ func (s *Server) handleBoardMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+// handleTaskAsk routes a question to the bot that ran a task and records the
+// conversation in a per-task private thread (thread ID "task-<id>").
+func (s *Server) handleTaskAsk(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	id := r.PathValue("id")
+	task, err := s.cfg.Tasks.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
+		writeError(w, http.StatusBadRequest, "content required")
+		return
+	}
+
+	ctx := r.Context()
+	threadID := "task-" + id
+	userMsg := domain.ChatMessage{
+		ThreadID:  threadID,
+		BotName:   task.BotName,
+		Direction: domain.ChatDirectionOutbound,
+		Content:   req.Content,
+	}
+	_ = s.cfg.Chat.Append(ctx, userMsg)
+
+	if s.cfg.AskRouter != nil {
+		title := task.Title
+		if title == "" {
+			title = "(no title)"
+		}
+		s.cfg.AskRouter.Enqueue(task.BotName, domain.AskRequest{
+			Question: fmt.Sprintf("Regarding task '%s': %s", title, req.Content),
+			ReplyFn: func(reply string) {
+				botMsg := domain.ChatMessage{
+					ThreadID:  threadID,
+					BotName:   task.BotName,
+					Direction: domain.ChatDirectionInbound,
+					Content:   reply,
+				}
+				_ = s.cfg.Chat.Append(context.Background(), botMsg)
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusCreated, userMsg)
+}
+
+// handleTaskMessages returns the private per-task conversation thread.
+func (s *Server) handleTaskMessages(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Chat == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat not available")
+		return
+	}
+	id := r.PathValue("id")
+	msgs, err := s.cfg.Chat.List(r.Context(), "task-"+id)
+	if err != nil {
+		writeInternalError(w, "task messages", err)
+		return
+	}
+	if msgs == nil {
+		msgs = []domain.ChatMessage{}
+	}
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
 // ── chat handlers ─────────────────────────────────────────────────────────────
 
 func (s *Server) handleChatList(w http.ResponseWriter, r *http.Request) {
@@ -1829,6 +1905,17 @@ const kanbanHTML = `<!DOCTYPE html>
     .ctx-row{display:flex;gap:.5rem;margin-bottom:.4rem}
     .ctx-lbl{color:#475569;min-width:80px;flex-shrink:0}
     .ctx-val{color:#e2e8f0;word-break:break-word;flex:1;min-width:0}
+    .tctx-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .5rem;margin-bottom:.6rem}
+    .tctx-pill{background:#1e293b;border:1px solid #1a2744;border-radius:999px;padding:.1rem .55rem;font-size:.72rem;color:#94a3b8}
+    .tctx-pill.ok{background:#052e16;border-color:#166534;color:#4ade80}
+    .tctx-pill.run{background:#1e1b4b;border-color:#3730a3;color:#a5b4fc}
+    .tctx-pill.fail{background:#450a0a;border-color:#7f1d1d;color:#f87171}
+    .tctx-time{font-size:.7rem;color:#475569}
+    .tctx-section-title{font-size:.95rem;font-weight:600;color:#e2e8f0;margin-bottom:.4rem}
+    .tctx-instr{font-size:.78rem;color:#cbd5e1;line-height:1.5;margin-bottom:.5rem;white-space:pre-wrap;word-break:break-word}
+    .tctx-prompt-link{font-size:.7rem;color:#60a5fa;cursor:pointer;text-decoration:none;display:inline-block;margin-bottom:.35rem}
+    .tctx-prompt-link:hover{text-decoration:underline}
+    .tctx-prompt{background:#050d1a;border:1px solid #1a2744;border-radius:.3rem;padding:.5rem .65rem;font-size:.72rem;color:#64748b;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;margin-bottom:.5rem}
     .ctx-output{background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;padding:.6rem .75rem;white-space:pre-wrap;font-family:monospace;font-size:.74rem;line-height:1.5;color:#94a3b8;max-height:160px;overflow-y:auto}
     .ctx-ask-row{display:flex;gap:.5rem;padding:.5rem 1rem;border-top:1px solid #1a2744;flex-shrink:0}
     .ctx-ask-row input{flex:1;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
@@ -1957,11 +2044,16 @@ const kanbanHTML = `<!DOCTYPE html>
           <span class="ctx-title" id="task-ctx-title">Select a task</span>
           <div class="ctx-tabs">
             <button class="ctx-tab on" id="tctx-t-detail" onclick="tctxTab('detail')">Details</button>
+            <button class="ctx-tab" id="tctx-t-ask"    onclick="tctxTab('ask')">Ask</button>
             <button class="ctx-tab" id="tctx-t-output" onclick="tctxTab('output')">Output</button>
           </div>
           <button class="ctx-close" onclick="closeTaskCtx()">&#x2715;</button>
         </div>
         <div class="ctx-body" id="task-ctx-body"></div>
+        <div class="ctx-ask-row" id="task-ctx-ask" style="display:none">
+          <input id="task-ctx-ask-input" placeholder="Ask the assigned bot&#x2026;"/>
+          <button class="btn btn-primary btn-sm" onclick="taskAsk()">Ask</button>
+        </div>
       </div>
     </div>
 
@@ -3827,13 +3919,23 @@ const kanbanHTML = `<!DOCTYPE html>
     if(rowEl){requestAnimationFrame(function(){rowEl.scrollIntoView({block:'nearest',behavior:'smooth'})})}
   }
 
+  var taskAskPending=false, taskAskPollTimer=null;
+
   function tctxTab(name){
     taskCtxActiveTab=name;
-    ['detail','output'].forEach(function(t){var el=ge('tctx-t-'+t);if(el)el.classList.toggle('on',t===name)});
+    ['detail','ask','output'].forEach(function(t){var el=ge('tctx-t-'+t);if(el)el.classList.toggle('on',t===name)});
+    var askRow=ge('task-ctx-ask');
+    if(askRow)askRow.style.display=name==='ask'?'flex':'none';
+    if(name!=='ask')stopTaskAskPoll();
     loadTaskCtx();
   }
 
+  function stopTaskAskPoll(){
+    if(taskAskPollTimer){clearInterval(taskAskPollTimer);taskAskPollTimer=null;}
+  }
+
   function closeTaskCtx(){
+    stopTaskAskPoll();
     var panel=ge('task-ctx');
     panel.style.height='0';
     panel.style.display='none';
@@ -3844,6 +3946,7 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!taskCtxTask)return;
     var body=ge('task-ctx-body');
     var t=taskCtxTask;
+
     if(taskCtxActiveTab==='output'){
       if(t.output){
         body.innerHTML='<div class="ctx-output" style="max-height:none">'+esc(t.output)+'</div>';
@@ -3854,15 +3957,88 @@ const kanbanHTML = `<!DOCTYPE html>
       }
       return;
     }
-    body.innerHTML=
-      (t.title?'<div class="ctx-row"><span class="ctx-lbl">Title</span><span class="ctx-val" style="font-weight:500">'+esc(t.title)+'</span></div>':'')+
-      '<div class="ctx-row"><span class="ctx-lbl">Bot</span><span class="ctx-val">'+esc(t.bot_name)+'</span></div>'+
-      '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(t.status)+'</span></div>'+
-      '<div class="ctx-row"><span class="ctx-lbl">Source</span><span class="ctx-val">'+(t.source||'&#x2014;')+'</span></div>'+
-      '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(t.created_at)+'</span></div>'+
-      (t.dispatched_at?'<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(t.dispatched_at)+'</span></div>':'')+
-      (t.completed_at?'<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(t.completed_at)+'</span></div>':'')+
-      '<div class="ctx-row"><span class="ctx-lbl">Instruction</span><span class="ctx-val">'+esc(t.instruction)+'</span></div>';
+
+    if(taskCtxActiveTab==='ask'){loadTaskAsk();return;}
+
+    // ── Details tab ──────────────────────────────────────────────────────────
+    var statusClass=t.status==='succeeded'?'ok':t.status==='running'?'run':t.status==='failed'?'fail':'';
+    var meta='<div class="tctx-meta">'
+      +'<span class="tctx-pill">'+esc(t.bot_name)+'</span>'
+      +'<span class="tctx-pill '+statusClass+'">'+esc(t.status)+'</span>'
+      +(t.source?'<span class="tctx-pill">'+esc(t.source)+'</span>':'')
+      +'<span class="tctx-time">Created '+ago(t.created_at)+'</span>'
+      +(t.dispatched_at?'<span class="tctx-time">· Dispatched '+ago(t.dispatched_at)+'</span>':'')
+      +(t.completed_at?'<span class="tctx-time">· Completed '+ago(t.completed_at)+'</span>':'')
+      +'</div>';
+    var titleBlock=t.title
+      ?'<div class="tctx-section-title">'+esc(t.title)+'</div>'
+      :'';
+    var promptBlock=t.instruction
+      ?'<a class="tctx-prompt-link" onclick="toggleTctxPrompt(this)">Review prompt &#x25BE;</a>'
+       +'<div class="tctx-prompt" style="display:none">'+esc(t.instruction)+'</div>'
+      :'';
+    body.innerHTML=meta+titleBlock+promptBlock;
+  }
+
+  function toggleTctxPrompt(link){
+    var p=link.nextElementSibling;
+    var open=p.style.display!=='none';
+    p.style.display=open?'none':'block';
+    link.innerHTML=open?'Review prompt &#x25BE;':'Hide prompt &#x25B4;';
+  }
+
+  function loadTaskAsk(){
+    if(!taskCtxTask)return;
+    var body=ge('task-ctx-body');
+    api('GET','/api/v1/tasks/'+taskCtxTask.id+'/messages',null)
+      .then(function(msgs){
+        if(!msgs||!msgs.length){
+          body.innerHTML='<div style="color:#475569;font-size:.75rem">No messages yet. Ask the assigned bot a question below.</div>';
+        } else {
+          var html='<div class="ask-thread">';
+          msgs.forEach(function(m){
+            var isUser=m.direction==='outbound';
+            html+='<div class="ask-msg '+(isUser?'ask-msg-user':'ask-msg-bot')+'">'
+              +'<div class="ask-msg-label">'+(isUser?'You':esc(m.bot_name||'Bot'))+'</div>'
+              +'<div class="ask-msg-body">'+renderMd(m.content)+'</div>'
+              +'</div>';
+          });
+          html+='</div>';
+          body.innerHTML=html;
+          if(taskAskPending&&msgs[msgs.length-1].direction==='inbound')taskAskPending=false;
+        }
+        if(taskAskPending){
+          var td=document.createElement('div');
+          td.style.cssText='display:flex;align-items:center;gap:.5rem;padding:.35rem .65rem';
+          td.innerHTML='<span style="font-size:.65rem;color:#64748b">thinking&#x2026;</span><div class="chat-thinking"><span></span><span></span><span></span></div>';
+          body.appendChild(td);
+        }
+        body.scrollTop=body.scrollHeight;
+      }).catch(function(){});
+  }
+
+  function taskAsk(){
+    if(!taskCtxTask||!token)return;
+    var inp=ge('task-ctx-ask-input');
+    var content=inp?inp.value.trim():'';
+    if(!content)return;
+    inp.value='';
+    api('POST','/api/v1/tasks/'+taskCtxTask.id+'/ask',{content:content})
+      .then(function(){
+        taskAskPending=true;
+        loadTaskAsk();
+        if(!taskAskPollTimer){
+          var taskID=taskCtxTask.id;
+          taskAskPollTimer=setInterval(function(){
+            if(taskCtxActiveTab!=='ask'||!taskCtxTask||taskCtxTask.id!==taskID){stopTaskAskPoll();return;}
+            api('GET','/api/v1/tasks/'+taskID+'/messages',null)
+              .then(function(msgs){
+                loadTaskAsk();
+                if(!taskAskPending)stopTaskAskPoll();
+              }).catch(function(){});
+          },2000);
+        }
+      }).catch(function(e){alert('Failed: '+e.message)});
   }
 
   // ── Task context resize ───────────────────────────────────────────────────────

@@ -1762,7 +1762,6 @@ func isValidWorkItemStatus(status string) bool {
 	return false
 }
 
-
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")

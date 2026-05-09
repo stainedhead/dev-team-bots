@@ -2192,6 +2192,9 @@ const kanbanHTML = `<!DOCTYPE html>
     .ctx-close{background:none;border:none;color:#475569;cursor:pointer;font-size:.9rem;padding:0}
     .ctx-close:hover{color:#e2e8f0}
     .ctx-working{color:#fbbf24;font-size:.75rem;animation:blink 1.5s infinite}
+    .rt-footer{display:flex;align-items:center;gap:.5rem;margin-top:.8rem;padding-top:.5rem;border-top:1px solid #1a2744;font-size:.72rem}
+    .rt-footer .rt-lbl{color:#475569}
+    .rt-footer .rt-val{color:#94a3b8;font-variant-numeric:tabular-nums;margin-left:auto}
 
     /* ── Scrollbars ── */
     ::-webkit-scrollbar{width:4px;height:4px}
@@ -2526,7 +2529,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var dropTargetId=null, dropPos=null;
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
-  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null, boardAskPending=false;
+  var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', boardCtxActivity=null, outputPollTimer=null, askPollTimer=null, boardAskPending=false;
 
   function renderBoardAskMsgs(msgs){
     var body=ge('board-ctx-body');
@@ -2553,8 +2556,11 @@ const kanbanHTML = `<!DOCTYPE html>
       td.innerHTML='<span style="font-size:.65rem;color:#64748b">thinking…</span><div class="chat-thinking"><span></span><span></span><span></span></div>';
       body.appendChild(td);
     }
+    var bAt=boardCtxActivity&&boardCtxActivity.task;
+    var ftrHtml=bAt?runTimeFooter(bAt.dispatched_at,bAt.completed_at):'';
+    if(ftrHtml){var ftrEl=document.createElement('div');ftrEl.innerHTML=ftrHtml;if(ftrEl.firstElementChild)body.appendChild(ftrEl.firstElementChild);}
   }
-  var taskCtxTask=null, taskCtxActiveTab='detail';
+  var taskCtxTask=null, taskCtxActiveTab='detail', taskOutputPollTimer=null, elapsedTimer=null;
   var allTasksList=[], currentTaskFilter='all';
   var dragging=false;
 
@@ -3952,6 +3958,7 @@ const kanbanHTML = `<!DOCTYPE html>
   function openBoardCtx(item,cardEl){
     boardCtxItem=item;
     boardCtxThread=null;
+    boardCtxActivity=null;
     var panel=ge('board-ctx');
     panel.style.display='flex';
     panel.style.height=bctxH+'px';
@@ -3992,19 +3999,46 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function stopOutputPoll(){if(outputPollTimer){clearInterval(outputPollTimer);outputPollTimer=null;}}
   function stopAskPoll(){if(askPollTimer){clearInterval(askPollTimer);askPollTimer=null;}}
+  function stopTaskOutputPoll(){if(taskOutputPollTimer){clearInterval(taskOutputPollTimer);taskOutputPollTimer=null;}}
+  function stopElapsedTimer(){if(elapsedTimer){clearInterval(elapsedTimer);elapsedTimer=null;}}
+  function startElapsedTimer(since){
+    stopElapsedTimer();
+    elapsedTimer=setInterval(function(){
+      var el=ge('rt-elapsed');if(!el){stopElapsedTimer();return;}
+      el.textContent=fmtDur(Date.now()-new Date(since).getTime());
+    },1000);
+  }
+  function fmtDur(ms){
+    var s=Math.floor(ms/1000);
+    if(s<60)return s+'s';
+    var m=Math.floor(s/60);return m+'m '+(s%60)+'s';
+  }
+  function runTimeFooter(dispAt,compAt){
+    if(!dispAt)return '';
+    if(compAt){
+      var dur=new Date(compAt).getTime()-new Date(dispAt).getTime();
+      return '<div class="rt-footer"><span class="rt-lbl">Run time</span><span class="rt-val">'+fmtDur(dur)+'</span></div>';
+    }
+    var init=fmtDur(Date.now()-new Date(dispAt).getTime());
+    setTimeout(function(){startElapsedTimer(dispAt);},0);
+    return '<div class="rt-footer"><span class="rt-lbl">Running for</span><span class="rt-val"><span id="rt-elapsed">'+init+'</span></span></div>';
+  }
 
   function closeBoardCtx(){
     stopOutputPoll();
     stopAskPoll();
+    stopElapsedTimer();
     var panel=ge('board-ctx');
     panel.style.height='0';
     panel.style.display='none';
     boardCtxItem=null;
+    boardCtxActivity=null;
   }
 
   function bctxTab(name){
     if(name!=='output')stopOutputPoll();
     if(name!=='ask'){stopAskPoll();boardAskPending=false;}
+    stopElapsedTimer();
     boardCtxTab=name;
     ['detail','output','ask','files'].forEach(function(t){
       var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
@@ -4065,6 +4099,7 @@ const kanbanHTML = `<!DOCTYPE html>
           : (it.description?esc(it.description):'&#x2014;'))+
         '</span></div>';
 
+      var bActTask=boardCtxActivity&&boardCtxActivity.task;
       body.innerHTML=
         '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
         botRow+
@@ -4077,7 +4112,15 @@ const kanbanHTML = `<!DOCTYPE html>
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
         (it.active_task_id&&it.status==='in-progress'?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
         (canEdit?'<div style="margin-top:.75rem"><button id="bctx-save-btn" class="btn btn-primary btn-sm" disabled onclick="saveBoardAllEdits()" style="opacity:.4;cursor:not-allowed">Save changes</button></div>':'')+
-        (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'');
+        (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'')+
+        (bActTask?runTimeFooter(bActTask.dispatched_at,bActTask.completed_at):'');
+      // If we don't have activity timing yet, fetch it once to populate the footer.
+      if(!boardCtxActivity){
+        var _detailItemID=it.id;
+        api('GET','/api/v1/board/'+_detailItemID+'/activity',null)
+          .then(function(resp){boardCtxActivity=resp;if(boardCtxTab==='detail'&&boardCtxItem&&boardCtxItem.id===_detailItemID)loadBoardCtx();})
+          .catch(function(){});
+      }
       // Re-attach mention pickers to dynamically-created editable fields.
       if(canEdit){
         var _bwd=function(){return boardCtxItem&&boardCtxItem.work_dir?boardCtxItem.work_dir:'';};
@@ -4087,20 +4130,21 @@ const kanbanHTML = `<!DOCTYPE html>
     } else if(boardCtxTab==='output'){
       body.innerHTML='<div style="color:#475569">Loading&#x2026;</div>';
       function renderOutput(resp){
+        boardCtxActivity=resp;
+        stopElapsedTimer();
         var html='';
         var output=(resp.task&&resp.task.output)||'';
         if(!output&&resp.item&&resp.item.last_result)output=resp.item.last_result;
         if(output){
           html+='<pre id="output-pre" class="viewer-pre" style="max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">'+esc(output)+'</pre>';
-        } else if(resp.task&&(resp.task.status==='dispatched'||resp.task.status==='pending')){
+        } else if(resp.task&&(resp.task.status==='dispatched'||resp.task.status==='pending'||resp.task.status==='running')){
           html+='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
         } else {
           html+='<div style="color:#475569">No output yet</div>';
         }
         if(resp.task){
           html+='<div class="ctx-row" style="margin-top:.75rem"><span class="ctx-lbl">Task status</span><span class="ctx-val">'+esc(resp.task.status)+'</span></div>';
-          if(resp.task.dispatched_at)html+='<div class="ctx-row"><span class="ctx-lbl">Dispatched</span><span class="ctx-val">'+ago(resp.task.dispatched_at)+'</span></div>';
-          if(resp.task.completed_at)html+='<div class="ctx-row"><span class="ctx-lbl">Completed</span><span class="ctx-val">'+ago(resp.task.completed_at)+'</span></div>';
+          html+=runTimeFooter(resp.task.dispatched_at,resp.task.completed_at);
         }
         body.innerHTML=html;
         var pre=ge('output-pre');if(pre)pre.scrollTop=pre.scrollHeight;
@@ -4160,7 +4204,8 @@ const kanbanHTML = `<!DOCTYPE html>
         });
         html+='</div>';
       }
-      body.innerHTML=html;
+      var fAt=boardCtxActivity&&boardCtxActivity.task;
+      body.innerHTML=html+(fAt?runTimeFooter(fAt.dispatched_at,fAt.completed_at):'');
     }
   }
 
@@ -4261,6 +4306,8 @@ const kanbanHTML = `<!DOCTYPE html>
     var askRow=ge('task-ctx-ask');
     if(askRow)askRow.style.display=name==='ask'?'flex':'none';
     if(name!=='ask')stopTaskAskPoll();
+    if(name!=='output')stopTaskOutputPoll();
+    stopElapsedTimer();
     loadTaskCtx();
   }
 
@@ -4270,6 +4317,8 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function closeTaskCtx(){
     stopTaskAskPoll();
+    stopTaskOutputPoll();
+    stopElapsedTimer();
     var panel=ge('task-ctx');
     panel.style.height='0';
     panel.style.display='none';
@@ -4282,12 +4331,22 @@ const kanbanHTML = `<!DOCTYPE html>
     var t=taskCtxTask;
 
     if(taskCtxActiveTab==='output'){
+      stopElapsedTimer();
       if(t.output){
-        body.innerHTML='<div class="ctx-output" style="max-height:none">'+esc(t.output)+'</div>';
+        body.innerHTML='<div class="ctx-output" style="max-height:none">'+esc(t.output)+'</div>'+runTimeFooter(t.dispatched_at,t.completed_at);
+        stopTaskOutputPoll();
       } else if(t.status==='running'){
-        body.innerHTML='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>';
+        body.innerHTML='<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>'+runTimeFooter(t.dispatched_at,null);
+        if(!taskOutputPollTimer){
+          var _tPollID=t.id;
+          taskOutputPollTimer=setInterval(function(){
+            if(taskCtxActiveTab!=='output'||!taskCtxTask||taskCtxTask.id!==_tPollID){stopTaskOutputPoll();return;}
+            api('GET','/api/v1/tasks/'+_tPollID,null).then(function(fresh){taskCtxTask=fresh;loadTaskCtx();}).catch(function(){});
+          },2000);
+        }
       } else {
-        body.innerHTML='<div style="color:#475569;font-size:.78rem">No output recorded.</div>';
+        body.innerHTML='<div style="color:#475569;font-size:.78rem">No output recorded.</div>'+runTimeFooter(t.dispatched_at,t.completed_at);
+        stopTaskOutputPoll();
       }
       return;
     }
@@ -4327,7 +4386,7 @@ const kanbanHTML = `<!DOCTYPE html>
       ?'<a class="tctx-prompt-link" onclick="toggleTctxPrompt(this)">Review prompt &#x25BE;</a>'
        +'<div class="tctx-prompt" style="display:none">'+esc(t.instruction)+'</div>'
       :'';
-    body.innerHTML=meta+titleBlock+bodyBlock+promptBlock;
+    body.innerHTML=meta+titleBlock+bodyBlock+promptBlock+runTimeFooter(t.dispatched_at,t.completed_at);
   }
 
   function toggleTctxPrompt(link){
@@ -4363,6 +4422,9 @@ const kanbanHTML = `<!DOCTYPE html>
           td.innerHTML='<span style="font-size:.65rem;color:#64748b">thinking&#x2026;</span><div class="chat-thinking"><span></span><span></span><span></span></div>';
           body.appendChild(td);
         }
+        var _tAsk=taskCtxTask;
+        var ftrHtml=_tAsk?runTimeFooter(_tAsk.dispatched_at,_tAsk.completed_at):'';
+        if(ftrHtml){var ftrEl=document.createElement('div');ftrEl.innerHTML=ftrHtml;if(ftrEl.firstElementChild)body.appendChild(ftrEl.firstElementChild);}
         body.scrollTop=body.scrollHeight;
       }).catch(function(){});
   }

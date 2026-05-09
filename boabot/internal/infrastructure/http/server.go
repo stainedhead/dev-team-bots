@@ -1395,10 +1395,10 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	// Execute loop. It only makes sense when the item is in-progress; for any
 	// other status the bot's Execute loop is not running and the channel is
 	// never drained.
-	instruction := fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content)
 	if item.Status == domain.WorkItemStatusInProgress && s.cfg.AskRouter != nil {
+		midTask := fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content)
 		s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
-			Question: instruction,
+			Question: midTask,
 			ReplyFn: func(reply string) {
 				botMsg := domain.ChatMessage{
 					ThreadID:  threadID,
@@ -1410,10 +1410,13 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	} else if s.cfg.Dispatcher != nil {
-		// Bot is idle (or item not in-progress) — dispatch a chat task.
-		// The TaskResultHandler in TeamManager writes the output as an inbound
-		// message on this thread once the task completes.
-		_, _ = s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil,
+		// Bot is idle — dispatch a Q&A task with full item context so the bot
+		// can answer questions about the work item without taking active actions.
+		chatInstruction := buildBoardAskInstruction(item, req.Content, func() []domain.ChatMessage {
+			msgs, _ := s.cfg.Chat.List(ctx, threadID)
+			return msgs
+		})
+		_, _ = s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, chatInstruction, nil,
 			domain.DirectTaskSourceChat, threadID, item.WorkDir)
 	}
 
@@ -1561,6 +1564,45 @@ func buildTaskAskInstruction(task domain.DirectTask, question string, history fu
 		sb.WriteString("\n")
 	}
 	fmt.Fprintf(&sb, "Operator: %s", question)
+	return sb.String()
+}
+
+// buildBoardAskInstruction assembles a Q&A prompt for dispatching when the
+// operator asks about a board item that is not currently in-progress. It
+// frames the bot as an answerer (not an actor), and includes the item's
+// description, status, last output, and prior conversation history.
+func buildBoardAskInstruction(item domain.WorkItem, question string, history func() []domain.ChatMessage) string {
+	var sb strings.Builder
+	sb.WriteString("You are in a conversation with an operator about a work item on the team board. ")
+	sb.WriteString("Your role is to answer questions, explain your previous actions, and help the operator understand the current state of the work. ")
+	sb.WriteString("Do not take active actions — this is a Q&A context.\n\n")
+
+	fmt.Fprintf(&sb, "Work item: %s\n", item.Title)
+	if item.Description != "" {
+		fmt.Fprintf(&sb, "Description: %s\n", item.Description)
+	}
+	fmt.Fprintf(&sb, "Status: %s\n", string(item.Status))
+	if item.LastResult != "" {
+		fmt.Fprintf(&sb, "\nLast output:\n%s\n", item.LastResult)
+	}
+
+	msgs := history()
+	// msgs is newest-first; reverse for chronological, skip the just-appended outbound message.
+	var prior []domain.ChatMessage
+	for i := len(msgs) - 1; i >= 1 && len(prior) < 10; i-- {
+		prior = append(prior, msgs[i])
+	}
+	if len(prior) > 0 {
+		sb.WriteString("\nPrior conversation:\n")
+		for _, m := range prior {
+			who := "Operator"
+			if m.Direction == domain.ChatDirectionInbound {
+				who = item.AssignedTo
+			}
+			fmt.Fprintf(&sb, "%s: %s\n", who, m.Content)
+		}
+	}
+	fmt.Fprintf(&sb, "\nOperator: %s", question)
 	return sb.String()
 }
 
@@ -2147,6 +2189,8 @@ const kanbanHTML = `<!DOCTYPE html>
     .chat-input-wrap textarea.bash-mode{border-color:#b45309;background:#120e00;color:#fcd34d;padding-left:1.4rem}
     #chat-bash-prefix{position:absolute;left:.45rem;top:.42rem;color:#ef4444;font-weight:700;font-size:.95rem;line-height:1;pointer-events:none;display:none;font-family:monospace}
     .chat-input-row select{padding:.45rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+    .bctx-meta{display:inline-flex;align-items:center;gap:.3rem;flex-shrink:0}
+    .bctx-badge{display:inline-flex;align-items:center;font-size:.68rem;padding:.1rem .4rem;border-radius:999px;border:1px solid #1a2744;color:#94a3b8;white-space:nowrap;background:#0d1627}
     /* ── Bash result overlay ── */
     .bash-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center}
     .bash-box{background:#0a1020;border:1px solid #253a5e;border-radius:.5rem;width:min(780px,94vw);max-height:70vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.8)}
@@ -2182,8 +2226,9 @@ const kanbanHTML = `<!DOCTYPE html>
     .ctx-panel{background:#070d1a;border-top:2px solid #1a2744;overflow:hidden;display:flex;flex-direction:column;flex-shrink:0}
     .ctx-resize-handle{height:6px;cursor:ns-resize;background:transparent;flex-shrink:0;display:flex;align-items:center;justify-content:center}
     .ctx-resize-handle::after{content:'';width:32px;height:2px;border-radius:1px;background:#1a2744}
-    .ctx-hdr{display:flex;align-items:center;gap:.75rem;padding:.5rem 1rem;border-bottom:1px solid #1a2744;flex-shrink:0}
-    .ctx-title{font-size:.82rem;color:#e2e8f0;font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ctx-hdr{display:flex;align-items:center;gap:.5rem;padding:.5rem 1rem;border-bottom:1px solid #1a2744;flex-shrink:0}
+    .ctx-hdr-left{display:flex;align-items:center;gap:.4rem;flex:1;min-width:0;overflow:hidden}
+    .ctx-title{font-size:.82rem;color:#e2e8f0;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;min-width:0}
     .ctx-tabs{display:flex;gap:.25rem}
     .ctx-tab{background:none;border:none;color:#64748b;cursor:pointer;font-size:.72rem;padding:.2rem .5rem;border-radius:.25rem}
     .ctx-tab.on{background:#1e3a5f;color:#93c5fd}
@@ -2306,7 +2351,10 @@ const kanbanHTML = `<!DOCTYPE html>
       <div class="ctx-panel" id="board-ctx" style="display:none">
         <div class="ctx-resize-handle" id="bctx-resize"></div>
         <div class="ctx-hdr">
-          <span class="ctx-title" id="board-ctx-title">Select an item</span>
+          <div class="ctx-hdr-left">
+            <span class="ctx-title" id="board-ctx-title">Select an item</span>
+            <span class="bctx-meta" id="board-ctx-meta" style="display:none"></span>
+          </div>
           <div class="ctx-tabs">
             <button class="ctx-tab on" id="bctx-t-detail" onclick="bctxTab('detail')">Details</button>
             <button class="ctx-tab" id="bctx-t-output" onclick="bctxTab('output')">Output</button>
@@ -2551,17 +2599,14 @@ const kanbanHTML = `<!DOCTYPE html>
       <input type="radio" name="qcfg-mode" value="asap" checked onchange="onQcfgMode()"/> ASAP &mdash; run when a slot is available
     </label>
     <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
-      <input type="radio" name="qcfg-mode" value="run_at" onchange="onQcfgMode()"/> Run At &mdash; start at a specific time
-    </label>
-    <div id="qcfg-run-at-only-wrap" style="display:none;padding-left:1.5rem">
-      <input id="qcfg-run-at" type="datetime-local" class="fi" style="width:100%"/>
-    </div>
-    <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
       <input type="radio" name="qcfg-mode" value="run_when" onchange="onQcfgMode()"/> Run When &mdash; at a time and/or after another item
     </label>
-    <div id="qcfg-run-when-wrap" style="display:none;padding-left:1.5rem;display:none">
+    <div id="qcfg-run-when-wrap" style="display:none;padding-left:1.5rem">
       <div style="font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Run At (optional)</div>
-      <input id="qcfg-run-at-when" type="datetime-local" class="fi" style="width:100%;margin-bottom:.75rem"/>
+      <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.75rem">
+        <input id="qcfg-run-at-when" type="datetime-local" class="fi" style="flex:1"/>
+        <button type="button" title="Open calendar" onclick="try{ge('qcfg-run-at-when').showPicker()}catch(e){ge('qcfg-run-at-when').focus()}" style="background:#1a2744;border:1px solid #253a5e;border-radius:4px;color:#94a3b8;cursor:pointer;font-size:1rem;padding:.3rem .5rem;line-height:1">&#x1F4C5;</button>
+      </div>
       <div style="font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Run After (optional)</div>
       <select id="qcfg-after-item" class="fi" style="width:100%;margin-bottom:.4rem">
         <option value="">Select predecessor item&hellip;</option>
@@ -2955,7 +3000,7 @@ const kanbanHTML = `<!DOCTYPE html>
         allItems=items||[];
         if(boardCtxItem){
           var fresh=allItems.find(function(x){return x.id===boardCtxItem.id});
-          if(fresh){var prev=boardCtxItem.status;boardCtxItem=fresh;if(fresh.status!==prev)loadBoardCtx();}
+          if(fresh){var prev=boardCtxItem.status;boardCtxItem=fresh;updateBoardCtxMeta(fresh);if(fresh.status!==prev)loadBoardCtx();}
         }
         renderBoard();renderRoster();
       })
@@ -2983,9 +3028,7 @@ const kanbanHTML = `<!DOCTYPE html>
     qcfgPendingStatus=targetStatus||'queued';
     ge('qcfg-err').style.display='none';
     document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value==='asap';});
-    ge('qcfg-run-at-only-wrap').style.display='none';
     ge('qcfg-run-when-wrap').style.display='none';
-    ge('qcfg-run-at').value='';
     ge('qcfg-run-at-when').value='';
     ge('qcfg-require-success').checked=true;
     qcfgFillAfterSel(itemId,'');
@@ -2999,15 +3042,15 @@ const kanbanHTML = `<!DOCTYPE html>
     qcfgPendingStatus='queued';
     ge('qcfg-title').textContent='Edit Queue Configuration';
     ge('qcfg-err').style.display='none';
+    // run_at is a legacy mode; treat it as run_when with a time and no predecessor.
     var mode=it.queue_mode||'asap';
+    if(mode==='run_at')mode='run_when';
     document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value===mode;});
-    ge('qcfg-run-at-only-wrap').style.display=mode==='run_at'?'block':'none';
     ge('qcfg-run-when-wrap').style.display=mode==='run_when'?'block':'none';
     var pad=function(n){return n<10?'0'+n:String(n)};
     if(it.queue_run_at){
       var d=new Date(it.queue_run_at);
       var iso=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
-      ge('qcfg-run-at').value=iso;
       ge('qcfg-run-at-when').value=iso;
     }
     ge('qcfg-require-success').checked=it.queue_require_success!==false;
@@ -3018,7 +3061,6 @@ const kanbanHTML = `<!DOCTYPE html>
   function onQcfgMode(){
     var mode=document.querySelector('input[name="qcfg-mode"]:checked');
     if(!mode)return;
-    ge('qcfg-run-at-only-wrap').style.display=mode.value==='run_at'?'block':'none';
     ge('qcfg-run-when-wrap').style.display=mode.value==='run_when'?'block':'none';
   }
 
@@ -3047,11 +3089,6 @@ const kanbanHTML = `<!DOCTYPE html>
     var body={status:'queued',queue_mode:mode};
     var errEl=ge('qcfg-err');
     errEl.style.display='none';
-    if(mode==='run_at'){
-      var raw=ge('qcfg-run-at').value;
-      if(!raw){errEl.textContent='Please select a date and time.';errEl.style.display='block';return;}
-      body.queue_run_at=new Date(raw).toISOString();
-    }
     if(mode==='run_when'){
       var rawWhen=ge('qcfg-run-at-when').value;
       var predWhen=ge('qcfg-after-item').value;
@@ -4348,6 +4385,15 @@ const kanbanHTML = `<!DOCTYPE html>
 
   // ── Board context panel ───────────────────────────────────────────────────────
   var bctxH=280;
+  function updateBoardCtxMeta(item){
+    var meta=ge('board-ctx-meta');
+    if(!meta||!item)return;
+    var html='<span class="bctx-badge">'+esc(item.status)+'</span>'+
+      '<span class="bctx-badge">'+esc(item.assigned_to||'unassigned')+'</span>';
+    if(item.work_dir)html+='<span class="bctx-badge">&#x1F4C1; '+esc(leafDir(item.work_dir))+'</span>';
+    meta.innerHTML=html;
+  }
+
   function openBoardCtx(item,cardEl){
     boardCtxItem=item;
     boardCtxThread=null;
@@ -4356,6 +4402,7 @@ const kanbanHTML = `<!DOCTYPE html>
     panel.style.display='flex';
     panel.style.height=bctxH+'px';
     ge('board-ctx-title').textContent=item.title;
+    updateBoardCtxMeta(item);
     bctxTab(boardCtxTab);
     loadBoardCtx();
     if(cardEl){
@@ -4437,6 +4484,8 @@ const kanbanHTML = `<!DOCTYPE html>
       var el=ge('bctx-t-'+t);if(el)el.classList.toggle('on',t===name);
     });
     ge('board-ctx-ask').style.display=name==='ask'?'flex':'none';
+    var meta=ge('board-ctx-meta');
+    if(meta)meta.style.display=(name!=='detail'&&boardCtxItem)?'inline-flex':'none';
     if(boardCtxItem)loadBoardCtx();
   }
 

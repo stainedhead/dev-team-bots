@@ -2062,10 +2062,13 @@ const kanbanHTML = `<!DOCTYPE html>
     .col-hdr{padding:.6rem .75rem;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.4rem;flex-shrink:0}
     .col-cnt{padding:.05rem .35rem;border-radius:9999px;background:#1a2744;color:#475569;font-size:.6rem;font-weight:600}
     .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
-    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
+    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s;position:relative}
     .card:hover{border-color:#2d3e5a}
     .card.card-sel{border-color:#3b82f6;background:#0a1628;box-shadow:inset 3px 0 0 #3b82f6}
     .card.dragging{opacity:.35;cursor:grabbing}
+    .card-close{position:absolute;top:.3rem;right:.3rem;width:1.1rem;height:1.1rem;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:.2rem;color:#475569;font-size:.7rem;line-height:1;cursor:pointer;opacity:0;transition:opacity .1s,color .1s,background .1s;padding:0}
+    .card:hover .card-close{opacity:1}
+    .card-close:hover{color:#f87171;background:#1a0808}
     .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}
     .card.drag-below{border-bottom:2px solid #3b82f6;border-bottom-left-radius:0;border-bottom-right-radius:0}
     .card-title{font-size:.78rem;font-weight:500;line-height:1.35}
@@ -2910,6 +2913,7 @@ const kanbanHTML = `<!DOCTYPE html>
     d.draggable=!!token;
     d.style.cursor=token?'grab':'default';
     d.innerHTML=
+      (token?'<button class="card-close" title="Delete" onclick="event.stopPropagation();deleteCardItem(\''+esc(it.id)+'\',\''+esc(it.title)+'\',\''+esc(it.status)+'\')">&#x2715;</button>':'')+
       '<div class="card-title">'+statusPillHtml(it)+esc(it.title)+'</div>'+
       (it.status==='in-progress'&&it.active_task_id?'<div class="card-working">&#x2699; working&hellip;</div>':'')+
       queueInfoHtml(it)+
@@ -4732,6 +4736,19 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!confirm('Delete "'+boardCtxItem.title+'"? This cannot be undone.'))return;
     api('DELETE','/api/v1/board/'+boardCtxItem.id,null)
       .then(function(){closeBoardCtx();loadBoard()})
+      .catch(function(e){alert('Delete failed: '+e.message)});
+  }
+
+  function deleteCardItem(id,title,status){
+    if(!token)return;
+    if(status==='in-progress'){
+      if(!confirm('"'+title+'" is currently running.\nDeleting it will stop the bot mid-task. Continue?'))return;
+    }
+    api('DELETE','/api/v1/board/'+id,null)
+      .then(function(){
+        if(boardCtxItem&&boardCtxItem.id===id)closeBoardCtx();
+        loadBoard();
+      })
       .catch(function(e){alert('Delete failed: '+e.message)});
   }
 

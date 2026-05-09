@@ -18,12 +18,15 @@ func TestLocalProviderFactory_Bedrock(t *testing.T) {
 	cfgs := []config.ProviderConfig{
 		{Name: "br", Type: "bedrock", ModelID: "anthropic.claude-3-5-sonnet-20240620-v1:0"},
 	}
-	_, err := buildTestFactory(cfgs).Get("br")
-	if err == nil {
-		t.Fatal("expected error for bedrock provider in local mode, got nil")
+	// Bedrock now uses the AWS default credential chain. LoadDefaultConfig
+	// succeeds even without real credentials (it builds an empty config), so
+	// the provider is constructed successfully here.
+	p, err := buildTestFactory(cfgs).Get("br")
+	if err != nil {
+		t.Fatalf("unexpected error building bedrock provider: %v", err)
 	}
-	if !strings.Contains(err.Error(), "bedrock provider requires AWS SDK setup") {
-		t.Errorf("unexpected error message: %v", err)
+	if p == nil {
+		t.Fatal("expected non-nil provider")
 	}
 }
 

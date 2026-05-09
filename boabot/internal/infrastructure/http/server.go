@@ -11,12 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -66,22 +62,24 @@ type PluginRegistryUseCase interface {
 
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
-	Auth            AuthProvider
-	Board           domain.BoardStore
-	Team            domain.ControlPlane
-	Users           domain.UserStore
-	Skills          domain.SkillRegistry
-	DLQ             domain.DLQStore
-	Tasks           domain.DirectTaskStore
-	Dispatcher      domain.TaskDispatcher
-	Chat            domain.ChatStore
-	AskRouter       domain.AskRouter           // optional; routes mid-task questions to running bots
-	Pool            domain.TechLeadPool        // optional; nil means pool endpoint returns empty
-	AllowedWorkDirs []string                   // whitelisted base directories for item working directories
-	TaskLogBase     string                     // base directory for per-task log directories (optional)
-	IconPNG         []byte                     // optional branding icon served at /imgs/boabot-icon.png
-	BoardDispatcher domain.BoardItemDispatcher // use-case for dispatching board items to bots
-	MaxConcurrent   int                        // max items in-progress simultaneously (0 = unlimited)
+	Auth             AuthProvider
+	Board            domain.BoardStore
+	Team             domain.ControlPlane
+	Users            domain.UserStore
+	Skills           domain.SkillRegistry
+	DLQ              domain.DLQStore
+	Tasks            domain.DirectTaskStore
+	Dispatcher       domain.TaskDispatcher
+	Chat             domain.ChatStore
+	AskRouter        domain.AskRouter           // optional; routes mid-task questions to running bots
+	Pool             domain.TechLeadPool        // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs  []string                   // whitelisted base directories for item working directories
+	TaskLogBase      string                     // base directory for per-task log directories (optional)
+	IconPNG          []byte                     // raw icon served at /imgs/boabot-icon-raw.png
+	ProcessedIconPNG []byte                     // dark-pixels-transparent variant served at /imgs/boabot-icon.png
+	FaviconIconPNG   []byte                     // blue/white-filter variant served at /imgs/boabot-favicon.png
+	BoardDispatcher  domain.BoardItemDispatcher // use-case for dispatching board items to bots
+	MaxConcurrent    int                        // max items in-progress simultaneously (0 = unlimited)
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -92,9 +90,7 @@ type Config struct {
 
 // Server is the orchestrator HTTP server.
 type Server struct {
-	cfg           Config
-	processedIcon []byte // icon with dark pixels made transparent (sidebar watermark)
-	faviconIcon   []byte // icon with CSS-equivalent blue/white colour swap (browser tab)
+	cfg Config
 }
 
 // New creates a Server with the given config.
@@ -107,12 +103,7 @@ func New(cfg Config) *Server {
 			AllowedWorkDirs: cfg.AllowedWorkDirs,
 		})
 	}
-	s := &Server{cfg: cfg}
-	if len(cfg.IconPNG) > 0 {
-		s.processedIcon = makeDarkPixelsTransparent(cfg.IconPNG)
-		s.faviconIcon = applyBlueWhiteFilter(cfg.IconPNG)
-	}
-	return s
+	return &Server{cfg: cfg}
 }
 
 // Handler returns the root http.Handler for the server.
@@ -120,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Static assets
-	if len(s.cfg.IconPNG) > 0 {
+	if len(s.cfg.ProcessedIconPNG) > 0 || len(s.cfg.IconPNG) > 0 {
 		mux.HandleFunc("GET /imgs/boabot-icon.png", s.handleIcon)
 		mux.HandleFunc("GET /imgs/boabot-icon-raw.png", s.handleIconRaw)
 		mux.HandleFunc("GET /imgs/boabot-favicon.png", s.handleFavicon)
@@ -1817,7 +1808,7 @@ func isValidWorkItemStatus(status string) bool {
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(s.processedIcon)
+	_, _ = w.Write(s.cfg.ProcessedIconPNG)
 }
 
 func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
@@ -1829,146 +1820,7 @@ func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(s.faviconIcon)
-}
-
-// applyBlueWhiteFilter replicates the CSS filter chain used by the sidebar
-// watermark (invert → sepia(1) → saturate(4) → hue-rotate(190deg)) so the
-// favicon has the same blue-background / white-icon appearance.
-func applyBlueWhiteFilter(pngBytes []byte) []byte {
-	src, err := png.Decode(bytes.NewReader(pngBytes))
-	if err != nil {
-		return pngBytes
-	}
-	bounds := src.Bounds()
-	dst := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			rf, gf, bf := float64(r>>8), float64(g>>8), float64(b>>8)
-
-			// invert(1)
-			rf, gf, bf = 255-rf, 255-gf, 255-bf
-
-			// sepia(1)
-			rf, gf, bf = rf*0.393+gf*0.769+bf*0.189,
-				rf*0.349+gf*0.686+bf*0.168,
-				rf*0.272+gf*0.534+bf*0.131
-
-			// saturate(4) then hue-rotate(190deg) — work in HSL
-			h, s, l := rgbToHSL(clamp255(rf), clamp255(gf), clamp255(bf))
-			s = math.Min(1.0, s*4.0)
-			h = math.Mod(h+190.0, 360.0)
-			rf, gf, bf = hslToRGB(h, s, l)
-
-			dst.Set(x, y, color.RGBA{R: uint8(rf), G: uint8(gf), B: uint8(bf), A: uint8(a >> 8)})
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
-		return pngBytes
-	}
-	return buf.Bytes()
-}
-
-func clamp255(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 255 {
-		return 255
-	}
-	return v
-}
-
-func rgbToHSL(r, g, b float64) (h, s, l float64) {
-	r, g, b = r/255, g/255, b/255
-	mx, mn := math.Max(r, math.Max(g, b)), math.Min(r, math.Min(g, b))
-	l = (mx + mn) / 2
-	if mx == mn {
-		return 0, 0, l
-	}
-	d := mx - mn
-	if l > 0.5 {
-		s = d / (2 - mx - mn)
-	} else {
-		s = d / (mx + mn)
-	}
-	switch mx {
-	case r:
-		h = (g - b) / d
-		if g < b {
-			h += 6
-		}
-	case g:
-		h = (b-r)/d + 2
-	default:
-		h = (r-g)/d + 4
-	}
-	return h * 60, s, l
-}
-
-func hslToRGB(h, s, l float64) (r, g, b float64) {
-	if s == 0 {
-		v := l * 255
-		return v, v, v
-	}
-	var q float64
-	if l < 0.5 {
-		q = l * (1 + s)
-	} else {
-		q = l + s - l*s
-	}
-	p := 2*l - q
-	hk := h / 360
-	hue2rgb := func(t float64) float64 {
-		if t < 0 {
-			t++
-		}
-		if t > 1 {
-			t--
-		}
-		switch {
-		case t < 1.0/6:
-			return p + (q-p)*6*t
-		case t < 0.5:
-			return q
-		case t < 2.0/3:
-			return p + (q-p)*(2.0/3-t)*6
-		default:
-			return p
-		}
-	}
-	return hue2rgb(hk+1.0/3) * 255, hue2rgb(hk) * 255, hue2rgb(hk-1.0/3) * 255
-}
-
-// makeDarkPixelsTransparent decodes a PNG and sets any pixel whose luminance
-// falls below 50/255 to fully transparent. This lets CSS filters (invert, hue-rotate)
-// work correctly against a dark UI without producing a light rectangular halo.
-func makeDarkPixelsTransparent(pngBytes []byte) []byte {
-	src, err := png.Decode(bytes.NewReader(pngBytes))
-	if err != nil {
-		return pngBytes
-	}
-	bounds := src.Bounds()
-	dst := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
-			luma := (uint32(r8)*299 + uint32(g8)*587 + uint32(b8)*114) / 1000
-			if luma < 50 {
-				dst.Set(x, y, color.RGBA{})
-			} else {
-				dst.Set(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
-			}
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
-		return pngBytes
-	}
-	return buf.Bytes()
+	_, _ = w.Write(s.cfg.FaviconIconPNG)
 }
 
 // ── Kanban web UI ─────────────────────────────────────────────────────────────
@@ -2062,10 +1914,13 @@ const kanbanHTML = `<!DOCTYPE html>
     .col-hdr{padding:.6rem .75rem;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.4rem;flex-shrink:0}
     .col-cnt{padding:.05rem .35rem;border-radius:9999px;background:#1a2744;color:#475569;font-size:.6rem;font-weight:600}
     .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
-    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
+    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s;position:relative}
     .card:hover{border-color:#2d3e5a}
     .card.card-sel{border-color:#3b82f6;background:#0a1628;box-shadow:inset 3px 0 0 #3b82f6}
     .card.dragging{opacity:.35;cursor:grabbing}
+    .card-close{position:absolute;top:.3rem;right:.3rem;width:1.1rem;height:1.1rem;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:.2rem;color:#475569;font-size:.7rem;line-height:1;cursor:pointer;opacity:0;transition:opacity .1s,color .1s,background .1s;padding:0}
+    .card:hover .card-close{opacity:1}
+    .card-close:hover{color:#f87171;background:#1a0808}
     .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}
     .card.drag-below{border-bottom:2px solid #3b82f6;border-bottom-left-radius:0;border-bottom-right-radius:0}
     .card-title{font-size:.78rem;font-weight:500;line-height:1.35}
@@ -2910,6 +2765,7 @@ const kanbanHTML = `<!DOCTYPE html>
     d.draggable=!!token;
     d.style.cursor=token?'grab':'default';
     d.innerHTML=
+      (token?'<button class="card-close" title="Delete" onclick="event.stopPropagation();deleteCardItem(\''+esc(it.id)+'\',\''+esc(it.title)+'\',\''+esc(it.status)+'\')">&#x2715;</button>':'')+
       '<div class="card-title">'+statusPillHtml(it)+esc(it.title)+'</div>'+
       (it.status==='in-progress'&&it.active_task_id?'<div class="card-working">&#x2699; working&hellip;</div>':'')+
       queueInfoHtml(it)+
@@ -4732,6 +4588,19 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!confirm('Delete "'+boardCtxItem.title+'"? This cannot be undone.'))return;
     api('DELETE','/api/v1/board/'+boardCtxItem.id,null)
       .then(function(){closeBoardCtx();loadBoard()})
+      .catch(function(e){alert('Delete failed: '+e.message)});
+  }
+
+  function deleteCardItem(id,title,status){
+    if(!token)return;
+    if(status==='in-progress'){
+      if(!confirm('"'+title+'" is currently running.\nDeleting it will stop the bot mid-task. Continue?'))return;
+    }
+    api('DELETE','/api/v1/board/'+id,null)
+      .then(function(){
+        if(boardCtxItem&&boardCtxItem.id===id)closeBoardCtx();
+        loadBoard();
+      })
       .catch(function(e){alert('Delete failed: '+e.message)});
   }
 

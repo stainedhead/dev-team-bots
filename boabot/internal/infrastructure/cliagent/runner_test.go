@@ -2,9 +2,7 @@ package cliagent_test
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,14 +13,14 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/cliagent"
 )
 
-// writeSh writes a shell script to a temp directory and returns its path.
-func writeSh(t *testing.T, dir, name, content string) string {
+// requireSh returns the path to /bin/sh (or sh on PATH), skipping the test if unavailable.
+func requireSh(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+content), 0o755); err != nil {
-		t.Fatalf("write %s: %v", name, err)
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available")
 	}
-	return path
+	return sh
 }
 
 // TestSubprocessRunner_NormalCompletion verifies that the runner accumulates
@@ -32,28 +30,23 @@ func TestSubprocessRunner_NormalCompletion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	script := writeSh(t, dir, "multi.sh", `printf 'line1\nline2\nline3\n'`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "printf 'line1\\nline2\\nline3\\n'"},
+		WorkDir: t.TempDir(),
 	}
 
 	result, err := runner.Run(context.Background(), cfg, "", nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(result, "line1") {
-		t.Errorf("expected result to contain 'line1', got: %q", result)
-	}
-	if !strings.Contains(result, "line2") {
-		t.Errorf("expected result to contain 'line2', got: %q", result)
-	}
-	if !strings.Contains(result, "line3") {
-		t.Errorf("expected result to contain 'line3', got: %q", result)
+	for _, want := range []string{"line1", "line2", "line3"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("expected result to contain %q, got: %q", want, result)
+		}
 	}
 }
 
@@ -63,14 +56,13 @@ func TestSubprocessRunner_EchoOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	script := writeSh(t, dir, "echo.sh", `printf 'hello\n'`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "printf 'hello\\n'"},
+		WorkDir: t.TempDir(),
 	}
 
 	result, err := runner.Run(context.Background(), cfg, "", nil, nil)
@@ -89,14 +81,13 @@ func TestSubprocessRunner_ProgressCallback(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	script := writeSh(t, dir, "prog.sh", `printf 'alpha\nbeta\ngamma\n'`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "printf 'alpha\\nbeta\\ngamma\\n'"},
+		WorkDir: t.TempDir(),
 	}
 
 	var mu sync.Mutex
@@ -133,14 +124,13 @@ func TestSubprocessRunner_NilStdinChannel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	script := writeSh(t, dir, "nil_stdin.sh", `printf 'done\n'`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "printf 'done\\n'"},
+		WorkDir: t.TempDir(),
 	}
 
 	result, err := runner.Run(context.Background(), cfg, "", nil, nil)
@@ -159,15 +149,13 @@ func TestSubprocessRunner_StdinForwarding(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	// Read a line from stdin and echo it back.
-	script := writeSh(t, dir, "stdin.sh", `read line; printf 'got: %s\n' "$line"`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "read line; printf 'got: %s\\n' \"$line\""},
+		WorkDir: t.TempDir(),
 	}
 
 	stdinCh := make(chan string, 1)
@@ -296,15 +284,13 @@ func TestSubprocessRunner_NonZeroExitIncludesStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell scripts not supported on windows")
 	}
-
-	dir := t.TempDir()
-	// Script writes to stderr then exits non-zero.
-	script := writeSh(t, dir, "fail.sh", `printf 'fail detail from stderr\n' >&2; exit 1`)
+	sh := requireSh(t)
 
 	runner := cliagent.New()
 	cfg := domain.CLIAgentConfig{
-		Binary:  script,
-		WorkDir: dir,
+		Binary:  sh,
+		Args:    []string{"-c", "printf 'fail detail from stderr\\n' >&2; exit 1"},
+		WorkDir: t.TempDir(),
 	}
 
 	_, err := runner.Run(context.Background(), cfg, "", nil, nil)

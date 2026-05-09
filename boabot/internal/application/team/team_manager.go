@@ -339,7 +339,9 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	slog.Info("team started", "bots", started, "orchestrator", orchestratorName)
 
 	<-runCtx.Done()
-	return tm.Shutdown(context.Background())
+	// Pass the cancelled runCtx so Shutdown applies its 30-second timeout rather
+	// than waiting forever on context.Background().
+	return tm.Shutdown(runCtx)
 }
 
 // Shutdown sends a ShutdownMessage to all registered bots then waits for all
@@ -596,21 +598,23 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		// Wire plugin system if install_dir is configured.
 		srvCfg := httpserver.Config{
-			Auth:            oAuth,
-			Board:           board,
-			Team:            cp,
-			Users:           oAuth,
-			Skills:          skillReg,
-			DLQ:             orchestratorlocal.NoopDLQStore{},
-			Tasks:           orchTaskStore,
-			Dispatcher:      dispatcher,
-			Chat:            orchChatStore,
-			AskRouter:       tm.askRouter,
-			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
-			TaskLogBase:     taskLogBase,
-			IconPNG:         imgs.BoabotIcon,
-			BoardDispatcher: boardDispatch,
-			MaxConcurrent:   maxConcurrent,
+			Auth:             oAuth,
+			Board:            board,
+			Team:             cp,
+			Users:            oAuth,
+			Skills:           skillReg,
+			DLQ:              orchestratorlocal.NoopDLQStore{},
+			Tasks:            orchTaskStore,
+			Dispatcher:       dispatcher,
+			Chat:             orchChatStore,
+			AskRouter:        tm.askRouter,
+			AllowedWorkDirs:  botCfg.Orchestrator.WorkDirs,
+			TaskLogBase:      taskLogBase,
+			IconPNG:          imgs.BoabotIcon,
+			ProcessedIconPNG: imgs.ProcessedIcon,
+			FaviconIconPNG:   imgs.FaviconIcon,
+			BoardDispatcher:  boardDispatch,
+			MaxConcurrent:    maxConcurrent,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.
@@ -891,6 +895,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	}
 
 	// Wire live progress handler so the Output tab reflects tool-call traces mid-run.
+	// Trace lines go to task.Output only — item.LastResult is reserved for the final summary.
 	if sharedTasks != nil {
 		worker.WithProgressHandler(func(taskID, line string) {
 			task, getErr := sharedTasks.Get(context.Background(), taskID)
@@ -899,15 +904,6 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			}
 			task.Output += line + "\n"
 			_, _ = sharedTasks.Update(context.Background(), task)
-
-			if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
-				items, listErr := tm.sharedBoard.List(context.Background(), domain.WorkItemFilter{ActiveTaskID: taskID})
-				if listErr == nil && len(items) > 0 {
-					item := items[0]
-					item.LastResult += line + "\n"
-					_, _ = tm.sharedBoard.Update(context.Background(), item)
-				}
-			}
 		})
 	}
 

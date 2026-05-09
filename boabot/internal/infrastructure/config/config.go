@@ -71,6 +71,7 @@ type OrchestratorConfig struct {
 	AdminPassword string        `yaml:"admin_password"` // defaults to "admin" if empty
 	WorkDirs      []string      `yaml:"work_dirs"`      // allowed base directories for board item workspaces
 	RetentionDays int           `yaml:"retention_days"` // auto-delete done board items and tasks older than this; default 10
+	MaxConcurrent int           `yaml:"max_concurrent"` // max items running in-progress simultaneously (1-7); default 3
 	Plugins       PluginsConfig `yaml:"plugins"`
 }
 

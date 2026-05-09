@@ -16,6 +16,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/imgs"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	appplugin "github.com/stainedhead/dev-team-bots/boabot/internal/application/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/pool"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
@@ -543,6 +544,17 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		taskLogBase := filepath.Join(memPath, "task-logs")
 
+		// Wire BoardDispatch: builds instructions and dispatches board items as tasks.
+		maxConcurrent := botCfg.Orchestrator.MaxConcurrent
+		if maxConcurrent <= 0 {
+			maxConcurrent = 3
+		}
+		boardDispatch := apporchestrator.NewBoardDispatch(apporchestrator.BoardDispatchConfig{
+			Dispatcher:      dispatcher,
+			Board:           board,
+			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
+		})
+
 		// Wire plugin system if install_dir is configured.
 		srvCfg := httpserver.Config{
 			Auth:            oAuth,
@@ -558,6 +570,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 			TaskLogBase:     taskLogBase,
 			IconPNG:         imgs.BoabotIcon,
+			BoardDispatcher: boardDispatch,
+			MaxConcurrent:   maxConcurrent,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.
@@ -615,6 +629,17 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		}()
 
 		slog.Info("orchestrator dashboard started", "url", fmt.Sprintf("http://localhost:%d/", botCfg.Orchestrator.APIPort))
+
+		// Start queue runner — manages queued items and auto-transitions completed tasks.
+		queueRunner := apporchestrator.NewQueueRunner(apporchestrator.QueueRunnerConfig{
+			Board:         board,
+			Tasks:         orchTaskStore,
+			Dispatcher:    boardDispatch,
+			MaxConcurrent: maxConcurrent,
+		})
+		go func() {
+			queueRunner.Start(httpCtx)
+		}()
 
 		// Run retention cleanup immediately on start, then daily.
 		retentionDays := botCfg.Orchestrator.RetentionDays

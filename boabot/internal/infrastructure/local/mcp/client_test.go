@@ -61,6 +61,10 @@ func (s *stubBoardStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *stubBoardStore) Reorder(_ context.Context, _ []string) error {
+	return nil
+}
+
 func TestClient_ListTools_ReturnsExpectedTools(t *testing.T) {
 	c := localmcp.NewClient([]string{"/tmp"})
 	tools, err := c.ListTools(context.Background())

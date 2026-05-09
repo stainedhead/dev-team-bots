@@ -11,18 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
@@ -67,22 +62,24 @@ type PluginRegistryUseCase interface {
 
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
-	Auth            AuthProvider
-	Board           domain.BoardStore
-	Team            domain.ControlPlane
-	Users           domain.UserStore
-	Skills          domain.SkillRegistry
-	DLQ             domain.DLQStore
-	Tasks           domain.DirectTaskStore
-	Dispatcher      domain.TaskDispatcher
-	Chat            domain.ChatStore
-	AskRouter       domain.AskRouter           // optional; routes mid-task questions to running bots
-	Pool            domain.TechLeadPool        // optional; nil means pool endpoint returns empty
-	AllowedWorkDirs []string                   // whitelisted base directories for item working directories
-	TaskLogBase     string                     // base directory for per-task log directories (optional)
-	IconPNG         []byte                     // optional branding icon served at /imgs/boabot-icon.png
-	BoardDispatcher domain.BoardItemDispatcher // use-case for dispatching board items to bots
-	MaxConcurrent   int                        // max items in-progress simultaneously (0 = unlimited)
+	Auth             AuthProvider
+	Board            domain.BoardStore
+	Team             domain.ControlPlane
+	Users            domain.UserStore
+	Skills           domain.SkillRegistry
+	DLQ              domain.DLQStore
+	Tasks            domain.DirectTaskStore
+	Dispatcher       domain.TaskDispatcher
+	Chat             domain.ChatStore
+	AskRouter        domain.AskRouter           // optional; routes mid-task questions to running bots
+	Pool             domain.TechLeadPool        // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs  []string                   // whitelisted base directories for item working directories
+	TaskLogBase      string                     // base directory for per-task log directories (optional)
+	IconPNG          []byte                     // raw icon served at /imgs/boabot-icon-raw.png
+	ProcessedIconPNG []byte                     // dark-pixels-transparent variant served at /imgs/boabot-icon.png
+	FaviconIconPNG   []byte                     // blue/white-filter variant served at /imgs/boabot-favicon.png
+	BoardDispatcher  domain.BoardItemDispatcher // use-case for dispatching board items to bots
+	MaxConcurrent    int                        // max items in-progress simultaneously (0 = unlimited)
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -93,10 +90,7 @@ type Config struct {
 
 // Server is the orchestrator HTTP server.
 type Server struct {
-	cfg           Config
-	processedIcon []byte    // icon with dark pixels made transparent (sidebar watermark)
-	faviconIcon   []byte    // icon with CSS-equivalent blue/white colour swap (browser tab)
-	iconOnce      sync.Once // guards lazy icon processing; runs at most once on first icon request
+	cfg Config
 }
 
 // New creates a Server with the given config.
@@ -109,9 +103,6 @@ func New(cfg Config) *Server {
 			AllowedWorkDirs: cfg.AllowedWorkDirs,
 		})
 	}
-	// Icon bytes are stored in cfg.IconPNG and processed lazily on first request.
-	// Processing a 1 MB PNG under -race takes ~7 s; deferring it keeps server
-	// construction cheap even in test environments.
 	return &Server{cfg: cfg}
 }
 
@@ -120,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Static assets
-	if len(s.cfg.IconPNG) > 0 {
+	if len(s.cfg.ProcessedIconPNG) > 0 || len(s.cfg.IconPNG) > 0 {
 		mux.HandleFunc("GET /imgs/boabot-icon.png", s.handleIcon)
 		mux.HandleFunc("GET /imgs/boabot-icon-raw.png", s.handleIconRaw)
 		mux.HandleFunc("GET /imgs/boabot-favicon.png", s.handleFavicon)
@@ -1814,24 +1805,10 @@ func isValidWorkItemStatus(status string) bool {
 	return false
 }
 
-// initIcons runs makeDarkPixelsTransparent and applyBlueWhiteFilter at most once,
-// on the first call, and stores the results in the Server.  Expensive under
-// -race (a 1 MB PNG takes ~7 s), so it is deferred to the first actual request
-// rather than run in New.
-func (s *Server) initIcons() {
-	if len(s.cfg.IconPNG) > 0 {
-		s.iconOnce.Do(func() {
-			s.processedIcon = makeDarkPixelsTransparent(s.cfg.IconPNG)
-			s.faviconIcon = applyBlueWhiteFilter(s.cfg.IconPNG)
-		})
-	}
-}
-
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
-	s.initIcons()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(s.processedIcon)
+	_, _ = w.Write(s.cfg.ProcessedIconPNG)
 }
 
 func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
@@ -1841,149 +1818,9 @@ func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
-	s.initIcons()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(s.faviconIcon)
-}
-
-// applyBlueWhiteFilter replicates the CSS filter chain used by the sidebar
-// watermark (invert → sepia(1) → saturate(4) → hue-rotate(190deg)) so the
-// favicon has the same blue-background / white-icon appearance.
-func applyBlueWhiteFilter(pngBytes []byte) []byte {
-	src, err := png.Decode(bytes.NewReader(pngBytes))
-	if err != nil {
-		return pngBytes
-	}
-	bounds := src.Bounds()
-	dst := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			rf, gf, bf := float64(r>>8), float64(g>>8), float64(b>>8)
-
-			// invert(1)
-			rf, gf, bf = 255-rf, 255-gf, 255-bf
-
-			// sepia(1)
-			rf, gf, bf = rf*0.393+gf*0.769+bf*0.189,
-				rf*0.349+gf*0.686+bf*0.168,
-				rf*0.272+gf*0.534+bf*0.131
-
-			// saturate(4) then hue-rotate(190deg) — work in HSL
-			h, s, l := rgbToHSL(clamp255(rf), clamp255(gf), clamp255(bf))
-			s = math.Min(1.0, s*4.0)
-			h = math.Mod(h+190.0, 360.0)
-			rf, gf, bf = hslToRGB(h, s, l)
-
-			dst.Set(x, y, color.RGBA{R: uint8(rf), G: uint8(gf), B: uint8(bf), A: uint8(a >> 8)})
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
-		return pngBytes
-	}
-	return buf.Bytes()
-}
-
-func clamp255(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 255 {
-		return 255
-	}
-	return v
-}
-
-func rgbToHSL(r, g, b float64) (h, s, l float64) {
-	r, g, b = r/255, g/255, b/255
-	mx, mn := math.Max(r, math.Max(g, b)), math.Min(r, math.Min(g, b))
-	l = (mx + mn) / 2
-	if mx == mn {
-		return 0, 0, l
-	}
-	d := mx - mn
-	if l > 0.5 {
-		s = d / (2 - mx - mn)
-	} else {
-		s = d / (mx + mn)
-	}
-	switch mx {
-	case r:
-		h = (g - b) / d
-		if g < b {
-			h += 6
-		}
-	case g:
-		h = (b-r)/d + 2
-	default:
-		h = (r-g)/d + 4
-	}
-	return h * 60, s, l
-}
-
-func hslToRGB(h, s, l float64) (r, g, b float64) {
-	if s == 0 {
-		v := l * 255
-		return v, v, v
-	}
-	var q float64
-	if l < 0.5 {
-		q = l * (1 + s)
-	} else {
-		q = l + s - l*s
-	}
-	p := 2*l - q
-	hk := h / 360
-	hue2rgb := func(t float64) float64 {
-		if t < 0 {
-			t++
-		}
-		if t > 1 {
-			t--
-		}
-		switch {
-		case t < 1.0/6:
-			return p + (q-p)*6*t
-		case t < 0.5:
-			return q
-		case t < 2.0/3:
-			return p + (q-p)*(2.0/3-t)*6
-		default:
-			return p
-		}
-	}
-	return hue2rgb(hk+1.0/3) * 255, hue2rgb(hk) * 255, hue2rgb(hk-1.0/3) * 255
-}
-
-// makeDarkPixelsTransparent decodes a PNG and sets any pixel whose luminance
-// falls below 50/255 to fully transparent. This lets CSS filters (invert, hue-rotate)
-// work correctly against a dark UI without producing a light rectangular halo.
-func makeDarkPixelsTransparent(pngBytes []byte) []byte {
-	src, err := png.Decode(bytes.NewReader(pngBytes))
-	if err != nil {
-		return pngBytes
-	}
-	bounds := src.Bounds()
-	dst := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
-			luma := (uint32(r8)*299 + uint32(g8)*587 + uint32(b8)*114) / 1000
-			if luma < 50 {
-				dst.Set(x, y, color.RGBA{})
-			} else {
-				dst.Set(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
-			}
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
-		return pngBytes
-	}
-	return buf.Bytes()
+	_, _ = w.Write(s.cfg.FaviconIconPNG)
 }
 
 // ── Kanban web UI ─────────────────────────────────────────────────────────────

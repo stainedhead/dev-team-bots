@@ -598,21 +598,23 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		// Wire plugin system if install_dir is configured.
 		srvCfg := httpserver.Config{
-			Auth:            oAuth,
-			Board:           board,
-			Team:            cp,
-			Users:           oAuth,
-			Skills:          skillReg,
-			DLQ:             orchestratorlocal.NoopDLQStore{},
-			Tasks:           orchTaskStore,
-			Dispatcher:      dispatcher,
-			Chat:            orchChatStore,
-			AskRouter:       tm.askRouter,
-			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
-			TaskLogBase:     taskLogBase,
-			IconPNG:         imgs.BoabotIcon,
-			BoardDispatcher: boardDispatch,
-			MaxConcurrent:   maxConcurrent,
+			Auth:             oAuth,
+			Board:            board,
+			Team:             cp,
+			Users:            oAuth,
+			Skills:           skillReg,
+			DLQ:              orchestratorlocal.NoopDLQStore{},
+			Tasks:            orchTaskStore,
+			Dispatcher:       dispatcher,
+			Chat:             orchChatStore,
+			AskRouter:        tm.askRouter,
+			AllowedWorkDirs:  botCfg.Orchestrator.WorkDirs,
+			TaskLogBase:      taskLogBase,
+			IconPNG:          imgs.BoabotIcon,
+			ProcessedIconPNG: imgs.ProcessedIcon,
+			FaviconIconPNG:   imgs.FaviconIcon,
+			BoardDispatcher:  boardDispatch,
+			MaxConcurrent:    maxConcurrent,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.

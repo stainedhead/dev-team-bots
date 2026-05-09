@@ -1979,7 +1979,10 @@ const kanbanHTML = `<!DOCTYPE html>
     .bdot-off{background:#334155}
     .bname{font-size:.72rem;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .bbadge{padding:.1rem .35rem;border-radius:9999px;font-size:.62rem;font-weight:700;background:#1e3a5f;color:#60a5fa;flex-shrink:0}
+    .btype-pill{font-size:.58rem;padding:.05rem .3rem;background:#172032;color:#475569;border:1px solid #1a2744;border-radius:3px;flex-shrink:0;white-space:nowrap}
     .bmeta{margin-top:.25rem;font-size:.62rem;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .binfo-link{cursor:pointer;color:#475569;font-size:.65rem;margin-left:.3rem;opacity:.7;flex-shrink:0}
+    .binfo-link:hover{color:#93c5fd;opacity:1}
     .bbar{height:2px;background:#111827;border-radius:1px;margin-top:.3rem;overflow:hidden}
     .bfill{height:100%;border-radius:1px;transition:width .4s}
     .bfill-none{width:0}
@@ -2568,6 +2571,15 @@ const kanbanHTML = `<!DOCTYPE html>
   </div>
 </dialog>
 
+<!-- Bot info dialog -->
+<dialog id="bot-info-dlg" style="min-width:24rem;max-width:32rem">
+  <h2 id="bot-info-title" style="margin-bottom:.5rem"></h2>
+  <div id="bot-info-body" style="color:#94a3b8;font-size:.82rem;line-height:1.6"></div>
+  <div class="da" style="margin-top:1rem">
+    <button class="btn btn-secondary" onclick="cls('bot-info-dlg')">Close</button>
+  </div>
+</dialog>
+
 <div id="viewer-overlay" class="viewer-overlay" style="display:none" onclick="if(event.target===this)closeViewer()">
   <div class="viewer-box">
     <div class="viewer-hdr">
@@ -3033,17 +3045,53 @@ const kanbanHTML = `<!DOCTYPE html>
     'orchestrator':'Control plane &amp; task routing',
     'tech-lead':'Full-stack dev, code review &amp; planning',
     'developer':'Code implementation &amp; debugging',
+    'implementer':'Code implementation &amp; debugging',
+    'reviewer':'Code review &amp; quality feedback',
     'qa':'Testing, bug analysis &amp; quality gates',
     'devops':'CI/CD, infra &amp; deployments',
     'designer':'UI/UX design &amp; prototyping',
     'analyst':'Data analysis &amp; reporting',
     'security':'Security review &amp; threat modelling',
+    'architect':'System design &amp; architecture planning',
+    'maintainer':'Maintenance, patches &amp; dependency updates',
+  };
+  var botTypeDetails={
+    'orchestrator':['Routes tasks to the right specialist bot','Manages the Kanban board and work queue','Monitors team health and bot availability','Handles triage, scheduling, and escalation'],
+    'tech-lead':['Breaks down features into delegatable tasks','Coordinates multi-bot workflows end-to-end','Reviews completed work before integration','Acts as the main point of contact for complex dev tasks'],
+    'developer':['Implements features from specs or task descriptions','Fixes bugs and investigates regressions','Writes unit, integration, and E2E tests','Refactors and optimises existing code'],
+    'implementer':['Implements features from specs or task descriptions','Fixes bugs and investigates regressions','Writes unit, integration, and E2E tests','Refactors and optimises existing code'],
+    'reviewer':['Reviews pull requests for correctness and style','Identifies bugs, security issues, and design flaws','Provides actionable feedback with severity levels','Validates that implementation meets acceptance criteria'],
+    'qa':['Designs and executes test plans','Analyses bug reports and reproduction steps','Validates acceptance criteria against implementations','Enforces quality gates before release'],
+    'devops':['Manages CI/CD pipelines and build systems','Provisions and configures infrastructure','Handles deployments, rollbacks, and runbooks','Monitors system health and on-call tooling'],
+    'designer':['Creates UI mockups and interactive prototypes','Defines and maintains design systems','Reviews frontend implementations for fidelity','Conducts usability assessments and A/B tests'],
+    'analyst':['Queries and analyses data from multiple sources','Produces reports, dashboards, and summaries','Identifies patterns, anomalies, and insights','Supports data-driven product and engineering decisions'],
+    'security':['Reviews code and configs for vulnerabilities','Performs threat modelling and risk assessment','Audits third-party dependencies and supply chain','Enforces security policies and compliance controls'],
+    'architect':['Designs system architecture and component boundaries','Documents architectural decisions and trade-offs','Reviews proposed changes for systemic impact','Guides the team on scalability and reliability patterns'],
+    'maintainer':['Applies patches and resolves dependency updates','Monitors for deprecations and breaking changes','Keeps CI green and build tooling up to date','Handles housekeeping tasks that keep the codebase healthy'],
   };
   function botSkillSummary(botType){
     if(!botType)return '';
     var t=botType.toLowerCase();
     for(var k in botTypeSummaries){if(t===k||t.indexOf(k)>=0)return botTypeSummaries[k];}
     return '';
+  }
+  function openBotInfo(botName,botType){
+    var t=(botType||'').toLowerCase();
+    var details=null;
+    for(var k in botTypeDetails){if(t===k||t.indexOf(k)>=0){details=botTypeDetails[k];break;}}
+    var summary=botSkillSummary(botType);
+    ge('bot-info-title').textContent=botName+(botType&&botType!==botName?' ('+botType+')':'');
+    var html='';
+    if(summary)html+='<div style="color:#e2e8f0;margin-bottom:.75rem">'+esc(summary)+'</div>';
+    if(details&&details.length){
+      html+='<ul style="margin:0;padding-left:1.25rem;color:#94a3b8">';
+      details.forEach(function(s){html+='<li style="margin-bottom:.2rem">'+esc(s)+'</li>';});
+      html+='</ul>';
+    }else{
+      html+='<div style="color:#475569;font-style:italic">No additional details available for this bot type.</div>';
+    }
+    ge('bot-info-body').innerHTML=html;
+    dlg('bot-info-dlg');
   }
 
   function renderRoster(){
@@ -3066,16 +3114,20 @@ const kanbanHTML = `<!DOCTYPE html>
       var fc=n===0?'bfill-none':n<=2?'bfill-lo':n<=5?'bfill-md':'bfill-hi';
       var typeLabel=b.bot_type&&b.bot_type!==b.name?esc(b.bot_type):'';
       var skillSummary=botSkillSummary(b.bot_type);
+      var infoBtn=b.bot_type?'<span class="binfo-link" title="What can this bot do?" onclick="event.stopPropagation();openBotInfo(\''+esc(b.name)+'\',\''+esc(b.bot_type||'')+'\')">&#x24D8;</span>':'';
       var c=document.createElement('div');c.className='bcard';
       c.innerHTML=
         '<div class="brow">'+
           '<div class="bdot '+(on?'bdot-on':'bdot-off')+'"></div>'+
           '<div class="bname">'+esc(b.name)+'</div>'+
+          (typeLabel?'<div class="btype-pill">'+typeLabel+'</div>':'')+
           (n?'<div class="bbadge">'+n+'</div>':'')+
           (on&&token?'<button class="btn btn-ghost btn-sm" onclick="openAssignTask(\''+esc(b.name)+'\')">&#x26A1; Task</button>':'')+
         '</div>'+
-        '<div class="bmeta">'+(typeLabel?typeLabel+' &bull; ':'')+esc(skillSummary)+(on?' &bull; online':' &bull; inactive')+'</div>'+
-        (b.description?'<div class="bmeta" style="color:#475569;font-size:.68rem;line-height:1.3">'+esc(b.description)+'</div>':'')+
+        '<div class="bmeta" style="display:flex;align-items:center;gap:.2rem">'+
+          '<span style="flex:1;overflow:hidden;text-overflow:ellipsis">'+esc(skillSummary||(b.bot_type||''))+(on?' &bull; online':' &bull; inactive')+'</span>'+
+          infoBtn+
+        '</div>'+
         (on?'<div class="bbar"><div class="bfill '+fc+'" style="width:'+pct+'%"></div></div>':'');
       el.appendChild(c);
       // Separator between orchestrator and the rest.

@@ -31,8 +31,10 @@ type Client struct {
 	pluginStore domain.PluginStore
 	installDir  string
 	// CLI tool support
-	cliRunner  domain.CLIAgentRunner
-	cliTools   config.CLIToolsConfig
+	cliRunner domain.CLIAgentRunner
+	cliTools  config.CLIToolsConfig
+	// progressFn is read without synchronisation; this is safe because bots process
+	// tasks sequentially — only one tool call is active at a time per Client instance.
 	progressFn func(line string) // optional; called for each output line from CLI tools
 }
 
@@ -516,7 +518,10 @@ func (c *Client) callCLITool(ctx context.Context, toolID string, args map[string
 	if instruction == "" {
 		return errResult("callCLITool: missing required argument \"instruction\""), nil
 	}
-	workDir, _ := args["work_dir"].(string)
+	workDir, err := c.resolvePath(args, "work_dir")
+	if err != nil {
+		return errResult(err.Error()), nil
+	}
 	model, _ := args["model"].(string)
 
 	var toolCfg config.CLIToolConfig

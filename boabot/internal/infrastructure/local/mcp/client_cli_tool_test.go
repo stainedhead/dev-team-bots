@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain/mocks"
@@ -118,6 +119,7 @@ func TestMCPClient_CallTool_RunClaudeCode_InvokesRunner(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := fakeBinaryInDir(t, dir, "claude", `printf 'result\n'`)
+	workDir := t.TempDir() // a directory in allowedDirs
 
 	var capturedCfg domain.CLIAgentConfig
 	var capturedInstruction string
@@ -134,14 +136,14 @@ func TestMCPClient_CallTool_RunClaudeCode_InvokesRunner(t *testing.T) {
 		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
 	}
 
-	client := mcp.NewClient([]string{t.TempDir()},
+	client := mcp.NewClient([]string{workDir},
 		mcp.WithCLIRunner(runner),
 		mcp.WithCLITools(cliTools),
 	)
 
 	result, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
 		"instruction": "do some work",
-		"work_dir":    t.TempDir(),
+		"work_dir":    workDir,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -177,6 +179,7 @@ func TestMCPClient_CallTool_RunClaudeCode_ModelFlagIncluded(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := fakeBinaryInDir(t, dir, "claude", `printf 'ok\n'`)
+	workDir := t.TempDir()
 
 	var capturedCfg domain.CLIAgentConfig
 	runner := &mocks.MockCLIAgentRunner{
@@ -190,14 +193,14 @@ func TestMCPClient_CallTool_RunClaudeCode_ModelFlagIncluded(t *testing.T) {
 		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
 	}
 
-	client := mcp.NewClient([]string{t.TempDir()},
+	client := mcp.NewClient([]string{workDir},
 		mcp.WithCLIRunner(runner),
 		mcp.WithCLITools(cliTools),
 	)
 
 	_, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
 		"instruction": "do work",
-		"work_dir":    t.TempDir(),
+		"work_dir":    workDir,
 		"model":       "claude-opus-4-5",
 	})
 	if err != nil {
@@ -220,6 +223,7 @@ func TestMCPClient_CallTool_RunClaudeCode_NoModelFlagWhenEmpty(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := fakeBinaryInDir(t, dir, "claude", `printf 'ok\n'`)
+	workDir := t.TempDir()
 
 	var capturedCfg domain.CLIAgentConfig
 	runner := &mocks.MockCLIAgentRunner{
@@ -233,14 +237,14 @@ func TestMCPClient_CallTool_RunClaudeCode_NoModelFlagWhenEmpty(t *testing.T) {
 		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
 	}
 
-	client := mcp.NewClient([]string{t.TempDir()},
+	client := mcp.NewClient([]string{workDir},
 		mcp.WithCLIRunner(runner),
 		mcp.WithCLITools(cliTools),
 	)
 
 	_, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
 		"instruction": "do work",
-		"work_dir":    t.TempDir(),
+		"work_dir":    workDir,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -259,6 +263,7 @@ func TestMCPClient_CallTool_RunClaudeCode_ProgressCallback(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := fakeBinaryInDir(t, dir, "claude", `printf 'ok\n'`)
+	workDir := t.TempDir()
 
 	runner := &mocks.MockCLIAgentRunner{
 		RunFn: func(_ context.Context, _ domain.CLIAgentConfig, _ string,
@@ -279,7 +284,7 @@ func TestMCPClient_CallTool_RunClaudeCode_ProgressCallback(t *testing.T) {
 		progressLines = append(progressLines, line)
 	}
 
-	client := mcp.NewClient([]string{t.TempDir()},
+	client := mcp.NewClient([]string{workDir},
 		mcp.WithCLIRunner(runner),
 		mcp.WithCLITools(cliTools),
 		mcp.WithProgressFn(progressFn),
@@ -287,7 +292,7 @@ func TestMCPClient_CallTool_RunClaudeCode_ProgressCallback(t *testing.T) {
 
 	_, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
 		"instruction": "do work",
-		"work_dir":    t.TempDir(),
+		"work_dir":    workDir,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -338,6 +343,7 @@ func TestMCPClient_CallTool_RunCodex_InvokesRunner(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := fakeBinaryInDir(t, dir, "codex", `printf 'codex output\n'`)
+	workDir := t.TempDir()
 
 	var capturedCfg domain.CLIAgentConfig
 	runner := &mocks.MockCLIAgentRunner{
@@ -351,14 +357,14 @@ func TestMCPClient_CallTool_RunCodex_InvokesRunner(t *testing.T) {
 		Codex: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
 	}
 
-	client := mcp.NewClient([]string{t.TempDir()},
+	client := mcp.NewClient([]string{workDir},
 		mcp.WithCLIRunner(runner),
 		mcp.WithCLITools(cliTools),
 	)
 
 	_, err := client.CallTool(context.Background(), "run_codex", map[string]any{
 		"instruction": "implement the feature",
-		"work_dir":    t.TempDir(),
+		"work_dir":    workDir,
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -403,6 +409,175 @@ func TestMCPClient_ListTools_RunOpenAICodex_IncludedWhenEnabled(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected run_openai_codex in tools list")
+	}
+}
+
+// TestCallCLITool_WorkDirOutsideAllowedDirs verifies that callCLITool returns an
+// error result when work_dir is outside the client's allowed directories.
+func TestCallCLITool_WorkDirOutsideAllowedDirs(t *testing.T) {
+	t.Parallel()
+
+	allowedDir := t.TempDir()
+	forbiddenDir := t.TempDir() // a different temp dir — outside allowed
+
+	binaryDir := t.TempDir()
+	binaryPath := fakeBinaryInDir(t, binaryDir, "claude", `printf 'ok\n'`)
+
+	runner := &mocks.MockCLIAgentRunner{
+		RunFn: func(_ context.Context, _ domain.CLIAgentConfig, _ string,
+			_ <-chan string, _ func(string)) (string, error) {
+			return "should not reach here", nil
+		},
+	}
+	cliTools := config.CLIToolsConfig{
+		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
+	}
+
+	client := mcp.NewClient([]string{allowedDir},
+		mcp.WithCLIRunner(runner),
+		mcp.WithCLITools(cliTools),
+	)
+
+	result, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
+		"instruction": "do some work",
+		"work_dir":    forbiddenDir,
+	})
+	if err != nil {
+		t.Fatalf("CallTool returned unexpected Go error: %v", err)
+	}
+	if !result.IsError {
+		t.Errorf("expected IsError=true when work_dir is outside allowedDirs, got success: %+v", result)
+	}
+	if len(runner.RunCalls) > 0 {
+		t.Error("runner.Run should not have been called when work_dir is rejected")
+	}
+}
+
+// TestCallCLITool_EmptyWorkDir verifies that callCLITool returns an error when
+// work_dir is absent or empty.
+func TestCallCLITool_EmptyWorkDir(t *testing.T) {
+	t.Parallel()
+
+	allowedDir := t.TempDir()
+	binaryDir := t.TempDir()
+	binaryPath := fakeBinaryInDir(t, binaryDir, "claude", `printf 'ok\n'`)
+
+	runner := &mocks.MockCLIAgentRunner{}
+	cliTools := config.CLIToolsConfig{
+		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
+	}
+
+	client := mcp.NewClient([]string{allowedDir},
+		mcp.WithCLIRunner(runner),
+		mcp.WithCLITools(cliTools),
+	)
+
+	// Missing work_dir (empty string via type assertion on absent key).
+	result, err := client.CallTool(context.Background(), "run_claude_code", map[string]any{
+		"instruction": "do some work",
+		// work_dir intentionally absent
+	})
+	if err != nil {
+		t.Fatalf("CallTool returned unexpected Go error: %v", err)
+	}
+	if !result.IsError {
+		t.Errorf("expected IsError=true when work_dir is missing, got success: %+v", result)
+	}
+}
+
+// TestCallCLITool_AllToolsRejectOutOfScopeWorkDir verifies that all four CLI tools
+// reject a work_dir outside allowedDirs.
+func TestCallCLITool_AllToolsRejectOutOfScopeWorkDir(t *testing.T) {
+	t.Parallel()
+
+	allowedDir := t.TempDir()
+	forbiddenDir := t.TempDir()
+
+	binaryDir := t.TempDir()
+	claudePath := fakeBinaryInDir(t, binaryDir, "claude", `printf 'ok\n'`)
+	codexPath := fakeBinaryInDir(t, binaryDir, "codex", `printf 'ok\n'`)
+	openaiCodexPath := fakeBinaryInDir(t, binaryDir, "openai-codex", `printf 'ok\n'`)
+	opencodePath := fakeBinaryInDir(t, binaryDir, "opencode", `printf 'ok\n'`)
+
+	runner := &mocks.MockCLIAgentRunner{}
+	cliTools := config.CLIToolsConfig{
+		ClaudeCode:  config.CLIToolConfig{Enabled: true, BinaryPath: claudePath},
+		Codex:       config.CLIToolConfig{Enabled: true, BinaryPath: codexPath},
+		OpenAICodex: config.CLIToolConfig{Enabled: true, BinaryPath: openaiCodexPath},
+		OpenCode:    config.CLIToolConfig{Enabled: true, BinaryPath: opencodePath},
+	}
+
+	client := mcp.NewClient([]string{allowedDir},
+		mcp.WithCLIRunner(runner),
+		mcp.WithCLITools(cliTools),
+	)
+
+	toolNames := []string{"run_claude_code", "run_codex", "run_openai_codex", "run_opencode"}
+	for _, toolName := range toolNames {
+		t.Run(toolName, func(t *testing.T) {
+			result, err := client.CallTool(context.Background(), toolName, map[string]any{
+				"instruction": "do work",
+				"work_dir":    forbiddenDir,
+			})
+			if err != nil {
+				t.Fatalf("%s: CallTool returned unexpected Go error: %v", toolName, err)
+			}
+			if !result.IsError {
+				t.Errorf("%s: expected IsError=true when work_dir outside allowedDirs", toolName)
+			}
+		})
+	}
+
+	if len(runner.RunCalls) > 0 {
+		t.Errorf("runner.Run should not have been called for any out-of-scope work_dir, got %d calls", len(runner.RunCalls))
+	}
+}
+
+// TestCallCLITool_ContextCancelledDuringRun verifies that context cancellation
+// propagates from callCLITool to the underlying CLI runner.
+func TestCallCLITool_ContextCancelledDuringRun(t *testing.T) {
+	t.Parallel()
+
+	allowedDir := t.TempDir()
+	binaryDir := t.TempDir()
+	binaryPath := fakeBinaryInDir(t, binaryDir, "claude", `printf 'ok\n'`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runner := &mocks.MockCLIAgentRunner{
+		RunFn: func(runCtx context.Context, _ domain.CLIAgentConfig, _ string,
+			_ <-chan string, _ func(string)) (string, error) {
+			// Block until context is cancelled (simulates a long-running subprocess).
+			<-runCtx.Done()
+			return "", runCtx.Err()
+		},
+	}
+	cliTools := config.CLIToolsConfig{
+		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: binaryPath},
+	}
+
+	client := mcp.NewClient([]string{allowedDir},
+		mcp.WithCLIRunner(runner),
+		mcp.WithCLITools(cliTools),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = client.CallTool(ctx, "run_claude_code", map[string]any{
+			"instruction": "do work",
+			"work_dir":    allowedDir,
+		})
+	}()
+
+	// Cancel context after short delay.
+	cancel()
+
+	select {
+	case <-done:
+		// Good — CallTool returned.
+	case <-time.After(2 * time.Second):
+		t.Fatal("CallTool did not return after context cancellation within 2s")
 	}
 }
 

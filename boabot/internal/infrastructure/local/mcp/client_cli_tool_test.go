@@ -581,6 +581,40 @@ func TestCallCLITool_ContextCancelledDuringRun(t *testing.T) {
 	}
 }
 
+// TestListTools_NonExecutableAbsoluteBinaryExcluded verifies that a CLI tool
+// backed by a non-executable absolute-path binary is absent from ListTools.
+func TestListTools_NonExecutableAbsoluteBinaryExcluded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create a file without the executable bit.
+	nonExecPath := filepath.Join(dir, "claude")
+	if err := os.WriteFile(nonExecPath, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatalf("write non-executable binary: %v", err)
+	}
+
+	runner := &mocks.MockCLIAgentRunner{}
+	cliTools := config.CLIToolsConfig{
+		ClaudeCode: config.CLIToolConfig{Enabled: true, BinaryPath: nonExecPath},
+	}
+
+	client := mcp.NewClient([]string{t.TempDir()},
+		mcp.WithCLIRunner(runner),
+		mcp.WithCLITools(cliTools),
+	)
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	for _, tool := range tools {
+		if tool.Name == "run_claude_code" {
+			t.Error("run_claude_code should not appear when binary is not executable")
+		}
+	}
+}
+
 // TestMCPClient_ListTools_RunOpenCode_IncludedWhenEnabled verifies run_opencode.
 func TestMCPClient_ListTools_RunOpenCode_IncludedWhenEnabled(t *testing.T) {
 	t.Parallel()

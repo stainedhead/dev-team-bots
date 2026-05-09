@@ -244,6 +244,78 @@ func TestSubprocessRunner_ContextCancellation(t *testing.T) {
 	}
 }
 
+// TestSubprocessRunner_ContextCancelledWhileForwardingStdin verifies that when the
+// context is cancelled while a subprocess is blocking on stdin, drainStdin closes
+// the pipe and Run returns promptly.
+func TestSubprocessRunner_ContextCancelledWhileForwardingStdin(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM not supported on windows")
+	}
+	if _, err := exec.LookPath("cat"); err != nil {
+		t.Skip("cat not available")
+	}
+
+	runner := cliagent.New()
+	cfg := domain.CLIAgentConfig{
+		Binary:  "cat", // blocks indefinitely reading from stdin
+		WorkDir: t.TempDir(),
+	}
+
+	stdinCh := make(chan string) // open channel; drainStdin will block on it
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		defer close(done)
+		_, runErr = runner.Run(ctx, cfg, "", stdinCh, nil)
+	}()
+
+	// Cancel after a short delay while cat is blocking on stdin.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Good — Run returned.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5s after context cancellation while forwarding stdin")
+	}
+
+	if runErr == nil {
+		t.Error("expected error after context cancellation, got nil")
+	}
+}
+
+// TestSubprocessRunner_NonZeroExitIncludesStderr verifies that when a subprocess
+// exits non-zero and writes to stderr, the error string contains the stderr text.
+func TestSubprocessRunner_NonZeroExitIncludesStderr(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts not supported on windows")
+	}
+
+	dir := t.TempDir()
+	// Script writes to stderr then exits non-zero.
+	script := writeSh(t, dir, "fail.sh", `printf 'fail detail from stderr\n' >&2; exit 1`)
+
+	runner := cliagent.New()
+	cfg := domain.CLIAgentConfig{
+		Binary:  script,
+		WorkDir: dir,
+	}
+
+	_, err := runner.Run(context.Background(), cfg, "", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for non-zero exit, got nil")
+	}
+	if !strings.Contains(err.Error(), "fail detail from stderr") {
+		t.Errorf("expected stderr text in error string, got: %v", err)
+	}
+}
+
 // TestSubprocessRunner_Timeout verifies that a short timeout terminates the subprocess.
 func TestSubprocessRunner_Timeout(t *testing.T) {
 	t.Parallel()

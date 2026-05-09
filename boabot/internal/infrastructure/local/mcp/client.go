@@ -400,9 +400,11 @@ func (c *Client) readSkill(ctx context.Context, args map[string]any) (domain.MCP
 	return errResult(fmt.Sprintf("skill %q not found in any active plugin", name)), nil
 }
 
-// isPluginJSONEntrypoint returns true when the entrypoint path is a Claude Code
-// plugin.json file (non-executable). This is detected by checking the base
-// filename, which avoids conflating "notplugin.json" with the real manifest.
+// isPluginJSONEntrypoint returns true when the entrypoint base name is exactly
+// "plugin.json". This is an exact match on the base name only — filenames such
+// as "myplugin.json" or paths ending in "/someplugin.json" do not match.
+// Matching "plugin.json" identifies Claude Code plugin manifests, which are
+// non-executable and are handled by delegating to readSkill instead of exec.
 func isPluginJSONEntrypoint(entrypoint string) bool {
 	return filepath.Base(entrypoint) == "plugin.json"
 }
@@ -620,7 +622,14 @@ func resolveBinary(cfg config.CLIToolConfig, defaultName string) (string, bool) 
 		bin = defaultName
 	}
 	if filepath.IsAbs(bin) {
-		if _, err := os.Stat(bin); err != nil {
+		info, err := os.Stat(bin)
+		if err != nil {
+			return "", false
+		}
+		// Verify the executable bit (owner execute) mirrors what exec.LookPath checks
+		// for relative binary names. A non-executable binary resolves as absent so that
+		// ListTools does not advertise a tool that will fail at subprocess launch.
+		if info.Mode()&0o100 == 0 {
 			return "", false
 		}
 		return bin, true

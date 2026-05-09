@@ -860,8 +860,12 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 					items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
 					if listErr == nil && len(items) > 0 {
 						item := items[0]
-						item.LastResult = p.Output
-						item.LastResultAt = &now
+						if p.Output != "" {
+							item.LastResult = p.Output
+							item.LastResultAt = &now
+						} else if item.LastResult == "" {
+							item.LastResultAt = &now
+						}
 						item.ActiveTaskID = ""
 						if p.Success {
 							item.Status = domain.WorkItemStatusDone

@@ -343,6 +343,51 @@ func TestClient_CompleteBoardItem_MarksItemDone(t *testing.T) {
 	}
 }
 
+func TestClient_CompleteBoardItem_WithOutput_SetsLastResult(t *testing.T) {
+	bs := newStubBoardStore(domain.WorkItem{ID: "item-1", Status: domain.WorkItemStatusInProgress})
+	c := localmcp.NewClient([]string{"/tmp"}, localmcp.WithBoardStore(bs))
+
+	result, err := c.CallTool(context.Background(), "complete_board_item", map[string]any{
+		"item_id": "item-1",
+		"output":  "Skill failed: no git repository found in the working directory.",
+	})
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	item := bs.items["item-1"]
+	if item.Status != domain.WorkItemStatusDone {
+		t.Errorf("expected item status 'done', got %q", item.Status)
+	}
+	if item.LastResult != "Skill failed: no git repository found in the working directory." {
+		t.Errorf("expected LastResult to be set, got %q", item.LastResult)
+	}
+	if item.LastResultAt == nil {
+		t.Error("expected LastResultAt to be set")
+	}
+}
+
+func TestClient_CompleteBoardItem_EmptyOutput_DoesNotSetLastResult(t *testing.T) {
+	bs := newStubBoardStore(domain.WorkItem{ID: "item-2", Status: domain.WorkItemStatusInProgress})
+	c := localmcp.NewClient([]string{"/tmp"}, localmcp.WithBoardStore(bs))
+
+	_, err := c.CallTool(context.Background(), "complete_board_item", map[string]any{
+		"item_id": "item-2",
+		"output":  "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if bs.items["item-2"].LastResult != "" {
+		t.Errorf("expected LastResult to remain empty, got %q", bs.items["item-2"].LastResult)
+	}
+	if bs.items["item-2"].LastResultAt != nil {
+		t.Error("expected LastResultAt to remain nil when output is empty")
+	}
+}
+
 func TestClient_CompleteBoardItem_NotFound_ReturnsError(t *testing.T) {
 	bs := newStubBoardStore() // empty
 	c := localmcp.NewClient([]string{"/tmp"}, localmcp.WithBoardStore(bs))

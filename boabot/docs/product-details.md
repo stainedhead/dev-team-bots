@@ -231,6 +231,66 @@ The admin UI includes a "Plugins & Skills" tab. From this tab an admin can:
 
 Every plugin lifecycle event — install, approve, reject, enable, disable, update, reload, remove — emits a structured `slog` line with fields: `plugin_name`, `version`, `registry`, `actor`, `status`, `timestamp`.
 
+## Claude Code Plugin Support
+
+Bots can consume Claude Code plugins (those distributed as a `plugin.json` manifest with `commands/<name>.md` Markdown files) via the `read_skill` built-in MCP tool. This allows the bot ecosystem to share plugins with the broader Claude Code tooling ecosystem without any changes to the plugin format.
+
+### read_skill Tool
+
+When a plugin's entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), calling the plugin tool does not attempt to exec the JSON file. Instead, the MCP client reads `<install_dir>/<plugin_name>/commands/<tool_name>.md` and returns the Markdown content as the tool result. The bot then follows the instructions in that Markdown autonomously using its own built-in tools (`read_file`, `write_file`, `http_request`, etc.).
+
+The `read_skill` tool appears in `ListTools` whenever a plugin store is configured. It is not an opt-in per-tool — any active plugin with a `plugin.json` entrypoint is automatically routed through `read_skill` rather than subprocess exec.
+
+### Claude Code Plugin Lifecycle
+
+Claude Code plugins follow the same install / approve / enable / disable lifecycle as standard plugins. The only difference is in how tool calls are dispatched once the plugin is active. From the admin UI perspective, they are indistinguishable from regular plugins.
+
+## CLI Agent Tools
+
+Bots with the appropriate binaries installed can invoke other AI coding agents as MCP tools. This enables hybrid workflows where a boabot agent hands off a concrete coding task to a specialised CLI tool (Claude Code, Codex, opencode) and collects the result.
+
+### Available Tools
+
+| Tool | Binary | Description |
+|---|---|---|
+| `run_claude_code` | `claude` | Runs the Claude Code CLI in `--output-format=stream-json` mode and returns the accumulated text output. |
+| `run_codex` | `codex` | Runs the OpenAI Codex CLI in quiet, full-auto approval mode and returns plain-text output. |
+| `run_openai_codex` | `codex` | Alias for `run_codex`; targets the same OpenAI Codex binary. |
+| `run_opencode` | `opencode` | Runs the opencode CLI and returns plain-text output. |
+
+Each tool accepts three inputs: `instruction` (required — the task prompt), `work_dir` (required — working directory for the subprocess), and `model` (optional — overrides the CLI's default model selection).
+
+Tools only appear in `ListTools` if their corresponding binary can be resolved on `PATH` or at the configured `binary_path`. If a binary is not installed, the tool is silently absent — no warning is logged on each `ListTools` call.
+
+### Configuration
+
+CLI tools are configured under `orchestrator.cli_tools` in `config.yaml`:
+
+```yaml
+orchestrator:
+  cli_tools:
+    claude_code:
+      enabled: true
+      binary_path: ""          # optional absolute path; defaults to PATH lookup of "claude"
+    codex:
+      enabled: false
+      binary_path: ""
+    openai_codex:
+      enabled: false
+      binary_path: ""
+    opencode:
+      enabled: false
+      binary_path: ""
+```
+
+A tool disabled via `enabled: false` is always absent from `ListTools`, regardless of whether the binary is installed.
+
+### Execution Model
+
+Each CLI tool call spawns a subprocess via `CLIAgentRunner.Run`. The subprocess receives `SIGTERM` on context cancellation; if it does not exit within 5 seconds, it is force-killed. The default timeout is 30 minutes.
+
+Claude Code output is parsed as `stream-json` events. Only `content_block_delta` text deltas are extracted; internal scaffolding events (tool calls, system prompts) are filtered out. The returned string is the accumulated assistant text, trimmed of trailing newlines.
+
 ## Tech-Lead Pool Management
 
 The orchestrator maintains a pool of tech-lead instances keyed to In Progress kanban items. The goal is that every active work item always has a dedicated tech-lead standing by to coordinate it, with minimal cold-start latency.

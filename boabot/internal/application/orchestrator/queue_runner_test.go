@@ -869,3 +869,62 @@ func TestQueueRunner_RunWhen_PredNotFound(t *testing.T) {
 		t.Error("should not dispatch run_when item when predecessor not found")
 	}
 }
+
+func TestQueueRunner_Reconcile_BlockedTask(t *testing.T) {
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "item1", Status: domain.WorkItemStatusInProgress, ActiveTaskID: "t1"},
+	}}
+	tasks := &fakeTaskStore{getFn: func(_ context.Context, id string) (domain.DirectTask, error) {
+		return domain.DirectTask{ID: id, Status: domain.DirectTaskStatusBlocked, Output: "need git repo\nTASK_OUTCOME: blocked"}, nil
+	}}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         tasks,
+		Dispatcher:    &fakeBoardItemDispatcher{},
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	item, err := board.Get(context.Background(), "item1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != domain.WorkItemStatusBlocked {
+		t.Errorf("expected blocked, got %s", item.Status)
+	}
+	if item.LastResult == "" {
+		t.Error("expected last_result populated")
+	}
+}
+
+func TestQueueRunner_Reconcile_ErroredTask(t *testing.T) {
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "item1", Status: domain.WorkItemStatusInProgress, ActiveTaskID: "t1"},
+	}}
+	tasks := &fakeTaskStore{getFn: func(_ context.Context, id string) (domain.DirectTask, error) {
+		return domain.DirectTask{ID: id, Status: domain.DirectTaskStatusErrored, Output: "unrecoverable failure\nTASK_OUTCOME: errored"}, nil
+	}}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         tasks,
+		Dispatcher:    &fakeBoardItemDispatcher{},
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	item, err := board.Get(context.Background(), "item1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != domain.WorkItemStatusErrored {
+		t.Errorf("expected errored, got %s", item.Status)
+	}
+}

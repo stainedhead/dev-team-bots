@@ -118,26 +118,26 @@ func (r *QueueRunner) reconcile(ctx context.Context) {
 		if taskErr != nil {
 			continue
 		}
+		var newStatus domain.WorkItemStatus
 		switch task.Status {
 		case domain.DirectTaskStatusSucceeded:
-			item.Status = domain.WorkItemStatusDone
-			item.ActiveTaskID = ""
-			if task.Output != "" {
-				item.LastResult = task.Output
-			}
-			item.LastResultAt = &now
-			if _, err := r.cfg.Board.Update(ctx, item); err != nil {
-				slog.Warn("queue runner: failed to mark item done", "id", item.ID, "err", err)
-			}
+			newStatus = domain.WorkItemStatusDone
 		case domain.DirectTaskStatusFailed:
-			item.Status = domain.WorkItemStatusErrored
+			newStatus = domain.WorkItemStatusErrored
+		case domain.DirectTaskStatusBlocked:
+			newStatus = domain.WorkItemStatusBlocked
+		case domain.DirectTaskStatusErrored:
+			newStatus = domain.WorkItemStatusErrored
+		}
+		if newStatus != "" {
+			item.Status = newStatus
 			item.ActiveTaskID = ""
 			if task.Output != "" {
 				item.LastResult = task.Output
 			}
 			item.LastResultAt = &now
 			if _, err := r.cfg.Board.Update(ctx, item); err != nil {
-				slog.Warn("queue runner: failed to mark item errored", "id", item.ID, "err", err)
+				slog.Warn("queue runner: failed to update item status", "id", item.ID, "status", newStatus, "err", err)
 			}
 		}
 	}

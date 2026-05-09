@@ -105,9 +105,11 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 
 	messages := []domain.ProviderMessage{{Role: "user", Content: msgCtx}}
 
+	systemPrompt := u.soulPrompt + domain.TaskOutcomeInstructions
+
 	for i := range maxToolIterations {
 		resp, err := provider.Invoke(ctx, domain.InvokeRequest{
-			SystemPrompt: u.soulPrompt,
+			SystemPrompt: systemPrompt,
 			Messages:     messages,
 			Tools:        tools,
 		})

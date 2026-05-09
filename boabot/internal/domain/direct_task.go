@@ -47,6 +47,10 @@ const (
 	DirectTaskStatusFailed DirectTaskStatus = "failed"
 	// DirectTaskStatusSucceeded means the task completed successfully and output is available.
 	DirectTaskStatusSucceeded DirectTaskStatus = "succeeded"
+	// DirectTaskStatusBlocked means the bot completed but requires operator action before it can proceed.
+	DirectTaskStatusBlocked DirectTaskStatus = "blocked"
+	// DirectTaskStatusErrored means the bot completed but encountered a failure it cannot recover from.
+	DirectTaskStatusErrored DirectTaskStatus = "errored"
 )
 
 // DirectTaskStore persists and retrieves direct tasks.

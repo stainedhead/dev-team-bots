@@ -339,7 +339,9 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	slog.Info("team started", "bots", started, "orchestrator", orchestratorName)
 
 	<-runCtx.Done()
-	return tm.Shutdown(context.Background())
+	// Pass the cancelled runCtx so Shutdown applies its 30-second timeout rather
+	// than waiting forever on context.Background().
+	return tm.Shutdown(runCtx)
 }
 
 // Shutdown sends a ShutdownMessage to all registered bots then waits for all

@@ -55,11 +55,12 @@ func (f *fakeAuth) VerifyPassword(ctx context.Context, username, password string
 }
 
 type fakeBoardStore struct {
-	createFn func(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error)
-	updateFn func(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error)
-	getFn    func(ctx context.Context, id string) (domain.WorkItem, error)
-	listFn   func(ctx context.Context, filter domain.WorkItemFilter) ([]domain.WorkItem, error)
-	deleteFn func(ctx context.Context, id string) error
+	createFn  func(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error)
+	updateFn  func(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error)
+	getFn     func(ctx context.Context, id string) (domain.WorkItem, error)
+	listFn    func(ctx context.Context, filter domain.WorkItemFilter) ([]domain.WorkItem, error)
+	deleteFn  func(ctx context.Context, id string) error
+	reorderFn func(ctx context.Context, ids []string) error
 }
 
 func (f *fakeBoardStore) Create(ctx context.Context, item domain.WorkItem) (domain.WorkItem, error) {
@@ -90,6 +91,12 @@ func (f *fakeBoardStore) List(ctx context.Context, filter domain.WorkItemFilter)
 func (f *fakeBoardStore) Delete(ctx context.Context, id string) error {
 	if f.deleteFn != nil {
 		return f.deleteFn(ctx, id)
+	}
+	return nil
+}
+func (f *fakeBoardStore) Reorder(ctx context.Context, ids []string) error {
+	if f.reorderFn != nil {
+		return f.reorderFn(ctx, ids)
 	}
 	return nil
 }

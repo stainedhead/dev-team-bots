@@ -39,6 +39,9 @@ type BoardStore interface {
 	Get(ctx context.Context, id string) (WorkItem, error)
 	List(ctx context.Context, filter WorkItemFilter) ([]WorkItem, error)
 	Delete(ctx context.Context, id string) error
+	// Reorder sets the SortPosition of each item to its index (1-based) in ids.
+	// Items not in ids are unchanged.
+	Reorder(ctx context.Context, ids []string) error
 }
 
 // Attachment holds a file uploaded to a WorkItem.
@@ -66,6 +69,7 @@ type WorkItem struct {
 	LastResult     string         `json:"last_result,omitempty"`
 	LastResultAt   *time.Time     `json:"last_result_at,omitempty"`
 	Attachments    []Attachment   `json:"attachments,omitempty"`
+	SortPosition   int            `json:"sort_position"`
 	CreatedBy      string         `json:"created_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`

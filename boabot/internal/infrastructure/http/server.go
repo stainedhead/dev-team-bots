@@ -5,18 +5,18 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"image"
-	"image/color"
-	"image/png"
-	"math"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -78,7 +78,7 @@ type Config struct {
 	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
 	AllowedWorkDirs []string            // whitelisted base directories for item working directories
 	TaskLogBase     string              // base directory for per-task log directories (optional)
-	IconPNG         []byte             // optional branding icon served at /imgs/boabot-icon.png
+	IconPNG         []byte              // optional branding icon served at /imgs/boabot-icon.png
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -130,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/board/{id}", s.auth(s.handleBoardDelete))
 	mux.HandleFunc("POST /api/v1/board/{id}/assign", s.auth(s.handleBoardAssign))
 	mux.HandleFunc("POST /api/v1/board/{id}/close", s.auth(s.handleBoardClose))
+	mux.HandleFunc("POST /api/v1/board/reorder", s.auth(s.handleBoardReorder))
 	mux.HandleFunc("POST /api/v1/board/{id}/attachments", s.auth(s.handleBoardAttachmentUpload))
 	mux.HandleFunc("GET /api/v1/board/{id}/attachments/{attId}", s.auth(s.handleBoardAttachmentGet))
 	mux.HandleFunc("DELETE /api/v1/board/{id}/attachments/{attId}", s.auth(s.handleBoardAttachmentDelete))
@@ -472,6 +473,7 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "item not found")
 		return
 	}
+	oldStatus := existing.Status
 	var req struct {
 		Title       *string `json:"title"`
 		Description *string `json:"description"`
@@ -520,6 +522,24 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeInternalError(w, "board update", err)
 		return
+	}
+
+	// When the status changes, append the moved item to the end of the new column
+	// by calling Reorder with all current items in their existing order + moved item.
+	if req.Status != nil && updated.Status != oldStatus {
+		colItems, listErr := s.cfg.Board.List(r.Context(), domain.WorkItemFilter{Status: updated.Status})
+		if listErr == nil {
+			ids := make([]string, 0, len(colItems))
+			for _, it := range colItems {
+				if it.ID != updated.ID {
+					ids = append(ids, it.ID)
+				}
+			}
+			ids = append(ids, updated.ID)
+			if reorderErr := s.cfg.Board.Reorder(r.Context(), ids); reorderErr != nil {
+				slog.Warn("board reorder after status change failed", "err", reorderErr)
+			}
+		}
 	}
 
 	// If status moved to in-progress and a bot is assigned, dispatch a task.
@@ -774,6 +794,21 @@ func (s *Server) handleBoardDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.cfg.Board.Delete(r.Context(), id); err != nil {
 		writeError(w, http.StatusNotFound, "item not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleBoardReorder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids required")
+		return
+	}
+	if err := s.cfg.Board.Reorder(r.Context(), req.IDs); err != nil {
+		writeInternalError(w, "board reorder", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1973,6 +2008,8 @@ const kanbanHTML = `<!DOCTYPE html>
     .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.55rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
     .card:hover{border-color:#2d3e5a}
     .card.dragging{opacity:.35;cursor:grabbing}
+    .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}
+    .card.drag-below{border-bottom:2px solid #3b82f6;border-bottom-left-radius:0;border-bottom-right-radius:0}
     .card-title{font-size:.78rem;font-weight:500;line-height:1.35}
     .card-desc{font-size:.68rem;color:#475569;margin-top:.2rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .card-foot{display:flex;align-items:center;gap:.3rem;margin-top:.4rem}
@@ -2486,6 +2523,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var allItems=[], allBots=[], allWorkDirs=[];
   var selectedBots=[], pendingTasks={}, fastPollTimer=null;
   var dragId=null, setPwTarget=null;
+  var dropTargetId=null, dropPos=null;
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
   var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', outputPollTimer=null, askPollTimer=null, boardAskPending=false;
@@ -2666,6 +2704,38 @@ const kanbanHTML = `<!DOCTYPE html>
       '</div>';
     d.addEventListener('dragstart',function(ev){dragging=true;dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
     d.addEventListener('dragend',function(){dragging=false;d.classList.remove('dragging')});
+    d.addEventListener('dragover',function(ev){
+      if(!dragId||dragId===it.id||!dragging)return;
+      ev.preventDefault();ev.stopPropagation();
+      var mid=d.getBoundingClientRect().top+d.getBoundingClientRect().height/2;
+      if(ev.clientY<mid){d.classList.add('drag-above');d.classList.remove('drag-below');dropPos='before';}
+      else{d.classList.remove('drag-above');d.classList.add('drag-below');dropPos='after';}
+      dropTargetId=it.id;
+    });
+    d.addEventListener('dragleave',function(){
+      d.classList.remove('drag-above','drag-below');
+      if(dropTargetId===it.id){dropTargetId=null;dropPos=null;}
+    });
+    d.addEventListener('drop',function(ev){
+      ev.preventDefault();ev.stopPropagation();
+      d.classList.remove('drag-above','drag-below');
+      if(!dragId||dragId===it.id)return;
+      var src=allItems.find(function(x){return x.id===dragId});
+      if(src&&src.status===it.status){
+        var col=allItems.filter(function(x){return x.status===it.status}).slice()
+          .sort(function(a,b){return (a.sort_position||999999)-(b.sort_position||999999)});
+        col=col.filter(function(x){return x.id!==dragId});
+        var ti=col.findIndex(function(x){return x.id===it.id});
+        col.splice(dropPos==='before'?ti:ti+1,0,src);
+        api('POST','/api/v1/board/reorder',{ids:col.map(function(x){return x.id;})})
+          .then(function(){dragId=null;dropTargetId=null;loadBoard();})
+          .catch(function(e){alert('Reorder failed: '+e.message);});
+      } else if(src){
+        api('PATCH','/api/v1/board/'+dragId,{status:it.status})
+          .then(function(){dragId=null;dropTargetId=null;loadBoard();})
+          .catch(function(e){alert('Move failed: '+e.message);});
+      }
+    });
     d.onclick=(function(item,el){return function(){if(!dragging&&token)openBoardCtx(item,el)}})(it,d);
     return d;
   }
@@ -2677,8 +2747,16 @@ const kanbanHTML = `<!DOCTYPE html>
       var body=ge(c.hdr),cnt=ge(c.cnt),list=buckets[c.status]||[];
       cnt.textContent=list.length;
       body.innerHTML='';
-      if(!list.length){body.innerHTML='<div class="nil">No items</div>';return}
-      list.forEach(function(it){body.appendChild(makeCard(it))});
+      if(!list.length){body.innerHTML='<div class="nil">No items</div>';return;}
+      // Done column: sort by last_result_at ASC when no explicit positions set
+      if(c.status==='done'&&list.every(function(x){return !x.sort_position})){
+        list=list.slice().sort(function(a,b){
+          var ta=a.last_result_at?new Date(a.last_result_at).getTime():Infinity;
+          var tb=b.last_result_at?new Date(b.last_result_at).getTime():Infinity;
+          return ta-tb;
+        });
+      }
+      list.forEach(function(it){body.appendChild(makeCard(it));});
     });
   }
 
@@ -2702,7 +2780,15 @@ const kanbanHTML = `<!DOCTYPE html>
     var active={};
     allItems.forEach(function(it){if(it.active_task_id&&it.assigned_to)active[it.assigned_to]=(active[it.assigned_to]||0)+1});
     el.innerHTML='';
-    allBots.forEach(function(b){
+    // Sort: orchestrator pinned first, remaining alphabetically by name.
+    var sorted=allBots.slice().sort(function(a,b){
+      var ao=a.bot_type==='orchestrator',bo=b.bot_type==='orchestrator';
+      if(ao&&!bo)return -1;
+      if(!ao&&bo)return 1;
+      return a.name<b.name?-1:a.name>b.name?1:0;
+    });
+    var hasOrch=sorted.length>0&&sorted[0].bot_type==='orchestrator';
+    sorted.forEach(function(b,idx){
       var on=b.status==='active',n=active[b.name]||0;
       var pct=Math.min(n/6*100,100);
       var fc=n===0?'bfill-none':n<=2?'bfill-lo':n<=5?'bfill-md':'bfill-hi';
@@ -2717,6 +2803,12 @@ const kanbanHTML = `<!DOCTYPE html>
         '<div class="bmeta">'+esc(b.bot_type||'')+(on?' &bull; '+ago(b.last_heartbeat):' &bull; inactive')+'</div>'+
         (on?'<div class="bbar"><div class="bfill '+fc+'" style="width:'+pct+'%"></div></div>':'');
       el.appendChild(c);
+      // Separator between orchestrator and the rest.
+      if(hasOrch&&idx===0&&sorted.length>1){
+        var sep=document.createElement('div');
+        sep.style.cssText='height:1px;background:#1a2744;margin:.25rem 0';
+        el.appendChild(sep);
+      }
     });
   }
 

@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -88,6 +90,8 @@ func (s *InMemoryBoardStore) persist() {
 }
 
 // Create stores a new WorkItem with a generated ID and sets UpdatedAt.
+// SortPosition is set to the number of existing items in the same status + 1
+// so the new item lands at the bottom of its column.
 func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (domain.WorkItem, error) {
 	id, err := newID()
 	if err != nil {
@@ -97,6 +101,13 @@ func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (do
 	item.UpdatedAt = time.Now().UTC()
 
 	s.mu.Lock()
+	sameStatus := 0
+	for _, existing := range s.items {
+		if existing.Status == item.Status {
+			sameStatus++
+		}
+	}
+	item.SortPosition = sameStatus + 1
 	s.items[id] = item
 	s.persist()
 	s.mu.Unlock()
@@ -137,6 +148,8 @@ func (s *InMemoryBoardStore) Get(_ context.Context, id string) (domain.WorkItem,
 }
 
 // List returns all work items matching the filter. Always returns a non-nil slice.
+// Results are sorted by SortPosition ASC (zero-valued items sort after
+// explicitly-positioned ones), with CreatedAt ASC as a secondary key.
 func (s *InMemoryBoardStore) List(_ context.Context, filter domain.WorkItemFilter) ([]domain.WorkItem, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -154,6 +167,19 @@ func (s *InMemoryBoardStore) List(_ context.Context, filter domain.WorkItemFilte
 		}
 		result = append(result, item)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		pi, pj := result[i].SortPosition, result[j].SortPosition
+		if pi == 0 {
+			pi = math.MaxInt
+		}
+		if pj == 0 {
+			pj = math.MaxInt
+		}
+		if pi != pj {
+			return pi < pj
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result, nil
 }
 
@@ -165,6 +191,21 @@ func (s *InMemoryBoardStore) Delete(_ context.Context, id string) error {
 		return ErrWorkItemNotFound
 	}
 	delete(s.items, id)
+	s.persist()
+	return nil
+}
+
+// Reorder sets the SortPosition of each item to its 1-based index in ids.
+// Items whose ID does not appear in ids are left unchanged.
+func (s *InMemoryBoardStore) Reorder(_ context.Context, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, id := range ids {
+		if item, ok := s.items[id]; ok {
+			item.SortPosition = i + 1
+			s.items[id] = item
+		}
+	}
 	s.persist()
 	return nil
 }

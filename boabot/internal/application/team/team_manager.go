@@ -891,6 +891,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	}
 
 	// Wire live progress handler so the Output tab reflects tool-call traces mid-run.
+	// Trace lines go to task.Output only — item.LastResult is reserved for the final summary.
 	if sharedTasks != nil {
 		worker.WithProgressHandler(func(taskID, line string) {
 			task, getErr := sharedTasks.Get(context.Background(), taskID)
@@ -899,15 +900,6 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			}
 			task.Output += line + "\n"
 			_, _ = sharedTasks.Update(context.Background(), task)
-
-			if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
-				items, listErr := tm.sharedBoard.List(context.Background(), domain.WorkItemFilter{ActiveTaskID: taskID})
-				if listErr == nil && len(items) > 0 {
-					item := items[0]
-					item.LastResult += line + "\n"
-					_, _ = tm.sharedBoard.Update(context.Background(), item)
-				}
-			}
 		})
 	}
 

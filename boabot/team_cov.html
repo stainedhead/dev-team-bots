@@ -1,0 +1,1291 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>team: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/bot_registry.go (100.0%)</option>
+				
+				<option value="file1">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/mcp.go (100.0%)</option>
+				
+				<option value="file2">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/provider_factory.go (97.4%)</option>
+				
+				<option value="file3">github.com/stainedhead/dev-team-bots/boabot/internal/application/team/team_manager.go (73.4%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package team provides TeamManager and BotRegistry for starting and managing
+// all enabled bots in-process without any cloud infrastructure.
+package team
+
+import (
+        "sync"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+)
+
+// BotRegistry tracks the identity of every bot that has been started by the
+// TeamManager.  It is safe for concurrent use.
+type BotRegistry struct {
+        mu   sync.RWMutex
+        bots map[string]domain.BotIdentity
+}
+
+// NewBotRegistry constructs an empty BotRegistry.
+func NewBotRegistry() *BotRegistry <span class="cov8" title="1">{
+        return &amp;BotRegistry{
+                bots: make(map[string]domain.BotIdentity),
+        }
+}</span>
+
+// Register adds or overwrites the identity for identity.Name.
+func (r *BotRegistry) Register(identity domain.BotIdentity) <span class="cov8" title="1">{
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        r.bots[identity.Name] = identity
+}</span>
+
+// Get returns the BotIdentity for name, and false if it is not registered.
+func (r *BotRegistry) Get(name string) (domain.BotIdentity, bool) <span class="cov8" title="1">{
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        id, ok := r.bots[name]
+        return id, ok
+}</span>
+
+// List returns a snapshot of all registered identities in an unspecified order.
+func (r *BotRegistry) List() []domain.BotIdentity <span class="cov8" title="1">{
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+        out := make([]domain.BotIdentity, 0, len(r.bots))
+        for _, id := range r.bots </span><span class="cov8" title="1">{
+                out = append(out, id)
+        }</span>
+        <span class="cov8" title="1">return out</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package team
+
+import (
+        "context"
+        "fmt"
+
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+)
+
+// noopMCPClient is a test-only stub retained for internals_test.go.
+type noopMCPClient struct{}
+
+func (n *noopMCPClient) ListTools(_ context.Context) ([]domain.MCPTool, error) <span class="cov8" title="1">{
+        return nil, nil
+}</span>
+
+func (n *noopMCPClient) CallTool(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) <span class="cov8" title="1">{
+        return domain.MCPToolResult{}, fmt.Errorf("MCP not configured")
+}</span>
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package team
+
+import (
+        "context"
+        "fmt"
+
+        awsconfig "github.com/aws/aws-sdk-go-v2/config"
+        "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/anthropic"
+        bedrock "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/aws/bedrock"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/codeagent"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+        openaiinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
+)
+
+// localProviderFactory implements domain.ProviderFactory for local single-binary
+// operation.  It pre-builds every provider at construction time so that Get is
+// a simple map lookup.
+type localProviderFactory struct {
+        providers map[string]domain.ModelProvider
+        errs      map[string]error
+}
+
+// newLocalProviderFactory builds a provider for each entry in cfgs.
+// Unsupported provider types are recorded as errors and returned by Get.
+func newLocalProviderFactory(cfgs []config.ProviderConfig) *localProviderFactory <span class="cov8" title="1">{
+        f := &amp;localProviderFactory{
+                providers: make(map[string]domain.ModelProvider, len(cfgs)),
+                errs:      make(map[string]error, len(cfgs)),
+        }
+        for _, pc := range cfgs </span><span class="cov8" title="1">{
+                p, err := buildProvider(pc)
+                if err != nil </span><span class="cov8" title="1">{
+                        f.errs[pc.Name] = err
+                }</span> else<span class="cov8" title="1"> {
+                        f.providers[pc.Name] = p
+                }</span>
+        }
+        <span class="cov8" title="1">return f</span>
+}
+
+// Get returns the named ModelProvider, or an error if it could not be built or
+// is unknown.
+func (f *localProviderFactory) Get(name string) (domain.ModelProvider, error) <span class="cov8" title="1">{
+        if err, bad := f.errs[name]; bad </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">if p, ok := f.providers[name]; ok </span><span class="cov8" title="1">{
+                return p, nil
+        }</span>
+        <span class="cov8" title="1">return nil, fmt.Errorf("team: unknown provider %q", name)</span>
+}
+
+// buildProvider constructs a ModelProvider for a single ProviderConfig.
+func buildProvider(pc config.ProviderConfig) (domain.ModelProvider, error) <span class="cov8" title="1">{
+        switch pc.Type </span>{
+        case "anthropic":<span class="cov8" title="1">
+                p, err := anthropic.NewFromEnv(pc.ModelID)
+                if err != nil </span><span class="cov8" title="1">{
+                        return nil, fmt.Errorf("team: build anthropic provider %q: %w", pc.Name, err)
+                }</span>
+                <span class="cov8" title="1">return p, nil</span>
+
+        case "bedrock":<span class="cov8" title="1">
+                awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("team: build bedrock provider %q: load AWS config: %w", pc.Name, err)
+                }</span>
+                <span class="cov8" title="1">client := bedrockruntime.NewFromConfig(awsCfg)
+                return bedrock.NewProvider(client, pc.ModelID), nil</span>
+
+        case "openai":<span class="cov8" title="1">
+                p, err := openaiinfra.NewProvider(pc.Endpoint, pc.ModelID)
+                if err != nil </span><span class="cov8" title="1">{
+                        return nil, fmt.Errorf("team: build openai provider %q: %w", pc.Name, err)
+                }</span>
+                <span class="cov8" title="1">return p, nil</span>
+
+        case "claude_code":<span class="cov8" title="1">
+                if pc.WorkDir == "" </span><span class="cov8" title="1">{
+                        return nil, fmt.Errorf("team: claude_code provider %q requires work_dir to be set", pc.Name)
+                }</span>
+                <span class="cov8" title="1">bin := pc.BinaryPath
+                if bin == "" </span><span class="cov8" title="1">{
+                        bin = "claude"
+                }</span>
+                <span class="cov8" title="1">return codeagent.New(bin, pc.WorkDir), nil</span>
+
+        case "codex":<span class="cov8" title="1">
+                if pc.WorkDir == "" </span><span class="cov8" title="1">{
+                        return nil, fmt.Errorf("team: codex provider %q requires work_dir to be set", pc.Name)
+                }</span>
+                <span class="cov8" title="1">bin := pc.BinaryPath
+                if bin == "" </span><span class="cov8" title="1">{
+                        bin = "codex"
+                }</span>
+                <span class="cov8" title="1">return codeagent.New(bin, pc.WorkDir, codeagent.WithDialect(codeagent.DialectCodex)), nil</span>
+
+        default:<span class="cov8" title="1">
+                return nil, fmt.Errorf("team: unsupported provider type %q", pc.Type)</span>
+        }
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package team
+
+import (
+        "context"
+        "fmt"
+        "log/slog"
+        "math"
+        "net/http"
+        "os"
+        "path/filepath"
+        "sync"
+        "time"
+
+        "gopkg.in/yaml.v3"
+
+        "github.com/stainedhead/dev-team-bots/boabot/imgs"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/application"
+        appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+        apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
+        appplugin "github.com/stainedhead/dev-team-bots/boabot/internal/application/plugin"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/application/pool"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+        githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
+        httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
+        localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
+        orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
+        localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
+        localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
+        "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+        openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
+        slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
+)
+
+// TeamConfig is the parsed team.yaml structure.
+type TeamConfig struct {
+        Team []BotEntry `yaml:"team"`
+}
+
+// BotEntry describes a single bot in the team roster.
+type BotEntry struct {
+        Name         string `yaml:"name"`
+        Type         string `yaml:"type"`
+        Enabled      bool   `yaml:"enabled"`
+        Orchestrator bool   `yaml:"orchestrator"`
+}
+
+// ManagerConfig holds the configuration for a TeamManager.
+type ManagerConfig struct {
+        // TeamFilePath is the path to team.yaml.
+        TeamFilePath string
+        // BotsDir is the directory that contains bots/&lt;type&gt;/ subdirectories.
+        BotsDir string
+        // MemoryRoot is the base path for per-bot memory files. Defaults to ./memory.
+        MemoryRoot string
+        // AllowedWorkDirs is the set of base directories that bots may read/write
+        // via their MCP filesystem tools. Typically sourced from orchestrator.work_dirs.
+        AllowedWorkDirs []string
+        // RestartDelay is the initial back-off on panic restart. Defaults to 1s.
+        RestartDelay time.Duration
+        // MaxRestartDelay is the maximum back-off. Defaults to 5 minutes.
+        MaxRestartDelay time.Duration
+        // WatchdogCfg configures the heap memory watchdog. Zero means disabled.
+        WatchdogCfg watchdog.Config
+}
+
+func (c *ManagerConfig) applyDefaults() <span class="cov8" title="1">{
+        if c.RestartDelay &lt;= 0 </span><span class="cov8" title="1">{
+                c.RestartDelay = time.Second
+        }</span>
+        <span class="cov8" title="1">if c.MaxRestartDelay &lt;= 0 </span><span class="cov8" title="1">{
+                c.MaxRestartDelay = 5 * time.Minute
+        }</span>
+        <span class="cov8" title="1">if c.MemoryRoot == "" </span><span class="cov8" title="1">{
+                c.MemoryRoot = "memory"
+        }</span>
+}
+
+// simpleWorkerFactory wraps a single pre-wired Worker so that WorkerFactory.New
+// always returns the same instance.  This is fine for the local single-binary
+// model because each bot has exactly one goroutine calling New at a time.
+type simpleWorkerFactory struct {
+        worker domain.Worker
+}
+
+func (f *simpleWorkerFactory) New() domain.Worker <span class="cov8" title="1">{ return f.worker }</span>
+
+// TeamManager starts and manages all enabled bots in-process.
+// Create one with NewTeamManager and call Run to start the team.
+type TeamManager struct {
+        cfg      ManagerConfig
+        router   *queue.Router
+        bus      *bus.Bus
+        registry *BotRegistry
+
+        // botRunner is called once per enabled bot. Defaults to (*TeamManager).startBot.
+        // Replaced in tests via export_test.go to avoid real file I/O and network calls.
+        botRunner func(ctx context.Context, entry BotEntry, orchestratorName string) error
+
+        // teamEntries holds all enabled bot entries, set by Run before any bots start.
+        // Used by startBot to pre-register the full team in the orchestrator control plane.
+        teamEntries []BotEntry
+
+        // sharedChatStore, sharedTaskStore and sharedBoard are created once in Run
+        // and used by all bots so that any bot's reply surfaces in the orchestrator
+        // chat interface and board state is kept consistent.
+        sharedChatStore domain.ChatStore
+        sharedTaskStore domain.DirectTaskStore
+        sharedBoard     domain.BoardStore
+
+        // techLeadPool manages the pool of tech-lead instances (orchestrator mode only).
+        techLeadPool *pool.Pool
+
+        // orchestratorName is the name of the orchestrator bot, set during Run.
+        // Used by spawnTechLead to wire pool entries to the correct routing topology.
+        orchestratorName string
+
+        // dynamicBots tracks goroutines started by the tech-lead pool's spawnFn.
+        dynamicBots   map[string]*dynamicBot
+        dynamicBotsMu sync.Mutex
+
+        // slackMonitor is the optional Slack Socket Mode channel monitor.
+        // Set via WithSlackMonitor; nil means Slack integration is disabled.
+        slackMonitor *slackinfra.Monitor
+
+        // askRouter routes mid-task user questions to running bots.
+        askRouter *teamAskRouter
+
+        // pluginStore and pluginInstallDir are set when the plugin system is wired
+        // (orchestrator mode with Plugins.InstallDir set), and injected into the MCP client.
+        pluginStore      domain.PluginStore
+        pluginInstallDir string
+
+        wg     sync.WaitGroup
+        cancel context.CancelFunc
+}
+
+// dynamicBot holds the lifecycle handles for a pool-spawned tech-lead goroutine.
+type dynamicBot struct {
+        cancel context.CancelFunc
+        done   chan struct{}
+}
+
+// NewTeamManager constructs a TeamManager.  Call Run to start the team.
+func NewTeamManager(cfg ManagerConfig, router *queue.Router, bus *bus.Bus) *TeamManager <span class="cov8" title="1">{
+        cfg.applyDefaults()
+        tm := &amp;TeamManager{
+                cfg:       cfg,
+                router:    router,
+                bus:       bus,
+                registry:  NewBotRegistry(),
+                askRouter: &amp;teamAskRouter{chs: make(map[string]chan domain.AskRequest)},
+        }
+        tm.botRunner = tm.startBot
+        tm.dynamicBots = make(map[string]*dynamicBot)
+        return tm
+}</span>
+
+// AskRouter returns the domain.AskRouter that routes mid-task user questions
+// to whichever bot is currently running.  Wire this into the HTTP server config.
+func (tm *TeamManager) AskRouter() domain.AskRouter <span class="cov8" title="1">{ return tm.askRouter }</span>
+
+// Registry returns the BotRegistry so callers can inspect running bots.
+func (tm *TeamManager) Registry() *BotRegistry <span class="cov8" title="1">{ return tm.registry }</span>
+
+// WithSlackMonitor attaches an optional Slack Socket Mode monitor that
+// receives DMs and @mentions and posts results back to Slack.
+func (tm *TeamManager) WithSlackMonitor(m *slackinfra.Monitor) <span class="cov0" title="0">{
+        tm.slackMonitor = m
+}</span>
+
+// slackMonitors returns the Slack monitor as a []domain.ChannelMonitor slice,
+// or nil if no monitor has been configured.
+func (tm *TeamManager) slackMonitors() []domain.ChannelMonitor <span class="cov8" title="1">{
+        if tm.slackMonitor == nil </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+        <span class="cov0" title="0">return []domain.ChannelMonitor{tm.slackMonitor}</span>
+}
+
+// Run reads team.yaml, starts all enabled bots, blocks until ctx is cancelled,
+// then calls Shutdown.  It returns an error if the team file cannot be parsed
+// or if no bots could be started.
+func (tm *TeamManager) Run(ctx context.Context) error <span class="cov8" title="1">{
+        teamCfg, err := loadTeamConfig(tm.cfg.TeamFilePath)
+        if err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("team: load team config: %w", err)
+        }</span>
+
+        // Identify the orchestrator bot — its name is used as the target for
+        // registration messages in local mode.
+        <span class="cov8" title="1">orchestratorName := ""
+        for _, e := range teamCfg.Team </span><span class="cov8" title="1">{
+                if e.Orchestrator &amp;&amp; e.Enabled </span><span class="cov8" title="1">{
+                        orchestratorName = e.Name
+                        break</span>
+                }
+        }
+        // If there is no enabled orchestrator, fall back to the first enabled bot so
+        // that bots can still attempt to register (even if nothing handles it).
+        <span class="cov8" title="1">if orchestratorName == "" </span><span class="cov8" title="1">{
+                for _, e := range teamCfg.Team </span><span class="cov8" title="1">{
+                        if e.Enabled </span><span class="cov8" title="1">{
+                                orchestratorName = e.Name
+                                break</span>
+                        }
+                }
+        }
+
+        // Pre-register all enabled bots with the Router so channels exist before
+        // any bot tries to send to another. Also snapshot the list so startBot can
+        // seed the orchestrator control plane with every team member.
+        <span class="cov8" title="1">for _, e := range teamCfg.Team </span><span class="cov8" title="1">{
+                if !e.Enabled </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">tm.router.Register(e.Name, 0)
+                tm.teamEntries = append(tm.teamEntries, e)</span>
+        }
+
+        // Create shared stores. The orchestrator HTTP server uses these; all bots
+        // register a result handler against them so any bot's reply appears in chat.
+        // Persist the chat store under the orchestrator's memory directory.
+        <span class="cov8" title="1">orchestratorMemPath := filepath.Join(tm.cfg.MemoryRoot, orchestratorName)
+        _ = os.MkdirAll(orchestratorMemPath, 0o755)
+        tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
+        tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore(filepath.Join(orchestratorMemPath, "tasks.json"))
+        sharedBoard := orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
+        tm.sharedBoard = sharedBoard
+
+        // Store orchestratorName for use by pool spawn callbacks.
+        tm.orchestratorName = orchestratorName
+
+        // Wire the TechLeadPool with a board status-change hook.
+        psf := infrastructure.NewPoolStateFile(filepath.Join(orchestratorMemPath, "pool.json"))
+        techLeadPool := pool.New(pool.Config{
+                BotsDir:    tm.cfg.BotsDir,
+                MemoryRoot: tm.cfg.MemoryRoot,
+        }, psf)
+        techLeadPool.SetSpawnFn(tm.spawnTechLead)
+        techLeadPool.SetStopFn(tm.stopTechLead)
+        techLeadPool.SetIsRunningFn(tm.isTechLeadRunning)
+        if err := techLeadPool.Reconcile(ctx); err != nil </span><span class="cov0" title="0">{
+                slog.Warn("tech-lead pool reconcile failed", "err", err)
+        }</span>
+        <span class="cov8" title="1">sharedBoard.SetStatusChangeHook(func(old, newStatus domain.WorkItemStatus, item domain.WorkItem) </span><span class="cov0" title="0">{
+                switch </span>{
+                case newStatus == domain.WorkItemStatusInProgress:<span class="cov0" title="0">
+                        if _, allocErr := techLeadPool.Allocate(ctx, item.ID); allocErr != nil </span><span class="cov0" title="0">{
+                                slog.Error("tech-lead pool allocate failed", "item", item.ID, "err", allocErr)
+                        }</span>
+                case old == domain.WorkItemStatusInProgress:<span class="cov0" title="0">
+                        if deallocErr := techLeadPool.Deallocate(ctx, item.ID); deallocErr != nil </span><span class="cov0" title="0">{
+                                slog.Warn("tech-lead pool deallocate failed", "item", item.ID, "err", deallocErr)
+                        }</span>
+                }
+        })
+        <span class="cov8" title="1">tm.techLeadPool = techLeadPool
+
+        // Start each enabled bot in its own goroutine.
+        started := 0
+        runCtx, cancel := context.WithCancel(ctx)
+        tm.cancel = cancel
+
+        for _, e := range teamCfg.Team </span><span class="cov8" title="1">{
+                if !e.Enabled </span><span class="cov8" title="1">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">entry := e // capture loop variable
+                tm.wg.Add(1)
+                go func() </span><span class="cov8" title="1">{
+                        defer tm.wg.Done()
+                        tm.runBotWithRestart(runCtx, entry, orchestratorName)
+                }</span>()
+                <span class="cov8" title="1">started++</span>
+        }
+
+        <span class="cov8" title="1">if started == 0 </span><span class="cov8" title="1">{
+                cancel()
+                return fmt.Errorf("team: no enabled bots found in %s", tm.cfg.TeamFilePath)
+        }</span>
+
+        // Start the heap watchdog if either threshold is configured.
+        <span class="cov8" title="1">if tm.cfg.WatchdogCfg.WarnMB &gt; 0 || tm.cfg.WatchdogCfg.HardMB &gt; 0 </span><span class="cov8" title="1">{
+                wd := watchdog.New(tm.cfg.WatchdogCfg, cancel)
+                tm.wg.Add(1)
+                go func() </span><span class="cov8" title="1">{
+                        defer tm.wg.Done()
+                        wd.Run(runCtx)
+                }</span>()
+        }
+
+        <span class="cov8" title="1">slog.Info("team started", "bots", started, "orchestrator", orchestratorName)
+
+        &lt;-runCtx.Done()
+        return tm.Shutdown(context.Background())</span>
+}
+
+// Shutdown sends a ShutdownMessage to all registered bots then waits for all
+// goroutines to exit.  If the provided context is already cancelled it uses a
+// 30-second timeout.
+func (tm *TeamManager) Shutdown(ctx context.Context) error <span class="cov8" title="1">{
+        if tm.cancel != nil </span><span class="cov8" title="1">{
+                tm.cancel()
+        }</span>
+
+        // Broadcast shutdown to all bots so their poll loops unblock.
+        <span class="cov8" title="1">shutdownCtx := ctx
+        if ctx.Err() != nil </span><span class="cov8" title="1">{
+                var cancel context.CancelFunc
+                shutdownCtx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+                defer cancel()
+        }</span>
+
+        <span class="cov8" title="1">for _, id := range tm.registry.List() </span><span class="cov8" title="1">{
+                msg := domain.Message{
+                        Type: domain.MessageTypeShutdown,
+                        From: "team-manager",
+                        To:   id.Name,
+                }
+                if err := tm.router.SendTo(shutdownCtx, id.Name, msg); err != nil </span><span class="cov0" title="0">{
+                        slog.Warn("shutdown message delivery failed", "bot", id.Name, "err", err)
+                }</span>
+        }
+
+        <span class="cov8" title="1">done := make(chan struct{})
+        go func() </span><span class="cov8" title="1">{
+                tm.wg.Wait()
+                close(done)
+        }</span>()
+
+        <span class="cov8" title="1">select </span>{
+        case &lt;-done:<span class="cov8" title="1">
+                return nil</span>
+        case &lt;-shutdownCtx.Done():<span class="cov0" title="0">
+                return fmt.Errorf("team: shutdown timed out waiting for goroutines: %w", shutdownCtx.Err())</span>
+        }
+}
+
+// runBotWithRestart runs a bot goroutine, restarting it on panic with
+// exponential back-off capped at MaxRestartDelay.  It exits cleanly when ctx
+// is cancelled.
+func (tm *TeamManager) runBotWithRestart(ctx context.Context, entry BotEntry, orchestratorName string) <span class="cov8" title="1">{
+        delay := tm.cfg.RestartDelay
+        for </span><span class="cov8" title="1">{
+                if ctx.Err() != nil </span><span class="cov0" title="0">{
+                        return
+                }</span>
+                <span class="cov8" title="1">crashed := tm.runBot(ctx, entry, orchestratorName, tm.botRunner)
+                if !crashed </span><span class="cov8" title="1">{
+                        // Clean exit (ctx cancelled).
+                        return
+                }</span>
+                // Exponential back-off.
+                <span class="cov8" title="1">slog.Warn("bot crashed, restarting", "bot", entry.Name, "delay", delay)
+                select </span>{
+                case &lt;-time.After(delay):<span class="cov8" title="1"></span>
+                case &lt;-ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                }
+                <span class="cov8" title="1">delay = time.Duration(math.Min(float64(delay*2), float64(tm.cfg.MaxRestartDelay)))</span>
+        }
+}
+
+// runBot starts a single bot and returns true if it panicked, false if it
+// exited normally (ctx cancelled or clean error).
+func (tm *TeamManager) runBot(
+        ctx context.Context,
+        entry BotEntry,
+        orchestratorName string,
+        runner func(context.Context, BotEntry, string) error,
+) (panicked bool) <span class="cov8" title="1">{
+        defer func() </span><span class="cov8" title="1">{
+                if r := recover(); r != nil </span><span class="cov8" title="1">{
+                        slog.Error("bot panic recovered", "bot", entry.Name, "panic", r)
+                        panicked = true
+                }</span>
+        }()
+
+        <span class="cov8" title="1">if err := runner(ctx, entry, orchestratorName); err != nil </span><span class="cov8" title="1">{
+                if ctx.Err() != nil </span><span class="cov8" title="1">{
+                        return false // context cancelled — not a crash
+                }</span>
+                <span class="cov8" title="1">slog.Error("bot exited with error", "bot", entry.Name, "err", err)
+                return true</span> // treat non-context errors as crashes so the bot is restarted
+        }
+        <span class="cov8" title="1">return false</span>
+}
+
+// validateEmbedderProvider checks that the provider named in botCfg.Memory.Embedder
+// exists in botCfg.Models.Providers and that its type supports embeddings.
+// Currently only "openai" supports the /v1/embeddings endpoint.
+func validateEmbedderProvider(botCfg config.Config) error <span class="cov8" title="1">{
+        embedderName := botCfg.Memory.Embedder
+        for _, pc := range botCfg.Models.Providers </span><span class="cov8" title="1">{
+                if pc.Name == embedderName </span><span class="cov8" title="1">{
+                        if pc.Type != "openai" </span><span class="cov8" title="1">{
+                                return fmt.Errorf(
+                                        "provider %q (type %q) does not support embeddings; only openai does",
+                                        pc.Name, pc.Type,
+                                )
+                        }</span>
+                        <span class="cov8" title="1">return nil</span>
+                }
+        }
+        <span class="cov8" title="1">return fmt.Errorf("embedder provider %q not found in providers list", embedderName)</span>
+}
+
+// startBot wires adapters and runs the RunAgentUseCase for a single bot.
+func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestratorName string) error <span class="cov8" title="1">{
+        // Load per-bot config from &lt;botsDir&gt;/&lt;type&gt;/config.yaml.
+        botCfgPath := filepath.Join(tm.cfg.BotsDir, entry.Type, "config.yaml")
+        botCfg, err := config.Load(botCfgPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("load bot config for %q: %w", entry.Name, err)
+        }</span>
+
+        // Validate embedder provider if a non-bm25 embedder is configured.
+        <span class="cov8" title="1">if botCfg.Memory.Embedder != "" &amp;&amp; botCfg.Memory.Embedder != "bm25" </span><span class="cov8" title="1">{
+                if err := validateEmbedderProvider(botCfg); err != nil </span><span class="cov8" title="1">{
+                        return fmt.Errorf("embedder validation for %q: %w", entry.Name, err)
+                }</span>
+        }
+
+        // Read SOUL.md from &lt;botsDir&gt;/&lt;type&gt;/SOUL.md.
+        <span class="cov8" title="1">soulPath := filepath.Join(tm.cfg.BotsDir, entry.Type, "SOUL.md")
+        soulBytes, err := os.ReadFile(soulPath)
+        if err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("read SOUL.md for %q: %w", entry.Name, err)
+        }</span>
+        <span class="cov8" title="1">soulPrompt := string(soulBytes)
+
+        // Per-bot memory directory.
+        memPath := filepath.Join(tm.cfg.MemoryRoot, entry.Name)
+
+        // Wire optional GitHub memory backup. Restore runs before adapters initialise
+        // so that restored files (including budget.json) are visible on first load.
+        var backupUC *appbackup.ScheduledBackupUseCase
+        if botCfg.Backup.Enabled </span><span class="cov8" title="1">{
+                token := os.Getenv("BOABOT_BACKUP_TOKEN")
+                gb, err := githubbackup.New(githubbackup.Config{
+                        RepoURL:     botCfg.Backup.GitHub.Repo,
+                        Branch:      botCfg.Backup.GitHub.Branch,
+                        AuthorName:  botCfg.Backup.GitHub.AuthorName,
+                        AuthorEmail: botCfg.Backup.GitHub.AuthorEmail,
+                        MemoryPath:  memPath,
+                        Token:       token,
+                })
+                if err != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("create github backup for %q: %w", entry.Name, err)
+                }</span>
+                <span class="cov8" title="1">if botCfg.Backup.RestoreOnEmpty </span><span class="cov8" title="1">{
+                        empty, err := isDirEmpty(memPath)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return fmt.Errorf("check memory dir for %q: %w", entry.Name, err)
+                        }</span>
+                        <span class="cov8" title="1">if empty </span><span class="cov0" title="0">{
+                                if err := gb.Restore(ctx); err != nil </span><span class="cov0" title="0">{
+                                        return fmt.Errorf("restore on empty for %q: %w", entry.Name, err)
+                                }</span>
+                        }
+                }
+                <span class="cov8" title="1">backupUC = appbackup.New(gb, botCfg.Backup.Schedule)</span>
+        }
+
+        // Wire domain.MemoryStore.
+        <span class="cov8" title="1">memStore, err := fs.New(memPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("create FS for %q: %w", entry.Name, err)
+        }</span>
+
+        // Wire domain.VectorStore.
+        <span class="cov8" title="1">vecStore, err := vector.New(memPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("create VectorStore for %q: %w", entry.Name, err)
+        }</span>
+
+        // Run the scheduled backup loop if configured.
+        <span class="cov8" title="1">if backupUC != nil </span><span class="cov8" title="1">{
+                backupCtx, backupCancel := context.WithCancel(ctx)
+                var backupDone sync.WaitGroup
+                backupDone.Add(1)
+                defer func() </span><span class="cov8" title="1">{
+                        backupCancel()
+                        backupDone.Wait()
+                }</span>()
+                <span class="cov8" title="1">go func() </span><span class="cov8" title="1">{
+                        defer backupDone.Done()
+                        _ = backupUC.Run(backupCtx)
+                }</span>()
+        }
+
+        // Orchestrator-specific stores, populated only when orchestrator mode is active.
+        <span class="cov8" title="1">var orchTaskStore domain.DirectTaskStore
+        var orchChatStore domain.ChatStore
+
+        // Wire orchestrator HTTP server before provider validation so the dashboard
+        // is reachable even when ANTHROPIC_API_KEY is not yet configured.
+        if botCfg.Orchestrator.Enabled &amp;&amp; botCfg.Orchestrator.APIPort &gt; 0 </span><span class="cov8" title="1">{
+                adminPassword := botCfg.Orchestrator.AdminPassword
+                if adminPassword == "" </span><span class="cov0" title="0">{
+                        adminPassword = "admin"
+                }</span>
+                <span class="cov8" title="1">oAuth, oAuthErr := orchestratorlocal.NewInMemoryAuthProvider(adminPassword, botCfg.Orchestrator.JWTSecret, filepath.Join(memPath, "users.json"))
+                if oAuthErr != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("create orchestrator auth for %q: %w", entry.Name, oAuthErr)
+                }</span>
+                <span class="cov8" title="1">board := tm.sharedBoard
+                cp := orchestratorlocal.NewInMemoryControlPlane()
+
+                // Pre-register every enabled team member so the dashboard shows the
+                // full roster immediately, even before individual bots send heartbeats.
+                for _, te := range tm.teamEntries </span><span class="cov8" title="1">{
+                        if regErr := cp.Register(ctx, domain.BotEntry{
+                                Name:    te.Name,
+                                BotType: te.Type,
+                        }); regErr != nil </span><span class="cov0" title="0">{
+                                return fmt.Errorf("register bot with control plane for %q: %w", te.Name, regErr)
+                        }</span>
+                }
+
+                // Wire direct-task store and dispatcher. The orchestrator's own queue
+                // can route to any bot because queueURL == bot name in local mode.
+                <span class="cov8" title="1">orchTaskStore = tm.sharedTaskStore
+                routerQueue := tm.router.QueueFor(entry.Name)
+                dispatcher := orchestratorlocal.NewLocalTaskDispatcher(tm.sharedTaskStore, routerQueue, entry.Name)
+
+                orchChatStore = tm.sharedChatStore
+
+                // Wire LocalSkillRegistry; fall back to noop if the directory cannot be created.
+                var skillReg domain.SkillRegistry = orchestratorlocal.NoopSkillRegistry{}
+                if sr, srErr := orchestratorlocal.NewLocalSkillRegistry(filepath.Join(memPath, "skills")); srErr == nil </span><span class="cov8" title="1">{
+                        skillReg = sr
+                }</span> else<span class="cov0" title="0"> {
+                        slog.Warn("skill registry unavailable; using noop", "bot", entry.Name, "err", srErr)
+                }</span>
+
+                <span class="cov8" title="1">taskLogBase := filepath.Join(memPath, "task-logs")
+
+                // Wire BoardDispatch: builds instructions and dispatches board items as tasks.
+                maxConcurrent := botCfg.Orchestrator.MaxConcurrent
+                if maxConcurrent &lt;= 0 </span><span class="cov8" title="1">{
+                        maxConcurrent = 3
+                }</span>
+                <span class="cov8" title="1">boardDispatch := apporchestrator.NewBoardDispatch(apporchestrator.BoardDispatchConfig{
+                        Dispatcher:      dispatcher,
+                        Board:           board,
+                        AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
+                })
+
+                // Wire plugin system if install_dir is configured.
+                srvCfg := httpserver.Config{
+                        Auth:            oAuth,
+                        Board:           board,
+                        Team:            cp,
+                        Users:           oAuth,
+                        Skills:          skillReg,
+                        DLQ:             orchestratorlocal.NoopDLQStore{},
+                        Tasks:           orchTaskStore,
+                        Dispatcher:      dispatcher,
+                        Chat:            orchChatStore,
+                        AskRouter:       tm.askRouter,
+                        AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
+                        TaskLogBase:     taskLogBase,
+                        IconPNG:         imgs.BoabotIcon,
+                        BoardDispatcher: boardDispatch,
+                        MaxConcurrent:   maxConcurrent,
+                }
+                if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" </span><span class="cov0" title="0">{
+                        // Resolve relative paths relative to memory dir.
+                        if !filepath.IsAbs(pluginInstallDir) </span><span class="cov0" title="0">{
+                                pluginInstallDir = filepath.Join(memPath, pluginInstallDir)
+                        }</span>
+                        <span class="cov0" title="0">if ps, psErr := localplugin.NewLocalPluginStore(pluginInstallDir); psErr == nil </span><span class="cov0" title="0">{
+                                // Build config registries.
+                                cfgRegs := make([]domain.PluginRegistry, 0, len(botCfg.Orchestrator.Plugins.Registries))
+                                for _, r := range botCfg.Orchestrator.Plugins.Registries </span><span class="cov0" title="0">{
+                                        cfgRegs = append(cfgRegs, domain.PluginRegistry{Name: r.Name, URL: r.URL, Trusted: r.Trusted})
+                                }</span>
+                                <span class="cov0" title="0">rm := httpserver.NewHTTPRegistryManager(pluginInstallDir, cfgRegs)
+                                installUC := appplugin.NewInstallUseCase(ps, rm)
+                                manageUC := appplugin.NewManageUseCase(ps)
+                                registryUC := appplugin.NewRegistryUseCase(rm)
+                                srvCfg.Plugins = ps
+                                srvCfg.RegistryMgr = rm
+                                srvCfg.PluginInstall = installUC
+                                srvCfg.PluginManage = manageUC
+                                srvCfg.PluginRegistry = registryUC
+                                // Store install dir for MCP client wiring below.
+                                tm.pluginStore = ps
+                                tm.pluginInstallDir = pluginInstallDir</span>
+                        } else<span class="cov0" title="0"> {
+                                slog.Warn("plugin store unavailable", "err", psErr)
+                        }</span>
+                }
+
+                <span class="cov8" title="1">srv := httpserver.New(srvCfg)
+
+                httpSrv := &amp;http.Server{
+                        Addr:    fmt.Sprintf(":%d", botCfg.Orchestrator.APIPort),
+                        Handler: srv.Handler(),
+                }
+
+                httpCtx, httpCancel := context.WithCancel(ctx)
+                var httpDone sync.WaitGroup
+                httpDone.Add(1)
+                defer func() </span><span class="cov8" title="1">{
+                        httpCancel()
+                        httpDone.Wait()
+                }</span>()
+                <span class="cov8" title="1">go func() </span><span class="cov8" title="1">{
+                        defer httpDone.Done()
+                        if listenErr := httpSrv.ListenAndServe(); listenErr != nil &amp;&amp; listenErr != http.ErrServerClosed </span><span class="cov0" title="0">{
+                                slog.Error("orchestrator HTTP server error", "bot", entry.Name, "err", listenErr)
+                        }</span>
+                }()
+                <span class="cov8" title="1">go func() </span><span class="cov8" title="1">{
+                        &lt;-httpCtx.Done()
+                        if shutdownErr := httpSrv.Shutdown(context.Background()); shutdownErr != nil </span><span class="cov0" title="0">{
+                                slog.Warn("orchestrator HTTP server shutdown error", "bot", entry.Name, "err", shutdownErr)
+                        }</span>
+                }()
+
+                <span class="cov8" title="1">slog.Info("orchestrator dashboard started", "url", fmt.Sprintf("http://localhost:%d/", botCfg.Orchestrator.APIPort))
+
+                // Start queue runner — manages queued items and auto-transitions completed tasks.
+                queueRunner := apporchestrator.NewQueueRunner(apporchestrator.QueueRunnerConfig{
+                        Board:         board,
+                        Tasks:         orchTaskStore,
+                        Dispatcher:    boardDispatch,
+                        MaxConcurrent: maxConcurrent,
+                })
+                go func() </span><span class="cov8" title="1">{
+                        queueRunner.Start(httpCtx)
+                }</span>()
+
+                // Run retention cleanup immediately on start, then daily.
+                <span class="cov8" title="1">retentionDays := botCfg.Orchestrator.RetentionDays
+                retBoard := tm.sharedBoard
+                retTasks := tm.sharedTaskStore
+                orchestratorlocal.RunRetentionCleanup(ctx, retBoard, retTasks, retentionDays)
+                go func() </span><span class="cov8" title="1">{
+                        ticker := time.NewTicker(24 * time.Hour)
+                        defer ticker.Stop()
+                        for </span><span class="cov8" title="1">{
+                                select </span>{
+                                case &lt;-ticker.C:<span class="cov0" title="0">
+                                        orchestratorlocal.RunRetentionCleanup(ctx, retBoard, retTasks, retentionDays)</span>
+                                case &lt;-ctx.Done():<span class="cov8" title="1">
+                                        return</span>
+                                }
+                        }
+                }()
+        }
+
+        // Wire domain.ModelProvider.
+        <span class="cov8" title="1">pf := newLocalProviderFactory(botCfg.Models.Providers)
+        providerName := botCfg.Models.Default
+        provider, err := pf.Get(providerName)
+        if err != nil </span><span class="cov8" title="1">{
+                if botCfg.Orchestrator.Enabled </span><span class="cov0" title="0">{
+                        // Dashboard is up; bot loop inactive until a provider is configured.
+                        slog.Warn("model provider unavailable; dashboard running but bot loop is inactive",
+                                "bot", entry.Name, "provider", providerName, "err", err)
+                        &lt;-ctx.Done()
+                        return nil
+                }</span>
+                <span class="cov8" title="1">return fmt.Errorf("get provider %q for %q: %w", providerName, entry.Name, err)</span>
+        }
+
+        // Wire domain.Embedder — defaults to BM25; switches to the named provider
+        // if memory.embedder is set and the provider exposes an OpenAI-compatible
+        // embeddings endpoint.
+        <span class="cov8" title="1">embedder := domain.Embedder(bm25.DefaultEmbedder())
+        if name := botCfg.Memory.Embedder; name != "" &amp;&amp; name != "bm25" </span><span class="cov0" title="0">{
+                var found bool
+                for _, pc := range botCfg.Models.Providers </span><span class="cov0" title="0">{
+                        if pc.Name != name </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+                        <span class="cov0" title="0">found = true
+                        e, embedErr := openaiembedder.NewEmbedder(pc.Endpoint, pc.ModelID)
+                        if embedErr != nil </span><span class="cov0" title="0">{
+                                slog.Warn("could not build OpenAI embedder; falling back to BM25",
+                                        "bot", entry.Name, "embedder", name, "err", embedErr)
+                        }</span> else<span class="cov0" title="0"> {
+                                embedder = e
+                                slog.Info("using OpenAI-compatible embedder", "bot", entry.Name,
+                                        "embedder", name, "endpoint", pc.Endpoint, "model", pc.ModelID)
+                        }</span>
+                        <span class="cov0" title="0">break</span>
+                }
+                <span class="cov0" title="0">if !found </span><span class="cov0" title="0">{
+                        slog.Warn("embedder provider not found in providers list; falling back to BM25",
+                                "bot", entry.Name, "embedder", name)
+                }</span>
+        }
+
+        // Wire local filesystem MCP client. Non-tech-lead bots also get the
+        // complete_board_item tool so they can mark items done independently.
+        <span class="cov8" title="1">var mcpOpts []func(*localmcp.Client)
+        if entry.Type != "tech-lead" &amp;&amp; tm.sharedBoard != nil </span><span class="cov8" title="1">{
+                mcpOpts = append(mcpOpts, localmcp.WithBoardStore(tm.sharedBoard))
+        }</span>
+        <span class="cov8" title="1">if tm.pluginStore != nil </span><span class="cov0" title="0">{
+                mcpOpts = append(mcpOpts, localmcp.WithPluginStore(tm.pluginStore))
+                mcpOpts = append(mcpOpts, localmcp.WithInstallDir(tm.pluginInstallDir))
+        }</span>
+        <span class="cov8" title="1">mcpClient := localmcp.NewClient(tm.cfg.AllowedWorkDirs, mcpOpts...)
+
+        // Construct the worker (ExecuteTaskUseCase).
+        worker := application.NewExecuteTaskUseCase(
+                provider,
+                mcpClient,
+                memStore,
+                embedder,
+                vecStore,
+                soulPrompt,
+        )
+        // Wire chat provider if configured and different from the default.
+        if chatName := botCfg.Models.ChatProvider; chatName != "" &amp;&amp; chatName != providerName </span><span class="cov0" title="0">{
+                if chatProvider, chatErr := pf.Get(chatName); chatErr != nil </span><span class="cov0" title="0">{
+                        slog.Warn("chat provider unavailable; falling back to default for chat tasks",
+                                "bot", entry.Name, "chat_provider", chatName, "err", chatErr)
+                }</span> else<span class="cov0" title="0"> {
+                        worker.WithChatProvider(chatProvider)
+                        slog.Info("chat provider wired", "bot", entry.Name, "chat_provider", chatName)
+                }</span>
+        }
+
+        // Wire mid-task ask channel so the bot can answer questions between tool calls.
+        <span class="cov8" title="1">worker.WithAskChannel(tm.askRouter.getOrCreate(entry.Name))
+
+        // Wire rules tracker so the bot loads AGENTS.md / CLAUDE.md hierarchically.
+        if len(tm.cfg.AllowedWorkDirs) &gt; 0 </span><span class="cov0" title="0">{
+                worker.WithRulesTracker(localrules.NewTracker(tm.cfg.AllowedWorkDirs))
+        }</span>
+
+        <span class="cov8" title="1">workerFactory := &amp;simpleWorkerFactory{worker: worker}
+
+        // Build the BotIdentity.
+        identity := domain.BotIdentity{
+                Name:     entry.Name,
+                BotType:  entry.Type,
+                QueueURL: entry.Name, // in local mode, queue URL == bot name
+        }
+        tm.registry.Register(identity)
+
+        // Get the bot's own queue (already registered by Run).
+        q := tm.router.QueueFor(entry.Name)
+
+        // Run the agent loop.
+        uc := application.NewRunAgentUseCase(
+                identity,
+                q,
+                tm.bus,
+                workerFactory,
+                tm.slackMonitors(),
+                orchestratorName,
+        )
+
+        // Wire SubTeamManager for tech-lead bots.
+        if entry.Type == "tech-lead" </span><span class="cov8" title="1">{
+                sm := subteam.New(subteam.Config{
+                        BotsDir:    tm.cfg.BotsDir,
+                        MemoryRoot: tm.cfg.MemoryRoot,
+                })
+                sf := infrastructure.NewSessionFile(filepath.Join(memPath, "session.json"))
+                sm.WithSessionFile(sf)
+                uc.WithSubTeamManager(sm)
+                defer func() </span><span class="cov8" title="1">{
+                        if tearErr := sm.TearDownAll(context.Background()); tearErr != nil </span><span class="cov0" title="0">{
+                                slog.Warn("subteam teardown error", "bot", entry.Name, "err", tearErr)
+                        }</span>
+                }()
+        }
+
+        // Register result handler on every bot so any bot's reply surfaces in chat.
+        <span class="cov8" title="1">sharedChat := tm.sharedChatStore
+        sharedTasks := tm.sharedTaskStore
+        if sharedChat != nil &amp;&amp; sharedTasks != nil </span><span class="cov8" title="1">{
+                uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) </span><span class="cov0" title="0">{
+                        if _, err := sharedTasks.Get(handlerCtx, p.TaskID); err != nil </span><span class="cov0" title="0">{
+                                return // not a tracked chat task
+                        }</span>
+                        <span class="cov0" title="0">msg := domain.ChatMessage{
+                                Direction: domain.ChatDirectionInbound,
+                                Content:   p.Output,
+                                TaskID:    p.TaskID,
+                        }
+                        if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil </span><span class="cov0" title="0">{
+                                msg.BotName = task.BotName
+                                msg.ThreadID = task.ThreadID
+                        }</span>
+                        <span class="cov0" title="0">if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil </span><span class="cov0" title="0">{
+                                slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
+                        }</span>
+
+                        // Mark the task as completed.
+                        <span class="cov0" title="0">if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil </span><span class="cov0" title="0">{
+                                now := time.Now().UTC()
+                                task.Status = domain.DirectTaskStatusSucceeded
+                                task.CompletedAt = &amp;now
+                                task.Output = p.Output
+                                _, _ = sharedTasks.Update(handlerCtx, task)
+
+                                // If this was a board-triggered task, update the board item status.
+                                if task.Source == domain.DirectTaskSourceBoard &amp;&amp; tm.sharedBoard != nil </span><span class="cov0" title="0">{
+                                        items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
+                                        if listErr == nil &amp;&amp; len(items) &gt; 0 </span><span class="cov0" title="0">{
+                                                item := items[0]
+                                                item.LastResult = p.Output
+                                                item.LastResultAt = &amp;now
+                                                item.ActiveTaskID = ""
+                                                if p.Success </span><span class="cov0" title="0">{
+                                                        item.Status = domain.WorkItemStatusDone
+                                                }</span> else<span class="cov0" title="0"> {
+                                                        item.Status = domain.WorkItemStatusBlocked
+                                                }</span>
+                                                <span class="cov0" title="0">_, _ = tm.sharedBoard.Update(handlerCtx, item)</span>
+                                        }
+                                }
+                        }
+
+                        // Forward the result to the Slack monitor so it can post a reply.
+                        <span class="cov0" title="0">if tm.slackMonitor != nil </span><span class="cov0" title="0">{
+                                tm.slackMonitor.HandleResult(handlerCtx, p)
+                        }</span>
+                })
+        } else<span class="cov0" title="0"> if tm.slackMonitor != nil </span><span class="cov0" title="0">{
+                // In non-orchestrator mode, install a minimal result handler just for Slack.
+                slackMon := tm.slackMonitor
+                uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) </span><span class="cov0" title="0">{
+                        slackMon.HandleResult(handlerCtx, p)
+                }</span>)
+        }
+
+        // Wire live progress handler so the Output tab reflects tool-call traces mid-run.
+        <span class="cov8" title="1">if sharedTasks != nil </span><span class="cov8" title="1">{
+                worker.WithProgressHandler(func(taskID, line string) </span><span class="cov0" title="0">{
+                        task, getErr := sharedTasks.Get(context.Background(), taskID)
+                        if getErr != nil </span><span class="cov0" title="0">{
+                                return
+                        }</span>
+                        <span class="cov0" title="0">task.Output += line + "\n"
+                        _, _ = sharedTasks.Update(context.Background(), task)
+
+                        if task.Source == domain.DirectTaskSourceBoard &amp;&amp; tm.sharedBoard != nil </span><span class="cov0" title="0">{
+                                items, listErr := tm.sharedBoard.List(context.Background(), domain.WorkItemFilter{ActiveTaskID: taskID})
+                                if listErr == nil &amp;&amp; len(items) &gt; 0 </span><span class="cov0" title="0">{
+                                        item := items[0]
+                                        item.LastResult += line + "\n"
+                                        _, _ = tm.sharedBoard.Update(context.Background(), item)
+                                }</span>
+                        }
+                })
+        }
+
+        <span class="cov8" title="1">return uc.Run(ctx)</span>
+}
+
+// --- teamAskRouter -----------------------------------------------------------
+
+// teamAskRouter implements domain.AskRouter by routing questions to per-bot
+// buffered channels that are drained inside each bot's Execute loop.
+type teamAskRouter struct {
+        mu  sync.RWMutex
+        chs map[string]chan domain.AskRequest
+}
+
+// getOrCreate returns the ask channel for botName, creating it on first use.
+func (r *teamAskRouter) getOrCreate(botName string) chan domain.AskRequest <span class="cov8" title="1">{
+        r.mu.Lock()
+        defer r.mu.Unlock()
+        if ch := r.chs[botName]; ch != nil </span><span class="cov8" title="1">{
+                return ch
+        }</span>
+        <span class="cov8" title="1">ch := make(chan domain.AskRequest, 10)
+        r.chs[botName] = ch
+        return ch</span>
+}
+
+// Enqueue implements domain.AskRouter.
+func (r *teamAskRouter) Enqueue(botName string, req domain.AskRequest) bool <span class="cov8" title="1">{
+        r.mu.RLock()
+        ch := r.chs[botName]
+        r.mu.RUnlock()
+        if ch == nil </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">select </span>{
+        case ch &lt;- req:<span class="cov8" title="1">
+                return true</span>
+        default:<span class="cov8" title="1">
+                return false</span>
+        }
+}
+
+// --- helpers -----------------------------------------------------------------
+
+// isDirEmpty returns true if path does not exist or is an empty directory.
+func isDirEmpty(path string) (bool, error) <span class="cov8" title="1">{
+        entries, err := os.ReadDir(path)
+        if err != nil </span><span class="cov8" title="1">{
+                if os.IsNotExist(err) </span><span class="cov8" title="1">{
+                        return true, nil
+                }</span>
+                <span class="cov0" title="0">return false, err</span>
+        }
+        <span class="cov8" title="1">return len(entries) == 0, nil</span>
+}
+
+// spawnTechLead starts a new tech-lead instance in a managed goroutine and is
+// injected into the TechLeadPool as its spawnFn.
+func (tm *TeamManager) spawnTechLead(ctx context.Context, instanceName string) error <span class="cov8" title="1">{
+        // Find the first tech-lead BotEntry to use as a template.
+        var template *BotEntry
+        for i := range tm.teamEntries </span><span class="cov8" title="1">{
+                if tm.teamEntries[i].Type == "tech-lead" </span><span class="cov8" title="1">{
+                        template = &amp;tm.teamEntries[i]
+                        break</span>
+                }
+        }
+        <span class="cov8" title="1">if template == nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("spawnTechLead: no tech-lead bot entry found in team config")
+        }</span>
+
+        <span class="cov8" title="1">entry := BotEntry{
+                Name:    instanceName,
+                Type:    template.Type,
+                Enabled: true,
+        }
+        tm.router.Register(instanceName, 0)
+
+        botCtx, cancel := context.WithCancel(ctx)
+        done := make(chan struct{})
+
+        tm.dynamicBotsMu.Lock()
+        tm.dynamicBots[instanceName] = &amp;dynamicBot{cancel: cancel, done: done}
+        tm.dynamicBotsMu.Unlock()
+
+        tm.wg.Add(1)
+        go func() </span><span class="cov8" title="1">{
+                defer tm.wg.Done()
+                defer func() </span><span class="cov8" title="1">{
+                        tm.dynamicBotsMu.Lock()
+                        delete(tm.dynamicBots, instanceName)
+                        tm.dynamicBotsMu.Unlock()
+                        close(done)
+                }</span>()
+                <span class="cov8" title="1">tm.runBotWithRestart(botCtx, entry, tm.orchestratorName)</span>
+        }()
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+// stopTechLead cancels a dynamically spawned tech-lead instance.
+func (tm *TeamManager) stopTechLead(_ context.Context, instanceName string) error <span class="cov8" title="1">{
+        tm.dynamicBotsMu.Lock()
+        db, ok := tm.dynamicBots[instanceName]
+        tm.dynamicBotsMu.Unlock()
+
+        if !ok </span><span class="cov8" title="1">{
+                return fmt.Errorf("stopTechLead: instance %q not found", instanceName)
+        }</span>
+        <span class="cov8" title="1">db.cancel()
+        return nil</span>
+}
+
+// isTechLeadRunning reports whether a dynamically spawned tech-lead goroutine
+// is still active. Used by TechLeadPool.Reconcile.
+func (tm *TeamManager) isTechLeadRunning(_ context.Context, instanceName string) bool <span class="cov8" title="1">{
+        tm.dynamicBotsMu.Lock()
+        db, ok := tm.dynamicBots[instanceName]
+        tm.dynamicBotsMu.Unlock()
+
+        if !ok </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">select </span>{
+        case &lt;-db.done:<span class="cov0" title="0">
+                return false</span>
+        default:<span class="cov8" title="1">
+                return true</span>
+        }
+}
+
+func loadTeamConfig(path string) (TeamConfig, error) <span class="cov8" title="1">{
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov8" title="1">{
+                return TeamConfig{}, fmt.Errorf("read %s: %w", path, err)
+        }</span>
+        <span class="cov8" title="1">var tc TeamConfig
+        if err := yaml.Unmarshal(data, &amp;tc); err != nil </span><span class="cov8" title="1">{
+                return TeamConfig{}, fmt.Errorf("parse %s: %w", path, err)
+        }</span>
+        <span class="cov8" title="1">return tc, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

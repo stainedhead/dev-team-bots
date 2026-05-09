@@ -2284,8 +2284,10 @@ const kanbanHTML = `<!DOCTYPE html>
 
 <!-- Login -->
 <dialog id="login-dlg">
-  <div style="text-align:center;margin-bottom:1.25rem"><img src="/imgs/boabot-icon-raw.png" alt="BaoBot" style="width:80px;height:80px;border-radius:.75rem"/></div>
-  <h2>Sign In</h2>
+  <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem">
+    <img src="/imgs/boabot-icon-raw.png" alt="BaoBot" style="width:52px;height:52px;border-radius:.5rem;flex-shrink:0"/>
+    <h2 style="margin:0">Sign In</h2>
+  </div>
   <div class="fg"><label class="fl">Username</label><input class="fi" id="login-u" type="text" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>
   <div class="fg"><label class="fl">Password</label><input class="fi" id="login-p" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>
   <div class="errmsg" id="login-err" style="display:none"></div>

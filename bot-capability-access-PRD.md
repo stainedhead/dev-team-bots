@@ -150,6 +150,7 @@ Execution model:
 
 **Acceptance criteria:**
 - Unit tests cover: normal completion with accumulated output, timeout triggering SIGTERM then SIGKILL, explicit context cancellation, stdin write forwarded to subprocess, progress callback called for each output line.
+- Unit test covers nil stdin channel: subprocess completes normally without blocking when no stdin input is provided.
 - Long-running subprocesses do not block context cancellation of the parent bot.
 - No AWS or other external infrastructure imports in the domain or application layers.
 - `go test -race ./...` passes on all cliagent package tests.

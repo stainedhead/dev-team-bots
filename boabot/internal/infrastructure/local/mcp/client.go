@@ -89,7 +89,7 @@ func NewClient(allowedDirs []string, opts ...func(*Client)) *Client {
 }
 
 // ListTools returns the set of built-in filesystem tools.
-func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
+func (c *Client) ListTools(ctx context.Context) ([]domain.MCPTool, error) {
 	tools := []domain.MCPTool{
 		{
 			Name:        "read_file",
@@ -185,7 +185,7 @@ func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
 
 	// Append active plugin tools, skipping collisions with builtin or earlier plugin tools.
 	if c.pluginStore != nil {
-		plugins, err := c.pluginStore.List(context.Background())
+		plugins, err := c.pluginStore.List(ctx)
 		if err == nil {
 			seen := make(map[string]string) // tool name → claimant (builtin or plugin name)
 			for _, t := range tools {
@@ -323,8 +323,15 @@ func (c *Client) callPluginTool(ctx context.Context, name string, args map[strin
 			// Found the plugin. Run the entrypoint.
 			pluginDir := filepath.Join(c.installDir, p.Name)
 			entrypoint := filepath.Join(pluginDir, p.Manifest.Entrypoint)
-			if _, statErr := os.Stat(entrypoint); os.IsNotExist(statErr) {
+			info, statErr := os.Stat(entrypoint)
+			if os.IsNotExist(statErr) {
 				return errResult(fmt.Sprintf("plugin %q entrypoint not found: %s", p.Name, entrypoint)), true, nil
+			}
+			if statErr != nil {
+				return errResult(fmt.Sprintf("plugin %q stat entrypoint: %v", p.Name, statErr)), true, nil
+			}
+			if info.Mode()&0o100 == 0 {
+				return errResult(fmt.Sprintf("plugin %q entrypoint is not executable: %s", p.Name, entrypoint)), true, nil
 			}
 
 			argsJSON, marshalErr := json.Marshal(args)

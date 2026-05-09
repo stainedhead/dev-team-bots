@@ -282,9 +282,9 @@ Bots with the appropriate binaries installed can invoke other AI coding agents a
 | Tool | Binary | Description |
 |---|---|---|
 | `run_claude_code` | `claude` | Runs the Claude Code CLI in `--output-format=stream-json` mode and returns the accumulated text output. |
-| `run_codex` | `codex` | Runs the OpenAI Codex CLI in quiet, full-auto approval mode and returns plain-text output. |
-| `run_openai_codex` | `codex` | Alias for `run_codex`; targets the same OpenAI Codex binary. |
-| `run_opencode` | `opencode` | Runs the opencode CLI and returns plain-text output. |
+| `run_codex` | `codex` | Runs the OpenAI Codex CLI in quiet, full-auto approval mode (`-q --approval-mode=full-auto`) and returns plain-text output. |
+| `run_openai_codex` | `openai-codex` | Runs the `openai-codex` open-source CLI agent in full-auto mode (`--full-auto`). Distinct binary from `run_codex`. |
+| `run_opencode` | `opencode` | Runs the opencode CLI in non-interactive mode (`-q`) and returns plain-text output. |
 
 Each tool accepts three inputs: `instruction` (required — the task prompt), `work_dir` (required — working directory for the subprocess), and `model` (optional — overrides the CLI's default model selection).
 

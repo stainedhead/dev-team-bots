@@ -1391,10 +1391,14 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, userMsg)
 
-	// Route the question to the running bot for a mid-task reply.
-	if s.cfg.AskRouter != nil {
+	// AskRouter delivers questions between tool-call iterations of an active
+	// Execute loop. It only makes sense when the item is in-progress; for any
+	// other status the bot's Execute loop is not running and the channel is
+	// never drained.
+	instruction := fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content)
+	if item.Status == domain.WorkItemStatusInProgress && s.cfg.AskRouter != nil {
 		s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
-			Question: fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content),
+			Question: instruction,
 			ReplyFn: func(reply string) {
 				botMsg := domain.ChatMessage{
 					ThreadID:  threadID,
@@ -1405,6 +1409,12 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 				_ = s.cfg.Chat.Append(context.Background(), botMsg)
 			},
 		})
+	} else if s.cfg.Dispatcher != nil {
+		// Bot is idle (or item not in-progress) — dispatch a chat task.
+		// The TaskResultHandler in TeamManager writes the output as an inbound
+		// message on this thread once the task completes.
+		_, _ = s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil,
+			domain.DirectTaskSourceChat, threadID, item.WorkDir)
 	}
 
 	writeJSON(w, http.StatusCreated, userMsg)
@@ -2005,12 +2015,12 @@ const kanbanHTML = `<!DOCTYPE html>
 
     /* ── Board ── */
     .board{display:flex;gap:.875rem;flex:1;align-items:flex-start;min-height:0}
-    .col{background:#0f1829;border:1px solid #1a2744;border-radius:.5rem;flex:1;min-width:200px;display:flex;flex-direction:column;max-height:100%}
+    .col{background:#0f1829;border:1px solid #1a2744;border-radius:.5rem;flex:1;min-width:240px;display:flex;flex-direction:column;max-height:100%}
     .col.over{border-color:#3b82f6;background:#0d1d35}
     .col-hdr{padding:.6rem .75rem;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.4rem;flex-shrink:0}
     .col-cnt{padding:.05rem .35rem;border-radius:9999px;background:#1a2744;color:#475569;font-size:.6rem;font-weight:600}
     .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
-    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.55rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
+    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
     .card:hover{border-color:#2d3e5a}
     .card.dragging{opacity:.35;cursor:grabbing}
     .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}
@@ -2025,7 +2035,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .card-status-pill{display:inline-block;padding:.06rem .4rem;border-radius:9999px;font-size:.6rem;font-weight:700;margin-right:.3rem;vertical-align:middle}
     .card-status-done{background:#166534;color:#bbf7d0}
     .card-status-errored{background:#7f1d1d;color:#fecaca}
-    .col-queued .col-hdr{color:#93c5fd}
+    .col-backlog .col-hdr,.col-queued .col-hdr,.col-inprogress .col-hdr,.col-blocked .col-hdr,.col-done .col-hdr{color:#93c5fd}
     .col-errored .col-hdr{color:#f87171}
     .nil{text-align:center;color:#1e2d4a;padding:1.5rem .5rem;font-size:.75rem;font-style:italic}
 
@@ -2267,8 +2277,8 @@ const kanbanHTML = `<!DOCTYPE html>
 
     <!-- Board -->
     <div class="pane on" id="pane-board" style="overflow:hidden">
-      <div class="board" id="board" style="flex:1;overflow:auto;min-height:0">
-        <div class="col" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+      <div class="board" id="board" style="flex:1;overflow:auto;min-height:0;min-width:0">
+        <div class="col col-backlog" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
           <div class="col-body" id="b-backlog"><div class="nil">No items</div></div>
         </div>
@@ -2276,15 +2286,15 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="col-hdr">Queued <span class="col-cnt" id="n-queued">0</span></div>
           <div class="col-body" id="b-queued"><div class="nil">No items</div></div>
         </div>
-        <div class="col" id="col-inprogress" data-status="in-progress" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+        <div class="col col-inprogress" id="col-inprogress" data-status="in-progress" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">In Progress <span class="col-cnt" id="n-inprogress">0</span></div>
           <div class="col-body" id="b-inprogress"><div class="nil">No items</div></div>
         </div>
-        <div class="col" id="col-blocked" data-status="blocked" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+        <div class="col col-blocked" id="col-blocked" data-status="blocked" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Blocked <span class="col-cnt" id="n-blocked">0</span></div>
           <div class="col-body" id="b-blocked"><div class="nil">No items</div></div>
         </div>
-        <div class="col" id="col-done" data-status="done" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+        <div class="col col-done" id="col-done" data-status="done" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Done <span class="col-cnt" id="n-done">0</span></div>
           <div class="col-body" id="b-done"><div class="nil">No items</div></div>
         </div>
@@ -2332,7 +2342,7 @@ const kanbanHTML = `<!DOCTYPE html>
           <button class="btn btn-secondary btn-sm" onclick="loadTasks()">Refresh</button>
         </div>
       </div>
-      <div id="tasks-list" style="flex:1;overflow:auto"><div class="empty-state">Loading&#x2026;</div></div>
+      <div id="tasks-list" style="flex:1;overflow:auto;min-width:0"><div class="empty-state">Loading&#x2026;</div></div>
       <div class="ctx-panel" id="task-ctx" style="display:none">
         <div class="ctx-resize-handle" id="tctx-resize"></div>
         <div class="ctx-hdr">
@@ -2534,7 +2544,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="da"><button class="btn btn-secondary" onclick="cls('cp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doChangePw()">Update</button></div>
 </dialog>
 
-<dialog id="qcfg-dlg" style="min-width:22rem">
+<dialog id="qcfg-dlg" style="min-width:24rem">
   <h2 id="qcfg-title">Queue Configuration</h2>
   <div class="fg" style="gap:.5rem">
     <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
@@ -2543,13 +2553,16 @@ const kanbanHTML = `<!DOCTYPE html>
     <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
       <input type="radio" name="qcfg-mode" value="run_at" onchange="onQcfgMode()"/> Run At &mdash; start at a specific time
     </label>
-    <div id="qcfg-run-at-wrap" style="display:none;padding-left:1.5rem">
+    <div id="qcfg-run-at-only-wrap" style="display:none;padding-left:1.5rem">
       <input id="qcfg-run-at" type="datetime-local" class="fi" style="width:100%"/>
     </div>
     <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
-      <input type="radio" name="qcfg-mode" value="run_after" onchange="onQcfgMode()"/> Run After &mdash; wait for another item
+      <input type="radio" name="qcfg-mode" value="run_when" onchange="onQcfgMode()"/> Run When &mdash; at a time and/or after another item
     </label>
-    <div id="qcfg-run-after-wrap" style="display:none;padding-left:1.5rem">
+    <div id="qcfg-run-when-wrap" style="display:none;padding-left:1.5rem;display:none">
+      <div style="font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Run At (optional)</div>
+      <input id="qcfg-run-at-when" type="datetime-local" class="fi" style="width:100%;margin-bottom:.75rem"/>
+      <div style="font-size:.75rem;color:#64748b;margin-bottom:.35rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Run After (optional)</div>
       <select id="qcfg-after-item" class="fi" style="width:100%;margin-bottom:.4rem">
         <option value="">Select predecessor item&hellip;</option>
       </select>
@@ -2572,11 +2585,11 @@ const kanbanHTML = `<!DOCTYPE html>
 </dialog>
 
 <!-- Bot info dialog -->
-<dialog id="bot-info-dlg" style="min-width:24rem;max-width:32rem">
+<dialog id="bot-info-dlg" style="min-width:24rem;max-width:32rem" onclick="if(event.target===this)this.close()">
   <h2 id="bot-info-title" style="margin-bottom:.5rem"></h2>
   <div id="bot-info-body" style="color:#94a3b8;font-size:.82rem;line-height:1.6"></div>
   <div class="da" style="margin-top:1rem">
-    <button class="btn btn-secondary" onclick="cls('bot-info-dlg')">Close</button>
+    <button type="button" class="btn btn-secondary" onclick="cls('bot-info-dlg')">Close</button>
   </div>
 </dialog>
 
@@ -2799,6 +2812,13 @@ const kanbanHTML = `<!DOCTYPE html>
     return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
   }
 
+  function leafDir(path){
+    if(!path)return '';
+    var p=path.replace(/\/+$/,'');
+    var i=p.lastIndexOf('/');
+    return i>=0?p.slice(i+1):p;
+  }
+
   function queueInfoHtml(it){
     if(it.status!=='queued')return '';
     var mode=it.queue_mode||'asap';
@@ -2809,6 +2829,16 @@ const kanbanHTML = `<!DOCTYPE html>
       var pred=allItems.find(function(x){return x.id===it.queue_after_item_id});
       var predTitle=pred?esc(pred.title.substring(0,30)+(pred.title.length>30?'…':'')):esc(it.queue_after_item_id.substring(0,8));
       return '<div class="card-queue-info">&#x23ED; After: '+predTitle+(it.queue_require_success?' (requires success)':'')+'</div>';
+    }
+    if(mode==='run_when'){
+      var parts=[];
+      if(it.queue_run_at)parts.push('&#x23F0; '+esc(fmtQueueAt(it.queue_run_at)));
+      if(it.queue_after_item_id){
+        var p2=allItems.find(function(x){return x.id===it.queue_after_item_id});
+        var t2=p2?esc(p2.title.substring(0,25)+(p2.title.length>25?'…':'')):esc(it.queue_after_item_id.substring(0,8));
+        parts.push('&#x23ED; '+t2);
+      }
+      return '<div class="card-queue-info">'+parts.join(' &amp; ')+'</div>';
     }
     return '<div class="card-queue-info">&#x26A1; ASAP</div>';
   }
@@ -2831,6 +2861,7 @@ const kanbanHTML = `<!DOCTYPE html>
       (it.description?'<div class="card-desc">'+esc(it.description)+'</div>':'')+
       '<div class="card-foot">'+
         (it.assigned_to?'<span class="card-who">'+esc(it.assigned_to)+'</span>':'')+
+        (it.work_dir?'<span class="card-who" style="color:#475569;font-style:normal">&#x1F4C1; '+esc(leafDir(it.work_dir))+'</span>':'')+
         '<span class="card-age">'+ago(it.updated_at)+'</span>'+
       '</div>'+
       (it.status==='queued'&&token?'<div class="card-queue-edit"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();editQueueConfig(\''+esc(it.id)+'\')">&#x270E; Queue config</button></div>':'');
@@ -2932,22 +2963,32 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   // ── Queue config dialog ──────────────────────────────────────────────────────
+  function qcfgFillAfterSel(itemId,selectedId){
+    var sel=ge('qcfg-after-item');
+    sel.innerHTML='<option value="">Select predecessor item…</option>';
+    // Only show items that are in-progress or queued (active candidates).
+    allItems.filter(function(x){
+      return x.id!==itemId&&(x.status==='in-progress'||x.status==='queued');
+    }).forEach(function(x){
+      var o=document.createElement('option');
+      o.value=x.id;
+      o.textContent=x.title.substring(0,60)+(x.title.length>60?'…':'')+' ['+x.status+']';
+      if(x.id===selectedId)o.selected=true;
+      sel.appendChild(o);
+    });
+  }
+
   function openQcfg(itemId,targetStatus){
     qcfgPendingItemId=itemId;
     qcfgPendingStatus=targetStatus||'queued';
     ge('qcfg-err').style.display='none';
-    // Default to ASAP
     document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value==='asap';});
-    ge('qcfg-run-at-wrap').style.display='none';
-    ge('qcfg-run-after-wrap').style.display='none';
+    ge('qcfg-run-at-only-wrap').style.display='none';
+    ge('qcfg-run-when-wrap').style.display='none';
     ge('qcfg-run-at').value='';
+    ge('qcfg-run-at-when').value='';
     ge('qcfg-require-success').checked=true;
-    // Populate predecessor selector with all board items except the current one
-    var sel=ge('qcfg-after-item');
-    sel.innerHTML='<option value="">Select predecessor item…</option>';
-    allItems.filter(function(x){return x.id!==itemId}).forEach(function(x){
-      var o=document.createElement('option');o.value=x.id;o.textContent=x.title.substring(0,60)+(x.title.length>60?'…':'')+' ['+x.status+']';sel.appendChild(o);
-    });
+    qcfgFillAfterSel(itemId,'');
     dlg('qcfg-dlg');
   }
 
@@ -2960,30 +3001,25 @@ const kanbanHTML = `<!DOCTYPE html>
     ge('qcfg-err').style.display='none';
     var mode=it.queue_mode||'asap';
     document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value===mode;});
-    ge('qcfg-run-at-wrap').style.display=mode==='run_at'?'block':'none';
-    ge('qcfg-run-after-wrap').style.display=mode==='run_after'?'block':'none';
-    if(mode==='run_at'&&it.queue_run_at){
-      // Convert ISO to datetime-local value (YYYY-MM-DDTHH:MM)
+    ge('qcfg-run-at-only-wrap').style.display=mode==='run_at'?'block':'none';
+    ge('qcfg-run-when-wrap').style.display=mode==='run_when'?'block':'none';
+    var pad=function(n){return n<10?'0'+n:String(n)};
+    if(it.queue_run_at){
       var d=new Date(it.queue_run_at);
-      var pad=function(n){return n<10?'0'+n:String(n)};
-      ge('qcfg-run-at').value=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+      var iso=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+      ge('qcfg-run-at').value=iso;
+      ge('qcfg-run-at-when').value=iso;
     }
     ge('qcfg-require-success').checked=it.queue_require_success!==false;
-    var sel=ge('qcfg-after-item');
-    sel.innerHTML='<option value="">Select predecessor item…</option>';
-    allItems.filter(function(x){return x.id!==itemId}).forEach(function(x){
-      var o=document.createElement('option');o.value=x.id;o.textContent=x.title.substring(0,60)+(x.title.length>60?'…':'')+' ['+x.status+']';
-      if(x.id===it.queue_after_item_id)o.selected=true;
-      sel.appendChild(o);
-    });
+    qcfgFillAfterSel(itemId,it.queue_after_item_id||'');
     dlg('qcfg-dlg');
   }
 
   function onQcfgMode(){
     var mode=document.querySelector('input[name="qcfg-mode"]:checked');
     if(!mode)return;
-    ge('qcfg-run-at-wrap').style.display=mode.value==='run_at'?'block':'none';
-    ge('qcfg-run-after-wrap').style.display=mode.value==='run_after'?'block':'none';
+    ge('qcfg-run-at-only-wrap').style.display=mode.value==='run_at'?'block':'none';
+    ge('qcfg-run-when-wrap').style.display=mode.value==='run_when'?'block':'none';
   }
 
   function cancelQcfg(){
@@ -3016,11 +3052,12 @@ const kanbanHTML = `<!DOCTYPE html>
       if(!raw){errEl.textContent='Please select a date and time.';errEl.style.display='block';return;}
       body.queue_run_at=new Date(raw).toISOString();
     }
-    if(mode==='run_after'){
-      var predId=ge('qcfg-after-item').value;
-      if(!predId){errEl.textContent='Please select a predecessor item.';errEl.style.display='block';return;}
-      body.queue_after_item_id=predId;
-      body.queue_require_success=ge('qcfg-require-success').checked;
+    if(mode==='run_when'){
+      var rawWhen=ge('qcfg-run-at-when').value;
+      var predWhen=ge('qcfg-after-item').value;
+      if(!rawWhen&&!predWhen){errEl.textContent='Please set a time, a predecessor item, or both.';errEl.style.display='block';return;}
+      if(rawWhen)body.queue_run_at=new Date(rawWhen).toISOString();
+      if(predWhen){body.queue_after_item_id=predWhen;body.queue_require_success=ge('qcfg-require-success').checked;}
     }
     var id=qcfgPendingItemId;
     qcfgPendingItemId=null;qcfgPendingStatus=null;
@@ -3659,9 +3696,10 @@ const kanbanHTML = `<!DOCTYPE html>
     var rows=tasks.map(function(t){
       var sc=t.status==='pending'?'pill-warn':t.status==='running'?'pill-info':t.status==='succeeded'?'pill-ok':'pill-off';
       var label=esc(t.title||(t.instruction||'').substring(0,60))+((!t.title&&t.instruction&&t.instruction.length>60)?'&#x2026;':'');
-      return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+label+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
+      var tDir=t.work_dir?leafDir(t.work_dir):'';
+      return'<tr data-tid="'+esc(t.id)+'"><td style="width:1.5rem;text-align:center"><input type="checkbox" data-cid="'+esc(t.id)+'" onclick="event.stopPropagation();updateTaskDeleteBtn()"/></td><td>'+esc(t.bot_name)+'</td><td>'+label+'</td><td style="font-size:.68rem;color:#475569;white-space:nowrap">'+(tDir?esc(tDir):'&#x2014;')+'</td><td><span class="pill '+sc+'">'+esc(t.status)+'</span></td><td>'+(t.scheduled_at?ago(t.scheduled_at):'&#x2014;')+'</td><td>'+ago(t.created_at)+'</td></tr>';
     }).join('');
-    el.innerHTML='<table><thead><tr><th style="width:1.5rem"><input type="checkbox" id="task-chk-all" onclick="toggleAllTaskChecks(this)"/></th><th>Bot</th><th>Title / Instruction</th><th>Status</th><th>Sched</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el.innerHTML='<table style="min-width:600px"><thead><tr><th style="width:1.5rem"><input type="checkbox" id="task-chk-all" onclick="toggleAllTaskChecks(this)"/></th><th>Bot</th><th>Title / Instruction</th><th>Dir</th><th>Status</th><th>Sched</th><th>Created</th></tr></thead><tbody>'+rows+'</tbody></table>';
     el.querySelectorAll('tr[data-tid]').forEach(function(tr){
       tr.style.cursor='pointer';
       tr.onclick=function(ev){
@@ -4070,6 +4108,14 @@ const kanbanHTML = `<!DOCTYPE html>
     if(idx==null)idx=mpIdx;
     var it=mpItems[idx];if(!it||!mpEl)return;
     var v=mpEl.value;
+    // Path-field mode (mpPos===-1): the whole field is the path — replace it entirely.
+    if(mpMode==='file'&&mpPos===-1){
+      var newVal=it.path+(it.isDir?'/':'');
+      mpEl.value=newVal;mpText=newVal;
+      mpEl.selectionStart=mpEl.selectionEnd=newVal.length;
+      if(it.isDir){mpLoadFile(newVal);mpEl.focus();}else{mpClose();mpEl.focus();}
+      return;
+    }
     var after=v.slice(mpPos+1+mpText.length);
     var before=v.slice(0,mpPos);
     if(mpMode==='file'&&it.isDir){
@@ -4168,25 +4214,23 @@ const kanbanHTML = `<!DOCTYPE html>
     el.addEventListener('blur',function(){setTimeout(mpClose,160);});
   }
 
-  // attachPathMention is like attachMention but only triggers @ (not /) so that
-  // typing / in a sub-path field never opens the skill-command popup.
+  // attachPathMention wires a dedicated path-input field so that typing any
+  // character triggers file/directory completion (the whole field value is the
+  // path). The '/' key never opens the skill-command popup in these fields.
   function attachPathMention(el,workDirFn){
     if(!el)return;
     el.addEventListener('input',function(){
       var v=el.value;
       var cursor=typeof el.selectionStart==='number'?el.selectionStart:v.length;
-      if(mpMode==='file'&&mpEl===el){
-        if(cursor<=mpPos){mpClose();return;}
-        mpText=v.slice(mpPos+1,cursor);mpLoadFile(mpText);return;
-      }
-      if(cursor<1)return;
-      if(v[cursor-1]!=='@')return;
-      var prevCh=cursor>1?v[cursor-2]:'';
-      if(prevCh&&!/[\s\n\r\t]/.test(prevCh))return;
       var wd=typeof workDirFn==='function'?workDirFn():'';
-      if(!wd)return;
-      mpMode='file';mpEl=el;mpPos=cursor-1;mpText='';mpIdx=0;mpWorkDir=wd;
-      if(!mpPop)mpInit();mpLoadFile('');
+      if(!wd){if(mpEl===el)mpClose();return;}
+      if(mpMode==='file'&&mpEl===el){
+        if(cursor===0){mpClose();return;}
+        mpText=v.slice(0,cursor);mpLoadFile(mpText);return;
+      }
+      if(!v.length)return;
+      mpMode='file';mpEl=el;mpPos=-1;mpText=v.slice(0,cursor);mpIdx=0;mpWorkDir=wd;
+      if(!mpPop)mpInit();mpLoadFile(mpText);
     });
     el.addEventListener('keydown',mpOnKeydown);
     el.addEventListener('blur',function(){setTimeout(mpClose,160);});

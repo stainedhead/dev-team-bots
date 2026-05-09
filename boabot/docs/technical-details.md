@@ -42,6 +42,7 @@ internal/
     workflow/           # CreateWorkItem, AdvanceWorkflow, AssignBot, StalledItemRecovery
     subteam/            # SubTeamManager: spawn/terminate/heartbeat for tech-lead sub-agents
     pool/               # TechLeadPool: allocate/deallocate pool of tech-lead instances (orchestrator)
+    orchestrator/       # QueueRunner (poll/dispatch/reconcile Kanban queue), BoardDispatch
 
   infrastructure/
     aws/
@@ -311,6 +312,27 @@ The cache lives in the `HTTPRegistryManager` instance (infrastructure layer) rat
 The MCP client (`internal/infrastructure/local/mcp/client.go`) holds optional references to a `domain.PluginStore` and an `installDir` string, injected via functional options (`WithPluginStore`, `WithInstallDir`). Both are nil by default, preserving backward compatibility for bots that do not use the plugin system.
 
 On each `CallTool` call, if `pluginStore` is set, `callPluginTool` scans active plugins for the named tool before falling through to builtins. The plugin entrypoint is executed with `exec.CommandContext` with a 30-second timeout; arguments are passed as a JSON object on stdin; the result is read from stdout as a `domain.MCPToolResult` JSON object. Non-zero exit or decode failure returns an `MCPToolResult` with `IsError: true`.
+
+## QueueRunner
+
+**Clean Architecture placement:** Application layer (`internal/application/orchestrator/queue_runner.go`).
+
+**Poll loop.** `QueueRunner.Start(ctx)` ticks at a configurable interval (default 5s). Each tick:
+1. **Reconcile** — fetches all `in-progress` items that have an `ActiveTaskID`, queries `DirectTaskStore` for each task, and transitions items whose tasks have succeeded (`done`) or failed (`errored`). Update errors are logged as warnings; the loop continues.
+2. **Capacity check** — counts `in-progress` items; if already at `MaxConcurrent` (default 3) the tick exits early.
+3. **Sort queue** — fetches `queued` items; sorts with ASAP items first (FIFO by `QueuedAt`), then scheduled items (FIFO by `QueuedAt`). Items without a `QueuedAt` fall back to `CreatedAt`.
+4. **Dispatch** — iterates sorted items, calls `isReady` for each, and calls `launch` for up to `slots` ready items.
+
+**Queue modes (isReady).**
+
+| Mode | Ready when |
+|---|---|
+| `asap` / `""` | Immediately |
+| `run_at` | `QueueRunAt` ≤ now |
+| `run_after` | Predecessor `status == done` (or `done\|errored` when `require_success: false`) |
+| `run_when` | Both time condition (`run_at`) AND predecessor condition (`run_after`) satisfied; either may be omitted |
+
+**Launch.** Sets `status = in-progress`, clears scheduling fields, calls `Board.Update`, then calls `Dispatcher.DispatchBoardItem`. If `Update` fails, `launch` returns false and the item is not dispatched. If `DispatchBoardItem` fails, the item remains `in-progress` for operator investigation — it is not rolled back.
 
 ## Key Design Decisions
 

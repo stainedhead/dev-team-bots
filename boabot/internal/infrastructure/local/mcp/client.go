@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/codeagent"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 )
 
 const (
@@ -28,6 +30,10 @@ type Client struct {
 	boardStore  domain.BoardStore
 	pluginStore domain.PluginStore
 	installDir  string
+	// CLI tool support
+	cliRunner  domain.CLIAgentRunner
+	cliTools   config.CLIToolsConfig
+	progressFn func(line string) // optional; called for each output line from CLI tools
 }
 
 // WithBoardStore adds the complete_board_item tool to the client, allowing
@@ -44,6 +50,23 @@ func WithPluginStore(ps domain.PluginStore) func(*Client) {
 // WithInstallDir sets the plugin install directory used for entrypoint resolution.
 func WithInstallDir(dir string) func(*Client) {
 	return func(c *Client) { c.installDir = dir }
+}
+
+// WithCLIRunner sets the CLIAgentRunner used to spawn CLI tool subprocesses.
+func WithCLIRunner(r domain.CLIAgentRunner) func(*Client) {
+	return func(c *Client) { c.cliRunner = r }
+}
+
+// WithCLITools configures which CLI agent tools are enabled and where their
+// binaries are located.
+func WithCLITools(ct config.CLIToolsConfig) func(*Client) {
+	return func(c *Client) { c.cliTools = ct }
+}
+
+// WithProgressFn sets an optional function called for each output line from
+// CLI tool subprocesses. Use this to surface real-time progress in the operator UI.
+func WithProgressFn(fn func(line string)) func(*Client) {
+	return func(c *Client) { c.progressFn = fn }
 }
 
 // NewClient creates a Client restricted to the given directories.
@@ -138,6 +161,26 @@ func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
 		})
 	}
 
+	if c.pluginStore != nil {
+		tools = append(tools, domain.MCPTool{
+			Name: "read_skill",
+			Description: "Read the Markdown instruction file for an installed plugin skill. Returns the full content of " +
+				"commands/<name>.md from the plugin's install directory. After reading, carry out the described steps " +
+				"yourself using your built-in tools (run_shell, read_file, write_file, etc.) — do not look for an " +
+				"external executor. Returns an error string if the skill is not found or its plugin is not active.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"name"},
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "The skill name (e.g. \"review-code\", \"create-prd\"). Must match a tool name listed in an active plugin's manifest.",
+					},
+				},
+			},
+		})
+	}
+
 	// Append active plugin tools, skipping collisions with builtin or earlier plugin tools.
 	if c.pluginStore != nil {
 		plugins, err := c.pluginStore.List(context.Background())
@@ -162,6 +205,51 @@ func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
 					tools = append(tools, t)
 				}
 			}
+		}
+	}
+
+	// Append enabled CLI tools (when runner is configured and binary resolves).
+	if c.cliRunner != nil {
+		if _, ok := resolveBinary(c.cliTools.ClaudeCode, "claude"); ok {
+			tools = append(tools, domain.MCPTool{
+				Name: "run_claude_code",
+				Description: "Run a task using the Claude Code CLI agent (`claude`). Claude Code has full autonomous " +
+					"access to the filesystem and shell in the given work directory — it can read/write files, run " +
+					"commands, use git, and complete multi-step coding tasks. Use for complex implementation, " +
+					"refactoring, spec-driven development, or anything benefiting from Claude's full agentic loop. " +
+					"Supports --model to select cost/quality tradeoff.",
+				InputSchema: cliToolSchema(),
+			})
+		}
+		if _, ok := resolveBinary(c.cliTools.Codex, "codex"); ok {
+			tools = append(tools, domain.MCPTool{
+				Name: "run_codex",
+				Description: "Run a task using the OpenAI Codex CLI agent (`codex`). Codex has filesystem and shell " +
+					"access in the given work directory and runs fully automatically in quiet mode with full-auto " +
+					"approval. Best for implementation tasks using OpenAI models. Supports model selection via " +
+					"the --model flag.",
+				InputSchema: cliToolSchema(),
+			})
+		}
+		if _, ok := resolveBinary(c.cliTools.OpenAICodex, "openai-codex"); ok {
+			tools = append(tools, domain.MCPTool{
+				Name: "run_openai_codex",
+				Description: "Run a task using the OpenAI Codex open-source CLI agent (`openai-codex`). " +
+					"Provides autonomous filesystem and shell access in the given work directory. Runs in " +
+					"full-auto mode (--full-auto) to avoid interactive prompts. Best for implementation tasks " +
+					"using OpenAI models. Supports model selection via the --model flag.",
+				InputSchema: cliToolSchema(),
+			})
+		}
+		if _, ok := resolveBinary(c.cliTools.OpenCode, "opencode"); ok {
+			tools = append(tools, domain.MCPTool{
+				Name: "run_opencode",
+				Description: "Run a task using the OpenCode CLI agent (`opencode`). OpenCode provides autonomous " +
+					"agentic coding in the given work directory with AI-powered file editing, shell commands, and " +
+					"multi-step task execution. Runs in non-interactive mode (-q). Supports model selection via " +
+					"the --model flag for cost/quality tradeoff.",
+				InputSchema: cliToolSchema(),
+			})
 		}
 	}
 
@@ -190,6 +278,16 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 		return c.runShell(args)
 	case "complete_board_item":
 		return c.completeBoardItem(ctx, args)
+	case "read_skill":
+		return c.readSkill(ctx, args)
+	case "run_claude_code":
+		return c.callCLITool(ctx, "claude_code", args)
+	case "run_codex":
+		return c.callCLITool(ctx, "codex", args)
+	case "run_openai_codex":
+		return c.callCLITool(ctx, "openai_codex", args)
+	case "run_opencode":
+		return c.callCLITool(ctx, "opencode", args)
 	default:
 		return errResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -213,6 +311,13 @@ func (c *Client) callPluginTool(ctx context.Context, name string, args map[strin
 			if t.Name != name {
 				continue
 			}
+			// Check if the entrypoint is a non-executable plugin.json (Claude Code plugin).
+			// If so, delegate to readSkill which reads the Markdown instructions instead.
+			if isPluginJSONEntrypoint(p.Manifest.Entrypoint) {
+				result, readErr := c.readSkill(ctx, map[string]any{"name": name})
+				return result, true, readErr
+			}
+
 			// Found the plugin. Run the entrypoint.
 			pluginDir := filepath.Join(c.installDir, p.Name)
 			entrypoint := filepath.Join(pluginDir, p.Manifest.Entrypoint)
@@ -252,6 +357,46 @@ func (c *Client) callPluginTool(ctx context.Context, name string, args map[strin
 }
 
 // --- tool implementations ---
+
+// readSkill looks up an active plugin skill by name and returns the full
+// content of its commands/<name>.md file.
+func (c *Client) readSkill(ctx context.Context, args map[string]any) (domain.MCPToolResult, error) {
+	name, _ := args["name"].(string)
+	if name == "" {
+		return errResult("read_skill: missing required argument \"name\""), nil
+	}
+	if c.pluginStore == nil {
+		return errResult("read_skill: plugin store not available"), nil
+	}
+	plugins, err := c.pluginStore.List(ctx)
+	if err != nil {
+		return errResult(fmt.Sprintf("read_skill: list plugins: %v", err)), nil
+	}
+	for _, p := range plugins {
+		if p.Status != domain.PluginStatusActive {
+			continue
+		}
+		for _, t := range p.Manifest.Provides.Tools {
+			if t.Name != name {
+				continue
+			}
+			mdPath := filepath.Join(c.installDir, p.Name, "commands", name+".md")
+			data, readErr := os.ReadFile(mdPath)
+			if readErr != nil {
+				return errResult(fmt.Sprintf("read_skill: read %s: %v", mdPath, readErr)), nil
+			}
+			return okResult(string(data)), nil
+		}
+	}
+	return errResult(fmt.Sprintf("skill %q not found in any active plugin", name)), nil
+}
+
+// isPluginJSONEntrypoint returns true when the entrypoint path is a Claude Code
+// plugin.json file (non-executable). This is detected by checking the base
+// filename, which avoids conflating "notplugin.json" with the real manifest.
+func isPluginJSONEntrypoint(entrypoint string) bool {
+	return filepath.Base(entrypoint) == "plugin.json"
+}
 
 func (c *Client) readFile(args map[string]any) (domain.MCPToolResult, error) {
 	path, err := c.resolvePath(args, "path")
@@ -357,6 +502,144 @@ func (c *Client) completeBoardItem(ctx context.Context, args map[string]any) (do
 		return errResult(fmt.Sprintf("complete_board_item: update failed: %v", err)), nil
 	}
 	return okResult(fmt.Sprintf("board item %q marked as done", itemID)), nil
+}
+
+// callCLITool dispatches a run_<tool> call by resolving the binary and invoking
+// the CLIAgentRunner. toolID matches the CLIToolsConfig field names:
+// "claude_code", "codex", "openai_codex", "opencode".
+func (c *Client) callCLITool(ctx context.Context, toolID string, args map[string]any) (domain.MCPToolResult, error) {
+	if c.cliRunner == nil {
+		return errResult("CLI runner not configured"), nil
+	}
+
+	instruction, _ := args["instruction"].(string)
+	if instruction == "" {
+		return errResult("callCLITool: missing required argument \"instruction\""), nil
+	}
+	workDir, _ := args["work_dir"].(string)
+	model, _ := args["model"].(string)
+
+	var toolCfg config.CLIToolConfig
+	var defaultBinary string
+	var cliArgs []string
+	var isStreamJSON bool
+
+	switch toolID {
+	case "claude_code":
+		toolCfg = c.cliTools.ClaudeCode
+		defaultBinary = "claude"
+		cliArgs = []string{"--output-format=stream-json", "--dangerously-skip-permissions"}
+		if model != "" {
+			cliArgs = append(cliArgs, "--model", model)
+		}
+		cliArgs = append(cliArgs, "-p")
+		isStreamJSON = true
+	case "codex":
+		toolCfg = c.cliTools.Codex
+		defaultBinary = "codex"
+		cliArgs = []string{"-q", "--approval-mode=full-auto"}
+		if model != "" {
+			cliArgs = append(cliArgs, "--model", model)
+		}
+	case "openai_codex":
+		toolCfg = c.cliTools.OpenAICodex
+		defaultBinary = "openai-codex"
+		cliArgs = []string{"--full-auto"}
+		if model != "" {
+			cliArgs = append(cliArgs, "--model", model)
+		}
+	case "opencode":
+		toolCfg = c.cliTools.OpenCode
+		defaultBinary = "opencode"
+		cliArgs = []string{"-q"}
+		if model != "" {
+			cliArgs = append(cliArgs, "--model", model)
+		}
+	default:
+		return errResult(fmt.Sprintf("unknown CLI tool ID: %s", toolID)), nil
+	}
+
+	bin, ok := resolveBinary(toolCfg, defaultBinary)
+	if !ok {
+		return errResult(fmt.Sprintf("CLI tool %q is not enabled or binary not found", toolID)), nil
+	}
+
+	cfg := domain.CLIAgentConfig{
+		Binary:  bin,
+		WorkDir: workDir,
+		Args:    cliArgs,
+	}
+
+	output, runErr := c.cliRunner.Run(ctx, cfg, instruction, nil, c.progressFn)
+	if runErr != nil {
+		return errResult(fmt.Sprintf("CLI tool %q error: %v", toolID, runErr)), nil
+	}
+
+	// For Claude Code stream-json output, post-process to extract text events.
+	if isStreamJSON {
+		var extracted strings.Builder
+		for _, line := range strings.Split(output, "\n") {
+			if line == "" {
+				continue
+			}
+			text, ok := codeagent.ParseStreamLine(line)
+			if ok && text != "" {
+				extracted.WriteString(text)
+			}
+		}
+		if extracted.Len() > 0 {
+			return okResult(extracted.String()), nil
+		}
+	}
+
+	return okResult(output), nil
+}
+
+// resolveBinary checks if a CLI tool is enabled and its binary is available.
+// Returns the resolved binary path and true on success, or ("", false) if the
+// tool is disabled or the binary cannot be found. This is a normal condition and
+// must not be logged as an error.
+func resolveBinary(cfg config.CLIToolConfig, defaultName string) (string, bool) {
+	if !cfg.Enabled {
+		return "", false
+	}
+	bin := cfg.BinaryPath
+	if bin == "" {
+		bin = defaultName
+	}
+	if filepath.IsAbs(bin) {
+		if _, err := os.Stat(bin); err != nil {
+			return "", false
+		}
+		return bin, true
+	}
+	resolved, err := exec.LookPath(bin)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// cliToolSchema returns the shared JSON schema for CLI agent tool inputs.
+func cliToolSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []string{"instruction", "work_dir"},
+		"properties": map[string]any{
+			"instruction": map[string]any{
+				"type":        "string",
+				"description": "The task or instruction to pass to the CLI agent.",
+			},
+			"work_dir": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of the working directory for the CLI agent subprocess.",
+			},
+			"model": map[string]any{
+				"type":        "string",
+				"description": "Optional model name to use. Omit to use the CLI agent's default.",
+			},
+		},
+	}
 }
 
 // --- helpers ---

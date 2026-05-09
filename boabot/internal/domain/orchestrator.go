@@ -72,9 +72,9 @@ type WorkItem struct {
 	Attachments    []Attachment   `json:"attachments,omitempty"`
 	SortPosition   int            `json:"sort_position"`
 	// Queue configuration — populated when Status == WorkItemStatusQueued.
-	QueueMode           string     `json:"queue_mode,omitempty"`            // "asap" | "run_at" | "run_after"
-	QueueRunAt          *time.Time `json:"queue_run_at,omitempty"`          // used when QueueMode == "run_at"
-	QueueAfterItemID    string     `json:"queue_after_item_id,omitempty"`   // predecessor item ID; used when QueueMode == "run_after"
+	QueueMode           string     `json:"queue_mode,omitempty"`            // "asap" | "run_at" | "run_after" | "run_when"
+	QueueRunAt          *time.Time `json:"queue_run_at,omitempty"`          // used when QueueMode == "run_at" or "run_when"
+	QueueAfterItemID    string     `json:"queue_after_item_id,omitempty"`   // predecessor item ID; used when QueueMode == "run_after" or "run_when"
 	QueueRequireSuccess bool       `json:"queue_require_success,omitempty"` // predecessor must reach Done (not Errored)
 	QueuedAt            *time.Time `json:"queued_at,omitempty"`             // when item entered Queued state
 	CreatedBy           string     `json:"created_by"`

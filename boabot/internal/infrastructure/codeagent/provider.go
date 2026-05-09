@@ -5,7 +5,6 @@ package codeagent
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -131,7 +130,7 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 			if line == "" {
 				continue
 			}
-			text, ok := extractText(line)
+			text, ok := ParseStreamLine(line)
 			if ok && text != "" {
 				accumulated.WriteString(text)
 			}
@@ -189,36 +188,3 @@ func buildInstruction(req domain.InvokeRequest) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// streamEvent is the minimal structure shared by all claude stream-json events.
-type streamEvent struct {
-	Type   string          `json:"type"`
-	Delta  *deltaField     `json:"delta,omitempty"`
-	Result string          `json:"result,omitempty"`
-	Usage  json.RawMessage `json:"usage,omitempty"`
-}
-
-type deltaField struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// extractText parses one JSON line from the stream and returns any text it
-// contains, along with a boolean indicating whether parsing succeeded.
-func extractText(line string) (string, bool) {
-	var ev streamEvent
-	if err := json.Unmarshal([]byte(line), &ev); err != nil {
-		// Malformed lines are silently skipped.
-		return "", false
-	}
-	switch ev.Type {
-	case "content_block_delta":
-		if ev.Delta != nil && ev.Delta.Type == "text_delta" {
-			return ev.Delta.Text, true
-		}
-	case "result":
-		if ev.Result != "" {
-			return ev.Result, true
-		}
-	}
-	return "", true
-}

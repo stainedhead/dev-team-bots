@@ -22,6 +22,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/cliagent"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
 	httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
@@ -133,10 +134,16 @@ type TeamManager struct {
 	// askRouter routes mid-task user questions to running bots.
 	askRouter *teamAskRouter
 
-	// pluginStore and pluginInstallDir are set when the plugin system is wired
-	// (orchestrator mode with Plugins.InstallDir set), and injected into the MCP client.
-	pluginStore      domain.PluginStore
-	pluginInstallDir string
+	// resolvedPluginStore and resolvedInstallDir are set once in Run() before any
+	// goroutines start, by pre-loading the orchestrator config. This eliminates
+	// the data race that occurred when goroutines wrote to struct fields concurrently.
+	resolvedPluginStore domain.PluginStore
+	resolvedInstallDir  string
+
+	// resolvedCLIRunner and resolvedCLITools are set once in Run() before goroutines
+	// start so all bots share the same immutable runner instance.
+	resolvedCLIRunner domain.CLIAgentRunner
+	resolvedCLITools  config.CLIToolsConfig
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -237,6 +244,38 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 
 	// Store orchestratorName for use by pool spawn callbacks.
 	tm.orchestratorName = orchestratorName
+
+	// Pre-resolve plugin store before launching goroutines (eliminates data race).
+	// Scan for the orchestrator entry and load its config to find the plugin install dir.
+	for _, e := range teamCfg.Team {
+		if !e.Enabled || !e.Orchestrator {
+			continue
+		}
+		orchCfgPath := filepath.Join(tm.cfg.BotsDir, e.Type, "config.yaml")
+		orchCfg, cfgErr := config.Load(orchCfgPath)
+		if cfgErr != nil {
+			slog.Warn("cannot load orchestrator config for plugin pre-resolution", "err", cfgErr)
+			break
+		}
+		installDir := orchCfg.Orchestrator.Plugins.InstallDir
+		if installDir == "" {
+			break
+		}
+		memPath := filepath.Join(tm.cfg.MemoryRoot, e.Name)
+		if !filepath.IsAbs(installDir) {
+			installDir = filepath.Join(memPath, installDir)
+		}
+		if ps, psErr := localplugin.NewLocalPluginStore(installDir); psErr == nil {
+			tm.resolvedPluginStore = ps
+			tm.resolvedInstallDir = installDir
+		}
+		// Pre-resolve CLI tools config from the orchestrator bot config.
+		tm.resolvedCLITools = orchCfg.Orchestrator.CLITools
+		break
+	}
+
+	// Pre-resolve CLI agent runner (shared across all bots; SubprocessRunner has no state).
+	tm.resolvedCLIRunner = cliagent.New()
 
 	// Wire the TechLeadPool with a board status-change hook.
 	psf := infrastructure.NewPoolStateFile(filepath.Join(orchestratorMemPath, "pool.json"))
@@ -593,9 +632,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 				srvCfg.PluginInstall = installUC
 				srvCfg.PluginManage = manageUC
 				srvCfg.PluginRegistry = registryUC
-				// Store install dir for MCP client wiring below.
-				tm.pluginStore = ps
-				tm.pluginInstallDir = pluginInstallDir
+				// The resolved plugin store is already set in Run() before goroutines start.
+				// No struct field writes here to avoid data races.
 			} else {
 				slog.Warn("plugin store unavailable", "err", psErr)
 			}
@@ -709,9 +747,15 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	if entry.Type != "tech-lead" && tm.sharedBoard != nil {
 		mcpOpts = append(mcpOpts, localmcp.WithBoardStore(tm.sharedBoard))
 	}
-	if tm.pluginStore != nil {
-		mcpOpts = append(mcpOpts, localmcp.WithPluginStore(tm.pluginStore))
-		mcpOpts = append(mcpOpts, localmcp.WithInstallDir(tm.pluginInstallDir))
+	// Use pre-resolved plugin store (set in Run before goroutines start) to avoid data races.
+	if tm.resolvedPluginStore != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithPluginStore(tm.resolvedPluginStore))
+		mcpOpts = append(mcpOpts, localmcp.WithInstallDir(tm.resolvedInstallDir))
+	}
+	// Wire CLI runner if configured.
+	if tm.resolvedCLIRunner != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithCLIRunner(tm.resolvedCLIRunner))
+		mcpOpts = append(mcpOpts, localmcp.WithCLITools(tm.resolvedCLITools))
 	}
 	mcpClient := localmcp.NewClient(tm.cfg.AllowedWorkDirs, mcpOpts...)
 

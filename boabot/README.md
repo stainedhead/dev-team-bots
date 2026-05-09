@@ -79,3 +79,31 @@ The binary reads `config.yaml` from its own directory by default. See [`user-doc
 ## Infrastructure
 
 Shared infrastructure (ECS cluster, ALB, RDS, SNS, DynamoDB, ECR) is defined in [`cdk/`](cdk/). Per-bot infrastructure is defined in [`../boabot-team/cdk/`](../boabot-team/cdk/).
+
+## Package Coverage and Size
+
+Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config/`). Target: ≥ 90% per package.
+
+| Package | LOC | Coverage |
+|---|---|---|
+| `internal/domain` | 933 | 100% |
+| `internal/domain/cost` | 126 | 100% |
+| `internal/domain/eta` | 74 | 100% |
+| `internal/domain/screening` | 41 | 100% |
+| `internal/domain/workflow` | 225 | 100% |
+| `internal/application` | 543 | 98.9% |
+| `internal/application/backup` | 74 | 100% |
+| `internal/application/cost` | 156 | 100% |
+| `internal/application/eta` | 30 | 100% |
+| `internal/application/metrics` | 66 | 100% |
+| `internal/application/orchestrator` | 309 | 97.8% |
+| `internal/application/plugin` | 256 | 93.1% |
+| `internal/application/pool` | 259 | 97.8% |
+| `internal/application/rebalancing` | 74 | 100% |
+| `internal/application/scheduler` | 296 | 98.6% |
+| `internal/application/screening` | 37 | 100% |
+| `internal/application/subteam` | 328 | 91.6% |
+| `internal/application/team` | 1176 | 76.3% |
+| `internal/application/workflow` | 393 | 98.9% |
+
+Run `go test -race -coverprofile=coverage.out ./internal/domain/... ./internal/application/... && go tool cover -func=coverage.out` to reproduce.

@@ -72,9 +72,22 @@ Supported provider types:
 Enabled by `orchestrator.enabled: true` in config. Adds:
 
 - **Control plane** — maintains the team registry. Accepts registration, heartbeat, and deregistration messages. Stores Agent Card per bot. Enforces one-instance-per-agent-type.
-- **Kanban board** — manages work items. States: backlog, in-progress, blocked, done. Notifies assigned bots on assignment. All mutations include client-supplied idempotency tokens.
+- **Kanban board** — manages work items. States: `backlog`, `queued`, `in-progress`, `blocked`, `done`, `errored`. Notifies assigned bots on assignment. All mutations include client-supplied idempotency tokens.
+- **Queue scheduling** — items in the `queued` state wait for a scheduling condition before the `QueueRunner` dispatches them. Four modes:
+  - `asap` (default) — dispatch as soon as a concurrency slot is free. FIFO by queue time.
+  - `run_at` — dispatch at or after a specified UTC time.
+  - `run_after` — dispatch after a predecessor item reaches `done` (or `done`/`errored` when `require_success: false`).
+  - `run_when` — dispatch when **both** a scheduled time has passed **and** a predecessor item has finished. Either condition can be omitted, behaving like `run_at` or `run_after` respectively.
+  `MaxConcurrent` (default 3) caps how many items can be `in-progress` at once. The `QueueRunner` polls every 5 seconds; any in-progress item whose task has succeeded or failed is automatically transitioned to `done`/`errored`.
 - **REST API** — JWT-authenticated access to control plane and board at `/api/v1/`. All 26 endpoints match the `baobotctl` CLI contract (auth, board, team, skills, users, profile, DLQ). Admin-only routes return 403 for non-admin callers.
-- **Web UI** — HTMX Kanban board at `/`; auto-refreshes board columns and team health every 30 seconds without a full page reload.
+- **Web UI** — single-page Kanban board at `/`. Features:
+  - Six colour-coded columns (backlog, queued, in-progress, blocked, done, errored).
+  - Cards show work item title, assignee, and the leaf folder of the working directory.
+  - Bot roster shows a per-type skill summary, status, and an info popup with capability bullet-points.
+  - Queue Config dialog lets operators set ASAP, Run At, or Run When scheduling with an inline predecessor picker (filtered to in-progress/queued items only).
+  - Task list includes a "Dir" column and supports filtering by bot and free-text search.
+  - Working-directory text fields trigger a file-path autocomplete popup on keystroke.
+  - Board and task list scroll horizontally on narrow screens without breaking the layout.
 - **User management** — two roles: Admin and User. JWT issued on login, forced password change on first use.
 - **Tech-lead pool** — dynamically allocates and deallocates tech-lead instances as kanban items move in and out of In Progress state. See [Tech-Lead Pool Management](#tech-lead-pool-management) below.
 
@@ -217,6 +230,66 @@ The admin UI includes a "Plugins & Skills" tab. From this tab an admin can:
 ### Observability
 
 Every plugin lifecycle event — install, approve, reject, enable, disable, update, reload, remove — emits a structured `slog` line with fields: `plugin_name`, `version`, `registry`, `actor`, `status`, `timestamp`.
+
+## Claude Code Plugin Support
+
+Bots can consume Claude Code plugins (those distributed as a `plugin.json` manifest with `commands/<name>.md` Markdown files) via the `read_skill` built-in MCP tool. This allows the bot ecosystem to share plugins with the broader Claude Code tooling ecosystem without any changes to the plugin format.
+
+### read_skill Tool
+
+When a plugin's entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), calling the plugin tool does not attempt to exec the JSON file. Instead, the MCP client reads `<install_dir>/<plugin_name>/commands/<tool_name>.md` and returns the Markdown content as the tool result. The bot then follows the instructions in that Markdown autonomously using its own built-in tools (`read_file`, `write_file`, `http_request`, etc.).
+
+The `read_skill` tool appears in `ListTools` whenever a plugin store is configured. It is not an opt-in per-tool — any active plugin with a `plugin.json` entrypoint is automatically routed through `read_skill` rather than subprocess exec.
+
+### Claude Code Plugin Lifecycle
+
+Claude Code plugins follow the same install / approve / enable / disable lifecycle as standard plugins. The only difference is in how tool calls are dispatched once the plugin is active. From the admin UI perspective, they are indistinguishable from regular plugins.
+
+## CLI Agent Tools
+
+Bots with the appropriate binaries installed can invoke other AI coding agents as MCP tools. This enables hybrid workflows where a boabot agent hands off a concrete coding task to a specialised CLI tool (Claude Code, Codex, opencode) and collects the result.
+
+### Available Tools
+
+| Tool | Binary | Description |
+|---|---|---|
+| `run_claude_code` | `claude` | Runs the Claude Code CLI in `--output-format=stream-json` mode and returns the accumulated text output. |
+| `run_codex` | `codex` | Runs the OpenAI Codex CLI in quiet, full-auto approval mode and returns plain-text output. |
+| `run_openai_codex` | `codex` | Alias for `run_codex`; targets the same OpenAI Codex binary. |
+| `run_opencode` | `opencode` | Runs the opencode CLI and returns plain-text output. |
+
+Each tool accepts three inputs: `instruction` (required — the task prompt), `work_dir` (required — working directory for the subprocess), and `model` (optional — overrides the CLI's default model selection).
+
+Tools only appear in `ListTools` if their corresponding binary can be resolved on `PATH` or at the configured `binary_path`. If a binary is not installed, the tool is silently absent — no warning is logged on each `ListTools` call.
+
+### Configuration
+
+CLI tools are configured under `orchestrator.cli_tools` in `config.yaml`:
+
+```yaml
+orchestrator:
+  cli_tools:
+    claude_code:
+      enabled: true
+      binary_path: ""          # optional absolute path; defaults to PATH lookup of "claude"
+    codex:
+      enabled: false
+      binary_path: ""
+    openai_codex:
+      enabled: false
+      binary_path: ""
+    opencode:
+      enabled: false
+      binary_path: ""
+```
+
+A tool disabled via `enabled: false` is always absent from `ListTools`, regardless of whether the binary is installed.
+
+### Execution Model
+
+Each CLI tool call spawns a subprocess via `CLIAgentRunner.Run`. The subprocess receives `SIGTERM` on context cancellation; if it does not exit within 5 seconds, it is force-killed. The default timeout is 30 minutes.
+
+Claude Code output is parsed as `stream-json` events. Only `content_block_delta` text deltas are extracted; internal scaffolding events (tool calls, system prompts) are filtered out. The returned string is the accumulated assistant text, trimmed of trailing newlines.
 
 ## Tech-Lead Pool Management
 

@@ -158,6 +158,23 @@ func (r *QueueRunner) isReady(ctx context.Context, item domain.WorkItem) bool {
 			return pred.Status == domain.WorkItemStatusDone
 		}
 		return pred.Status == domain.WorkItemStatusDone || pred.Status == domain.WorkItemStatusErrored
+	case "run_when":
+		// Both conditions must be satisfied: time has passed AND predecessor is done.
+		timeOK := item.QueueRunAt == nil || !time.Now().Before(*item.QueueRunAt)
+		if !timeOK {
+			return false
+		}
+		if item.QueueAfterItemID == "" {
+			return true
+		}
+		pred, err := r.cfg.Board.Get(ctx, item.QueueAfterItemID)
+		if err != nil {
+			return false
+		}
+		if item.QueueRequireSuccess {
+			return pred.Status == domain.WorkItemStatusDone
+		}
+		return pred.Status == domain.WorkItemStatusDone || pred.Status == domain.WorkItemStatusErrored
 	}
 	return false
 }

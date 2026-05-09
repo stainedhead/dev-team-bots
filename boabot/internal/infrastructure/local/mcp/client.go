@@ -138,6 +138,26 @@ func (c *Client) ListTools(_ context.Context) ([]domain.MCPTool, error) {
 		})
 	}
 
+	if c.pluginStore != nil {
+		tools = append(tools, domain.MCPTool{
+			Name: "read_skill",
+			Description: "Read the Markdown instruction file for an installed plugin skill. Returns the full content of " +
+				"commands/<name>.md from the plugin's install directory. After reading, carry out the described steps " +
+				"yourself using your built-in tools (run_shell, read_file, write_file, etc.) — do not look for an " +
+				"external executor. Returns an error string if the skill is not found or its plugin is not active.",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []string{"name"},
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "The skill name (e.g. \"review-code\", \"create-prd\"). Must match a tool name listed in an active plugin's manifest.",
+					},
+				},
+			},
+		})
+	}
+
 	// Append active plugin tools, skipping collisions with builtin or earlier plugin tools.
 	if c.pluginStore != nil {
 		plugins, err := c.pluginStore.List(context.Background())
@@ -190,6 +210,8 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 		return c.runShell(args)
 	case "complete_board_item":
 		return c.completeBoardItem(ctx, args)
+	case "read_skill":
+		return c.readSkill(ctx, args)
 	default:
 		return errResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -213,6 +235,13 @@ func (c *Client) callPluginTool(ctx context.Context, name string, args map[strin
 			if t.Name != name {
 				continue
 			}
+			// Check if the entrypoint is a non-executable plugin.json (Claude Code plugin).
+			// If so, delegate to readSkill which reads the Markdown instructions instead.
+			if isPluginJSONEntrypoint(p.Manifest.Entrypoint) {
+				result, readErr := c.readSkill(ctx, map[string]any{"name": name})
+				return result, true, readErr
+			}
+
 			// Found the plugin. Run the entrypoint.
 			pluginDir := filepath.Join(c.installDir, p.Name)
 			entrypoint := filepath.Join(pluginDir, p.Manifest.Entrypoint)
@@ -252,6 +281,46 @@ func (c *Client) callPluginTool(ctx context.Context, name string, args map[strin
 }
 
 // --- tool implementations ---
+
+// readSkill looks up an active plugin skill by name and returns the full
+// content of its commands/<name>.md file.
+func (c *Client) readSkill(ctx context.Context, args map[string]any) (domain.MCPToolResult, error) {
+	name, _ := args["name"].(string)
+	if name == "" {
+		return errResult("read_skill: missing required argument \"name\""), nil
+	}
+	if c.pluginStore == nil {
+		return errResult("read_skill: plugin store not available"), nil
+	}
+	plugins, err := c.pluginStore.List(ctx)
+	if err != nil {
+		return errResult(fmt.Sprintf("read_skill: list plugins: %v", err)), nil
+	}
+	for _, p := range plugins {
+		if p.Status != domain.PluginStatusActive {
+			continue
+		}
+		for _, t := range p.Manifest.Provides.Tools {
+			if t.Name != name {
+				continue
+			}
+			mdPath := filepath.Join(c.installDir, p.Name, "commands", name+".md")
+			data, readErr := os.ReadFile(mdPath)
+			if readErr != nil {
+				return errResult(fmt.Sprintf("read_skill: read %s: %v", mdPath, readErr)), nil
+			}
+			return okResult(string(data)), nil
+		}
+	}
+	return errResult(fmt.Sprintf("skill %q not found in any active plugin", name)), nil
+}
+
+// isPluginJSONEntrypoint returns true when the entrypoint path is a Claude Code
+// plugin.json file (non-executable). This is detected by checking the base
+// filename, which avoids conflating "notplugin.json" with the real manifest.
+func isPluginJSONEntrypoint(entrypoint string) bool {
+	return filepath.Base(entrypoint) == "plugin.json"
+}
 
 func (c *Client) readFile(args map[string]any) (domain.MCPToolResult, error) {
 	path, err := c.resolvePath(args, "path")

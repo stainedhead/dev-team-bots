@@ -18,6 +18,7 @@ type ControlPlane interface {
 type BotEntry struct {
 	Name          string    `json:"name"`
 	BotType       string    `json:"bot_type"`
+	Description   string    `json:"description,omitempty"` // short human-readable summary of the bot's role/skills
 	QueueURL      string    `json:"queue_url,omitempty"`
 	AgentCardURL  string    `json:"agent_card_url,omitempty"`
 	Status        BotStatus `json:"status"`
@@ -70,19 +71,33 @@ type WorkItem struct {
 	LastResultAt   *time.Time     `json:"last_result_at,omitempty"`
 	Attachments    []Attachment   `json:"attachments,omitempty"`
 	SortPosition   int            `json:"sort_position"`
-	CreatedBy      string         `json:"created_by"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	// Queue configuration — populated when Status == WorkItemStatusQueued.
+	QueueMode           string     `json:"queue_mode,omitempty"`            // "asap" | "run_at" | "run_after"
+	QueueRunAt          *time.Time `json:"queue_run_at,omitempty"`          // used when QueueMode == "run_at"
+	QueueAfterItemID    string     `json:"queue_after_item_id,omitempty"`   // predecessor item ID; used when QueueMode == "run_after"
+	QueueRequireSuccess bool       `json:"queue_require_success,omitempty"` // predecessor must reach Done (not Errored)
+	QueuedAt            *time.Time `json:"queued_at,omitempty"`             // when item entered Queued state
+	CreatedBy           string     `json:"created_by"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type WorkItemStatus string
 
 const (
 	WorkItemStatusBacklog    WorkItemStatus = "backlog"
+	WorkItemStatusQueued     WorkItemStatus = "queued"
 	WorkItemStatusInProgress WorkItemStatus = "in-progress"
 	WorkItemStatusBlocked    WorkItemStatus = "blocked"
 	WorkItemStatusDone       WorkItemStatus = "done"
+	WorkItemStatusErrored    WorkItemStatus = "errored"
 )
+
+// BoardItemDispatcher dispatches a board item to its assigned bot, building the
+// instruction from the item's title, description, and attachments.
+type BoardItemDispatcher interface {
+	DispatchBoardItem(ctx context.Context, item WorkItem) (WorkItem, error)
+}
 
 type WorkItemFilter struct {
 	AssignedTo   string

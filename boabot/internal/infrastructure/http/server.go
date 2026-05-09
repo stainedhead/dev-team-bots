@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	domainauth "github.com/stainedhead/dev-team-bots/boabot/internal/domain/auth"
 )
@@ -74,11 +75,13 @@ type Config struct {
 	Tasks           domain.DirectTaskStore
 	Dispatcher      domain.TaskDispatcher
 	Chat            domain.ChatStore
-	AskRouter       domain.AskRouter    // optional; routes mid-task questions to running bots
-	Pool            domain.TechLeadPool // optional; nil means pool endpoint returns empty
-	AllowedWorkDirs []string            // whitelisted base directories for item working directories
-	TaskLogBase     string              // base directory for per-task log directories (optional)
-	IconPNG         []byte              // optional branding icon served at /imgs/boabot-icon.png
+	AskRouter       domain.AskRouter           // optional; routes mid-task questions to running bots
+	Pool            domain.TechLeadPool        // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs []string                   // whitelisted base directories for item working directories
+	TaskLogBase     string                     // base directory for per-task log directories (optional)
+	IconPNG         []byte                     // optional branding icon served at /imgs/boabot-icon.png
+	BoardDispatcher domain.BoardItemDispatcher // use-case for dispatching board items to bots
+	MaxConcurrent   int                        // max items in-progress simultaneously (0 = unlimited)
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -96,6 +99,14 @@ type Server struct {
 
 // New creates a Server with the given config.
 func New(cfg Config) *Server {
+	// Auto-wire BoardDispatcher from Dispatcher when not explicitly provided.
+	if cfg.BoardDispatcher == nil && cfg.Dispatcher != nil {
+		cfg.BoardDispatcher = apporchestrator.NewBoardDispatch(apporchestrator.BoardDispatchConfig{
+			Dispatcher:      cfg.Dispatcher,
+			Board:           cfg.Board,
+			AllowedWorkDirs: cfg.AllowedWorkDirs,
+		})
+	}
 	s := &Server{cfg: cfg}
 	if len(cfg.IconPNG) > 0 {
 		s.processedIcon = makeDarkPixelsTransparent(cfg.IconPNG)
@@ -475,11 +486,15 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	oldStatus := existing.Status
 	var req struct {
-		Title       *string `json:"title"`
-		Description *string `json:"description"`
-		Status      *string `json:"status"`
-		AssignedTo  *string `json:"assigned_to"`
-		WorkDir     *string `json:"work_dir"`
+		Title               *string    `json:"title"`
+		Description         *string    `json:"description"`
+		Status              *string    `json:"status"`
+		AssignedTo          *string    `json:"assigned_to"`
+		WorkDir             *string    `json:"work_dir"`
+		QueueMode           *string    `json:"queue_mode"`
+		QueueRunAt          *time.Time `json:"queue_run_at"`
+		QueueAfterItemID    *string    `json:"queue_after_item_id"`
+		QueueRequireSuccess *bool      `json:"queue_require_success"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -496,9 +511,40 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid status")
 			return
 		}
-		existing.Status = domain.WorkItemStatus(*req.Status)
+		newStatus := domain.WorkItemStatus(*req.Status)
+
+		// Capacity check: reject in-progress transitions when at the concurrent limit.
+		if newStatus == domain.WorkItemStatusInProgress &&
+			oldStatus != domain.WorkItemStatusInProgress &&
+			s.cfg.MaxConcurrent > 0 {
+			inProg, listErr := s.cfg.Board.List(r.Context(), domain.WorkItemFilter{Status: domain.WorkItemStatusInProgress})
+			if listErr == nil && len(inProg) >= s.cfg.MaxConcurrent {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":          "at_capacity",
+					"max_concurrent": s.cfg.MaxConcurrent,
+					"current":        len(inProg),
+				})
+				return
+			}
+		}
+
+		existing.Status = newStatus
 		if existing.Status != domain.WorkItemStatusInProgress {
 			existing.ActiveTaskID = ""
+		}
+
+		// Record when an item enters the queued state.
+		if existing.Status == domain.WorkItemStatusQueued && oldStatus != domain.WorkItemStatusQueued {
+			now := time.Now().UTC()
+			existing.QueuedAt = &now
+		}
+		// Clear queue config when leaving queued state.
+		if existing.Status != domain.WorkItemStatusQueued {
+			existing.QueueMode = ""
+			existing.QueueRunAt = nil
+			existing.QueueAfterItemID = ""
+			existing.QueueRequireSuccess = false
+			existing.QueuedAt = nil
 		}
 	}
 	if req.AssignedTo != nil {
@@ -517,6 +563,20 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.WorkDir = *req.WorkDir
 	}
+	// Apply queue config fields (only meaningful while status is queued).
+	if req.QueueMode != nil {
+		existing.QueueMode = *req.QueueMode
+	}
+	if req.QueueRunAt != nil {
+		existing.QueueRunAt = req.QueueRunAt
+	}
+	if req.QueueAfterItemID != nil {
+		existing.QueueAfterItemID = *req.QueueAfterItemID
+	}
+	if req.QueueRequireSuccess != nil {
+		existing.QueueRequireSuccess = *req.QueueRequireSuccess
+	}
+
 	existing.UpdatedAt = time.Now().UTC()
 	updated, err := s.cfg.Board.Update(r.Context(), existing)
 	if err != nil {
@@ -524,8 +584,7 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// When the status changes, append the moved item to the end of the new column
-	// by calling Reorder with all current items in their existing order + moved item.
+	// When the status changes, append the moved item to the end of the new column.
 	if req.Status != nil && updated.Status != oldStatus {
 		colItems, listErr := s.cfg.Board.List(r.Context(), domain.WorkItemFilter{Status: updated.Status})
 		if listErr == nil {
@@ -542,47 +601,15 @@ func (s *Server) handleBoardUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If status moved to in-progress and a bot is assigned, dispatch a task.
-	if updated.Status == domain.WorkItemStatusInProgress && updated.AssignedTo != "" && s.cfg.Dispatcher != nil {
-		var instruction string
-		if cmd := extractSlashCommand(updated.Title); cmd != "" {
-			instruction = fmt.Sprintf("Run the following skill command: /%s\n\nBoard item context:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
-				cmd, updated.Title, updated.Description, updated.ID)
-		} else if cmd := extractSlashCommand(updated.Description); cmd != "" {
-			instruction = fmt.Sprintf("Run the following skill command: /%s\n\nBoard item context:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
-				cmd, updated.Title, updated.Description, updated.ID)
-		} else {
-			instruction = fmt.Sprintf("Board item assigned to you:\n\nTitle: %s\n\nDescription: %s\n\nItem ID: %s",
-				updated.Title, updated.Description, updated.ID)
-		}
-		if updated.WorkDir != "" {
-			instruction += fmt.Sprintf("\n\nWorking directory: %s\nYou may read and write files in this directory to complete your work. If it is a git repository you may also use git commands.", updated.WorkDir)
-		}
-		if len(s.cfg.AllowedWorkDirs) > 0 {
-			instruction += fmt.Sprintf("\n\nSECURITY CONSTRAINT: You are only permitted to access files within these directories: %s\nDo not read, write, or execute files outside these paths.", strings.Join(s.cfg.AllowedWorkDirs, ", "))
-		}
-		for _, att := range updated.Attachments {
-			raw, decErr := base64.StdEncoding.DecodeString(att.Content)
-			if decErr != nil {
-				continue
-			}
-			ct := att.ContentType
-			if ct == "" || strings.HasPrefix(ct, "text/") || ct == "application/json" ||
-				strings.HasSuffix(att.Name, ".md") || strings.HasSuffix(att.Name, ".yaml") ||
-				strings.HasSuffix(att.Name, ".yml") || strings.HasSuffix(att.Name, ".go") ||
-				strings.HasSuffix(att.Name, ".txt") {
-				instruction += fmt.Sprintf("\n\n--- Attachment: %s ---\n%s", att.Name, string(raw))
-			}
-		}
-		if task, dispErr := s.cfg.Dispatcher.Dispatch(r.Context(), updated.AssignedTo, instruction, nil, domain.DirectTaskSourceBoard, "", updated.WorkDir); dispErr != nil {
+	// If status moved to in-progress and a bot is assigned, dispatch via BoardDispatcher.
+	if updated.Status == domain.WorkItemStatusInProgress &&
+		updated.AssignedTo != "" &&
+		oldStatus != domain.WorkItemStatusInProgress &&
+		s.cfg.BoardDispatcher != nil {
+		if fresh, dispErr := s.cfg.BoardDispatcher.DispatchBoardItem(r.Context(), updated); dispErr != nil {
 			slog.Warn("board→bot dispatch failed", "bot", updated.AssignedTo, "item", updated.ID, "err", dispErr)
-			// Non-fatal: the board update already succeeded.
 		} else {
-			// Store task ID back into the board item so the UI can track progress.
-			updated.ActiveTaskID = task.ID
-			if _, updateErr := s.cfg.Board.Update(r.Context(), updated); updateErr != nil {
-				slog.Warn("board item active_task_id update failed", "err", updateErr)
-			}
+			updated = fresh
 		}
 	}
 
@@ -1727,8 +1754,9 @@ func isValidRole(role string) bool {
 
 func isValidWorkItemStatus(status string) bool {
 	switch domain.WorkItemStatus(status) {
-	case domain.WorkItemStatusBacklog, domain.WorkItemStatusInProgress,
-		domain.WorkItemStatusBlocked, domain.WorkItemStatusDone:
+	case domain.WorkItemStatusBacklog, domain.WorkItemStatusQueued,
+		domain.WorkItemStatusInProgress, domain.WorkItemStatusBlocked,
+		domain.WorkItemStatusDone, domain.WorkItemStatusErrored:
 		return true
 	}
 	return false
@@ -2015,6 +2043,13 @@ const kanbanHTML = `<!DOCTYPE html>
     .card-foot{display:flex;align-items:center;gap:.3rem;margin-top:.4rem}
     .card-who{font-size:.62rem;color:#60a5fa;background:#1e3a5f22;padding:.08rem .35rem;border-radius:9999px;border:1px solid #1e3a5f44}
     .card-age{font-size:.62rem;color:#334155;margin-left:auto}
+    .card-queue-info{font-size:.65rem;color:#93c5fd;margin-top:.25rem;opacity:.85}
+    .card-queue-edit{margin-top:.25rem}
+    .card-status-pill{display:inline-block;padding:.06rem .4rem;border-radius:9999px;font-size:.6rem;font-weight:700;margin-right:.3rem;vertical-align:middle}
+    .card-status-done{background:#166534;color:#bbf7d0}
+    .card-status-errored{background:#7f1d1d;color:#fecaca}
+    .col-queued .col-hdr{color:#93c5fd}
+    .col-errored .col-hdr{color:#f87171}
     .nil{text-align:center;color:#1e2d4a;padding:1.5rem .5rem;font-size:.75rem;font-style:italic}
 
     /* ── Tables ── */
@@ -2260,6 +2295,10 @@ const kanbanHTML = `<!DOCTYPE html>
           <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
           <div class="col-body" id="b-backlog"><div class="nil">No items</div></div>
         </div>
+        <div class="col col-queued" id="col-queued" data-status="queued" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">Queued <span class="col-cnt" id="n-queued">0</span></div>
+          <div class="col-body" id="b-queued"><div class="nil">No items</div></div>
+        </div>
         <div class="col" id="col-inprogress" data-status="in-progress" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">In Progress <span class="col-cnt" id="n-inprogress">0</span></div>
           <div class="col-body" id="b-inprogress"><div class="nil">No items</div></div>
@@ -2271,6 +2310,10 @@ const kanbanHTML = `<!DOCTYPE html>
         <div class="col" id="col-done" data-status="done" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Done <span class="col-cnt" id="n-done">0</span></div>
           <div class="col-body" id="b-done"><div class="nil">No items</div></div>
+        </div>
+        <div class="col col-errored" id="col-errored" data-status="errored" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
+          <div class="col-hdr">Errored <span class="col-cnt" id="n-errored">0</span></div>
+          <div class="col-body" id="b-errored"><div class="nil">No items</div></div>
         </div>
       </div>
       <div class="ctx-panel" id="board-ctx" style="display:none">
@@ -2296,10 +2339,15 @@ const kanbanHTML = `<!DOCTYPE html>
     <!-- Tasks -->
     <div class="pane" id="pane-tasks" style="overflow:hidden">
       <div class="sec-hdr">
-        <div style="display:flex;gap:.4rem;align-items:center">
+        <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
           <button class="btn btn-sm task-filter-btn active" id="tf-all"       onclick="setTaskFilter('all')">All</button>
           <button class="btn btn-sm task-filter-btn"        id="tf-immediate" onclick="setTaskFilter('immediate')">Immediate</button>
           <button class="btn btn-sm task-filter-btn"        id="tf-scheduled" onclick="setTaskFilter('scheduled')">Scheduled</button>
+          <div style="width:1px;background:#1a2744;height:1.25rem;margin:0 .2rem"></div>
+          <select id="tf-bot" onchange="renderTaskList()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+            <option value="">All bots</option>
+          </select>
+          <input id="tf-text" type="text" placeholder="Search title&hellip;" oninput="renderTaskList()" style="background:#0f1829;border:1px solid #1a2744;color:#e2e8f0;font-size:.72rem;padding:.25rem .5rem;border-radius:4px;width:10rem"/>
         </div>
         <div class="sec-acts">
           <button id="task-run-btn" class="btn btn-primary btn-sm" disabled onclick="runSelectedTasks()" style="opacity:.35;cursor:not-allowed">Run Selected</button>
@@ -2509,6 +2557,43 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="da"><button class="btn btn-secondary" onclick="cls('cp-dlg')">Cancel</button><button class="btn btn-primary" onclick="doChangePw()">Update</button></div>
 </dialog>
 
+<dialog id="qcfg-dlg" style="min-width:22rem">
+  <h2 id="qcfg-title">Queue Configuration</h2>
+  <div class="fg" style="gap:.5rem">
+    <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+      <input type="radio" name="qcfg-mode" value="asap" checked onchange="onQcfgMode()"/> ASAP &mdash; run when a slot is available
+    </label>
+    <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+      <input type="radio" name="qcfg-mode" value="run_at" onchange="onQcfgMode()"/> Run At &mdash; start at a specific time
+    </label>
+    <div id="qcfg-run-at-wrap" style="display:none;padding-left:1.5rem">
+      <input id="qcfg-run-at" type="datetime-local" class="fi" style="width:100%"/>
+    </div>
+    <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+      <input type="radio" name="qcfg-mode" value="run_after" onchange="onQcfgMode()"/> Run After &mdash; wait for another item
+    </label>
+    <div id="qcfg-run-after-wrap" style="display:none;padding-left:1.5rem">
+      <select id="qcfg-after-item" class="fi" style="width:100%;margin-bottom:.4rem">
+        <option value="">Select predecessor item&hellip;</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.8rem">
+        <input type="checkbox" id="qcfg-require-success" checked/> Require success (only run if predecessor completes without error)
+      </label>
+    </div>
+  </div>
+  <div class="errmsg" id="qcfg-err" style="display:none"></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cancelQcfg()">Cancel</button><button class="btn btn-primary" onclick="confirmQcfg()">Queue Item</button></div>
+</dialog>
+
+<dialog id="cap-dlg" style="min-width:22rem">
+  <h2>At Capacity</h2>
+  <p id="cap-msg" style="color:#94a3b8;font-size:.85rem;margin:.25rem 0 .75rem"></p>
+  <div class="da">
+    <button class="btn btn-secondary" onclick="cls('cap-dlg')">Cancel</button>
+    <button class="btn btn-primary" onclick="queueAsASAP()">Queue as ASAP</button>
+  </div>
+</dialog>
+
 <div id="viewer-overlay" class="viewer-overlay" style="display:none" onclick="if(event.target===this)closeViewer()">
   <div class="viewer-box">
     <div class="viewer-hdr">
@@ -2530,6 +2615,9 @@ const kanbanHTML = `<!DOCTYPE html>
   var activeTab='board', countdown=30, tickTimer=null;
   var activeThreadID=null, allThreads=[];
   var boardCtxItem=null, boardCtxThread=null, boardCtxTab='detail', boardCtxActivity=null, outputPollTimer=null, askPollTimer=null, boardAskPending=false;
+  var qcfgPendingItemId=null, qcfgPendingStatus=null, capPendingItemId=null;
+  var currentTaskFilter='all', taskBotFilter='', taskTextFilter='';
+  var allTasksList=[];
 
   function renderBoardAskMsgs(msgs){
     var body=ge('board-ctx-body');
@@ -2561,7 +2649,6 @@ const kanbanHTML = `<!DOCTYPE html>
     if(ftrHtml){var ftrEl=document.createElement('div');ftrEl.innerHTML=ftrHtml;if(ftrEl.firstElementChild)body.appendChild(ftrEl.firstElementChild);}
   }
   var taskCtxTask=null, taskCtxActiveTab='detail', taskOutputPollTimer=null, elapsedTimer=null;
-  var allTasksList=[], currentTaskFilter='all';
   var dragging=false;
 
   // ── Util ────────────────────────────────────────────────────────────────────
@@ -2627,7 +2714,10 @@ const kanbanHTML = `<!DOCTYPE html>
     if(token)opts.headers['Authorization']='Bearer '+token;
     return fetch(url,opts).then(function(r){
       if(r.status===204)return null;
-      return r.json().then(function(d){if(!r.ok)throw new Error(d.error||r.statusText);return d});
+      return r.json().then(function(d){
+        if(!r.ok){var e=new Error(d.error||r.statusText);e.status=r.status;e.data=d;throw e;}
+        return d;
+      });
     });
   }
 
@@ -2682,18 +2772,66 @@ const kanbanHTML = `<!DOCTYPE html>
     var col=ev.currentTarget;col.classList.remove('over');
     if(!token||!dragId)return;
     var status=col.dataset.status;
-    api('PATCH','/api/v1/board/'+dragId,{status:status})
-      .then(function(){dragId=null;loadBoard()})
+    var itemId=dragId;
+    dragId=null;
+    if(status==='queued'){
+      openQcfg(itemId,'queued');
+      return;
+    }
+    if(status==='in-progress'){
+      api('PATCH','/api/v1/board/'+itemId,{status:'in-progress'})
+        .then(function(){loadBoard()})
+        .catch(function(e){
+          if(e.status===409&&e.data&&e.data.error==='at_capacity'){
+            capPendingItemId=itemId;
+            ge('cap-msg').textContent='All '+e.data.max_concurrent+' concurrent slots are in use ('+e.data.current+' items in progress). Queue as ASAP to run when a slot opens?';
+            dlg('cap-dlg');
+          } else {
+            alert('Move failed: '+e.message);
+          }
+        });
+      return;
+    }
+    api('PATCH','/api/v1/board/'+itemId,{status:status})
+      .then(function(){loadBoard()})
       .catch(function(e){alert('Move failed: '+e.message)});
   }
 
   // ── Board ────────────────────────────────────────────────────────────────────
   var colCfg=[
-    {status:'backlog',   hdr:'b-backlog',   cnt:'n-backlog'},
-    {status:'in-progress',hdr:'b-inprogress',cnt:'n-inprogress'},
-    {status:'blocked',   hdr:'b-blocked',   cnt:'n-blocked'},
-    {status:'done',      hdr:'b-done',      cnt:'n-done'},
+    {status:'backlog',     hdr:'b-backlog',    cnt:'n-backlog'},
+    {status:'queued',      hdr:'b-queued',     cnt:'n-queued'},
+    {status:'in-progress', hdr:'b-inprogress', cnt:'n-inprogress'},
+    {status:'blocked',     hdr:'b-blocked',    cnt:'n-blocked'},
+    {status:'done',        hdr:'b-done',       cnt:'n-done'},
+    {status:'errored',     hdr:'b-errored',    cnt:'n-errored'},
   ];
+
+  function fmtQueueAt(iso){
+    if(!iso)return '';
+    var d=new Date(iso);
+    return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+  }
+
+  function queueInfoHtml(it){
+    if(it.status!=='queued')return '';
+    var mode=it.queue_mode||'asap';
+    if(mode==='run_at'&&it.queue_run_at){
+      return '<div class="card-queue-info">&#x23F0; Run at '+esc(fmtQueueAt(it.queue_run_at))+'</div>';
+    }
+    if(mode==='run_after'&&it.queue_after_item_id){
+      var pred=allItems.find(function(x){return x.id===it.queue_after_item_id});
+      var predTitle=pred?esc(pred.title.substring(0,30)+(pred.title.length>30?'…':'')):esc(it.queue_after_item_id.substring(0,8));
+      return '<div class="card-queue-info">&#x23ED; After: '+predTitle+(it.queue_require_success?' (requires success)':'')+'</div>';
+    }
+    return '<div class="card-queue-info">&#x26A1; ASAP</div>';
+  }
+
+  function statusPillHtml(it){
+    if(it.status==='done')return '<span class="card-status-pill card-status-done">Done</span>';
+    if(it.status==='errored')return '<span class="card-status-pill card-status-errored">Errored</span>';
+    return '';
+  }
 
   function makeCard(it){
     var d=document.createElement('div');
@@ -2701,13 +2839,15 @@ const kanbanHTML = `<!DOCTYPE html>
     d.draggable=!!token;
     d.style.cursor=token?'grab':'default';
     d.innerHTML=
-      '<div class="card-title">'+esc(it.title)+'</div>'+
+      '<div class="card-title">'+statusPillHtml(it)+esc(it.title)+'</div>'+
       (it.status==='in-progress'&&it.active_task_id?'<div class="card-working">&#x2699; working&hellip;</div>':'')+
+      queueInfoHtml(it)+
       (it.description?'<div class="card-desc">'+esc(it.description)+'</div>':'')+
       '<div class="card-foot">'+
         (it.assigned_to?'<span class="card-who">'+esc(it.assigned_to)+'</span>':'')+
         '<span class="card-age">'+ago(it.updated_at)+'</span>'+
-      '</div>';
+      '</div>'+
+      (it.status==='queued'&&token?'<div class="card-queue-edit"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();editQueueConfig(\''+esc(it.id)+'\')">&#x270E; Queue config</button></div>':'');
     d.addEventListener('dragstart',function(ev){dragging=true;dragId=it.id;d.classList.add('dragging');ev.dataTransfer.effectAllowed='move'});
     d.addEventListener('dragend',function(){dragging=false;d.classList.remove('dragging')});
     d.addEventListener('dragover',function(ev){
@@ -2726,19 +2866,34 @@ const kanbanHTML = `<!DOCTYPE html>
       ev.preventDefault();ev.stopPropagation();
       d.classList.remove('drag-above','drag-below');
       if(!dragId||dragId===it.id)return;
-      var src=allItems.find(function(x){return x.id===dragId});
+      var srcId=dragId;dragId=null;
+      var src=allItems.find(function(x){return x.id===srcId});
       if(src&&src.status===it.status){
         var col=allItems.filter(function(x){return x.status===it.status}).slice()
           .sort(function(a,b){return (a.sort_position||999999)-(b.sort_position||999999)});
-        col=col.filter(function(x){return x.id!==dragId});
+        col=col.filter(function(x){return x.id!==srcId});
         var ti=col.findIndex(function(x){return x.id===it.id});
         col.splice(dropPos==='before'?ti:ti+1,0,src);
         api('POST','/api/v1/board/reorder',{ids:col.map(function(x){return x.id;})})
-          .then(function(){dragId=null;dropTargetId=null;loadBoard();})
+          .then(function(){dropTargetId=null;loadBoard();})
           .catch(function(e){alert('Reorder failed: '+e.message);});
+      } else if(src&&it.status==='queued'){
+        openQcfg(srcId,'queued');
+      } else if(src&&it.status==='in-progress'){
+        api('PATCH','/api/v1/board/'+srcId,{status:'in-progress'})
+          .then(function(){dropTargetId=null;loadBoard();})
+          .catch(function(e){
+            if(e.status===409&&e.data&&e.data.error==='at_capacity'){
+              capPendingItemId=srcId;
+              ge('cap-msg').textContent='All '+e.data.max_concurrent+' concurrent slots are in use ('+e.data.current+' items in progress). Queue as ASAP to run when a slot opens?';
+              dlg('cap-dlg');
+            } else {
+              alert('Move failed: '+e.message);
+            }
+          });
       } else if(src){
-        api('PATCH','/api/v1/board/'+dragId,{status:it.status})
-          .then(function(){dragId=null;dropTargetId=null;loadBoard();})
+        api('PATCH','/api/v1/board/'+srcId,{status:it.status})
+          .then(function(){dropTargetId=null;loadBoard();})
           .catch(function(e){alert('Move failed: '+e.message);});
       }
     });
@@ -2747,18 +2902,29 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function renderBoard(){
-    var buckets={backlog:[],blocked:[],done:[],'in-progress':[]};
+    var buckets={backlog:[],queued:[],'in-progress':[],blocked:[],done:[],errored:[]};
     allItems.forEach(function(it){(buckets[it.status]||(buckets[it.status]=[])).push(it)});
     colCfg.forEach(function(c){
       var body=ge(c.hdr),cnt=ge(c.cnt),list=buckets[c.status]||[];
       cnt.textContent=list.length;
       body.innerHTML='';
       if(!list.length){body.innerHTML='<div class="nil">No items</div>';return;}
-      // Done column: sort by last_result_at ASC when no explicit positions set
-      if(c.status==='done'&&list.every(function(x){return !x.sort_position})){
+      // Done/Errored columns: sort by last_result_at ASC when no explicit positions set
+      if((c.status==='done'||c.status==='errored')&&list.every(function(x){return !x.sort_position})){
         list=list.slice().sort(function(a,b){
           var ta=a.last_result_at?new Date(a.last_result_at).getTime():Infinity;
           var tb=b.last_result_at?new Date(b.last_result_at).getTime():Infinity;
+          return ta-tb;
+        });
+      }
+      // Queued column: ASAP first (by queued_at), then run_at/run_after (by queued_at)
+      if(c.status==='queued'){
+        list=list.slice().sort(function(a,b){
+          var aAsap=(a.queue_mode==='asap'||!a.queue_mode),bAsap=(b.queue_mode==='asap'||!b.queue_mode);
+          if(aAsap&&!bAsap)return -1;
+          if(!aAsap&&bAsap)return 1;
+          var ta=a.queued_at?new Date(a.queued_at).getTime():new Date(a.created_at).getTime();
+          var tb=b.queued_at?new Date(b.queued_at).getTime():new Date(b.created_at).getTime();
           return ta-tb;
         });
       }
@@ -2779,7 +2945,133 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(){});
   }
 
+  // ── Queue config dialog ──────────────────────────────────────────────────────
+  function openQcfg(itemId,targetStatus){
+    qcfgPendingItemId=itemId;
+    qcfgPendingStatus=targetStatus||'queued';
+    ge('qcfg-err').style.display='none';
+    // Default to ASAP
+    document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value==='asap';});
+    ge('qcfg-run-at-wrap').style.display='none';
+    ge('qcfg-run-after-wrap').style.display='none';
+    ge('qcfg-run-at').value='';
+    ge('qcfg-require-success').checked=true;
+    // Populate predecessor selector with all board items except the current one
+    var sel=ge('qcfg-after-item');
+    sel.innerHTML='<option value="">Select predecessor item…</option>';
+    allItems.filter(function(x){return x.id!==itemId}).forEach(function(x){
+      var o=document.createElement('option');o.value=x.id;o.textContent=x.title.substring(0,60)+(x.title.length>60?'…':'')+' ['+x.status+']';sel.appendChild(o);
+    });
+    dlg('qcfg-dlg');
+  }
+
+  function editQueueConfig(itemId){
+    var it=allItems.find(function(x){return x.id===itemId});
+    if(!it)return;
+    qcfgPendingItemId=itemId;
+    qcfgPendingStatus='queued';
+    ge('qcfg-title').textContent='Edit Queue Configuration';
+    ge('qcfg-err').style.display='none';
+    var mode=it.queue_mode||'asap';
+    document.querySelectorAll('input[name="qcfg-mode"]').forEach(function(r){r.checked=r.value===mode;});
+    ge('qcfg-run-at-wrap').style.display=mode==='run_at'?'block':'none';
+    ge('qcfg-run-after-wrap').style.display=mode==='run_after'?'block':'none';
+    if(mode==='run_at'&&it.queue_run_at){
+      // Convert ISO to datetime-local value (YYYY-MM-DDTHH:MM)
+      var d=new Date(it.queue_run_at);
+      var pad=function(n){return n<10?'0'+n:String(n)};
+      ge('qcfg-run-at').value=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+    }
+    ge('qcfg-require-success').checked=it.queue_require_success!==false;
+    var sel=ge('qcfg-after-item');
+    sel.innerHTML='<option value="">Select predecessor item…</option>';
+    allItems.filter(function(x){return x.id!==itemId}).forEach(function(x){
+      var o=document.createElement('option');o.value=x.id;o.textContent=x.title.substring(0,60)+(x.title.length>60?'…':'')+' ['+x.status+']';
+      if(x.id===it.queue_after_item_id)o.selected=true;
+      sel.appendChild(o);
+    });
+    dlg('qcfg-dlg');
+  }
+
+  function onQcfgMode(){
+    var mode=document.querySelector('input[name="qcfg-mode"]:checked');
+    if(!mode)return;
+    ge('qcfg-run-at-wrap').style.display=mode.value==='run_at'?'block':'none';
+    ge('qcfg-run-after-wrap').style.display=mode.value==='run_after'?'block':'none';
+  }
+
+  function cancelQcfg(){
+    cls('qcfg-dlg');
+    ge('qcfg-title').textContent='Queue Configuration';
+    // If item was being dragged into queued, move it back to backlog
+    if(qcfgPendingItemId){
+      var it=allItems.find(function(x){return x.id===qcfgPendingItemId});
+      if(it&&it.status!=='queued'){
+        qcfgPendingItemId=null;qcfgPendingStatus=null;
+        return; // already not queued
+      }
+      if(it&&it.status==='queued'){
+        api('PATCH','/api/v1/board/'+qcfgPendingItemId,{status:'backlog'})
+          .then(function(){loadBoard()}).catch(function(){loadBoard()});
+      }
+    }
+    qcfgPendingItemId=null;qcfgPendingStatus=null;
+  }
+
+  function confirmQcfg(){
+    if(!qcfgPendingItemId)return;
+    var modeEl=document.querySelector('input[name="qcfg-mode"]:checked');
+    var mode=modeEl?modeEl.value:'asap';
+    var body={status:'queued',queue_mode:mode};
+    var errEl=ge('qcfg-err');
+    errEl.style.display='none';
+    if(mode==='run_at'){
+      var raw=ge('qcfg-run-at').value;
+      if(!raw){errEl.textContent='Please select a date and time.';errEl.style.display='block';return;}
+      body.queue_run_at=new Date(raw).toISOString();
+    }
+    if(mode==='run_after'){
+      var predId=ge('qcfg-after-item').value;
+      if(!predId){errEl.textContent='Please select a predecessor item.';errEl.style.display='block';return;}
+      body.queue_after_item_id=predId;
+      body.queue_require_success=ge('qcfg-require-success').checked;
+    }
+    var id=qcfgPendingItemId;
+    qcfgPendingItemId=null;qcfgPendingStatus=null;
+    cls('qcfg-dlg');
+    ge('qcfg-title').textContent='Queue Configuration';
+    api('PATCH','/api/v1/board/'+id,body)
+      .then(function(){loadBoard()})
+      .catch(function(e){alert('Queue failed: '+e.message);loadBoard();});
+  }
+
+  function queueAsASAP(){
+    cls('cap-dlg');
+    if(!capPendingItemId)return;
+    var id=capPendingItemId;capPendingItemId=null;
+    api('PATCH','/api/v1/board/'+id,{status:'queued',queue_mode:'asap'})
+      .then(function(){loadBoard()})
+      .catch(function(e){alert('Queue failed: '+e.message);loadBoard();});
+  }
+
   // ── Roster ───────────────────────────────────────────────────────────────────
+  var botTypeSummaries={
+    'orchestrator':'Control plane &amp; task routing',
+    'tech-lead':'Full-stack dev, code review &amp; planning',
+    'developer':'Code implementation &amp; debugging',
+    'qa':'Testing, bug analysis &amp; quality gates',
+    'devops':'CI/CD, infra &amp; deployments',
+    'designer':'UI/UX design &amp; prototyping',
+    'analyst':'Data analysis &amp; reporting',
+    'security':'Security review &amp; threat modelling',
+  };
+  function botSkillSummary(botType){
+    if(!botType)return '';
+    var t=botType.toLowerCase();
+    for(var k in botTypeSummaries){if(t===k||t.indexOf(k)>=0)return botTypeSummaries[k];}
+    return '';
+  }
+
   function renderRoster(){
     var el=ge('roster');
     if(!allBots.length){el.innerHTML='<div class="nil" style="padding:1rem;font-size:.7rem">No bots registered</div>';return}
@@ -2798,6 +3090,8 @@ const kanbanHTML = `<!DOCTYPE html>
       var on=b.status==='active',n=active[b.name]||0;
       var pct=Math.min(n/6*100,100);
       var fc=n===0?'bfill-none':n<=2?'bfill-lo':n<=5?'bfill-md':'bfill-hi';
+      var typeLabel=b.bot_type&&b.bot_type!==b.name?esc(b.bot_type):'';
+      var skillSummary=botSkillSummary(b.bot_type);
       var c=document.createElement('div');c.className='bcard';
       c.innerHTML=
         '<div class="brow">'+
@@ -2806,7 +3100,8 @@ const kanbanHTML = `<!DOCTYPE html>
           (n?'<div class="bbadge">'+n+'</div>':'')+
           (on&&token?'<button class="btn btn-ghost btn-sm" onclick="openAssignTask(\''+esc(b.name)+'\')">&#x26A1; Task</button>':'')+
         '</div>'+
-        '<div class="bmeta">'+esc(b.bot_type||'')+(on?' &bull; '+ago(b.last_heartbeat):' &bull; inactive')+'</div>'+
+        '<div class="bmeta">'+(typeLabel?typeLabel+' &bull; ':'')+esc(skillSummary)+(on?' &bull; online':' &bull; inactive')+'</div>'+
+        (b.description?'<div class="bmeta" style="color:#475569;font-size:.68rem;line-height:1.3">'+esc(b.description)+'</div>':'')+
         (on?'<div class="bbar"><div class="bfill '+fc+'" style="width:'+pct+'%"></div></div>':'');
       el.appendChild(c);
       // Separator between orchestrator and the rest.
@@ -2925,6 +3220,10 @@ const kanbanHTML = `<!DOCTYPE html>
     allBots.forEach(function(b){
       var o=document.createElement('option');o.value=b.name;o.textContent=b.name+(b.status==='active'?'':' (offline)');sel.appendChild(o);
     });
+    // Default to tech-lead bot if one exists, otherwise first active bot
+    var techLead=allBots.find(function(b){return b.bot_type&&b.bot_type.toLowerCase().indexOf('tech-lead')>=0&&b.status==='active'});
+    if(!techLead)techLead=allBots.find(function(b){return b.bot_type&&b.bot_type.toLowerCase().indexOf('tech-lead')>=0});
+    if(techLead){sel.value=techLead.name;}
     var wsel=ge('ni-workdir-sel');
     wsel.innerHTML='<option value="">None</option>';
     (allWorkDirs||[]).forEach(function(d){var o=document.createElement('option');o.value=d;o.textContent=d;wsel.appendChild(o);});
@@ -3306,9 +3605,18 @@ const kanbanHTML = `<!DOCTYPE html>
   }
 
   function getFilteredTasks(){
-    if(currentTaskFilter==='immediate')return allTasksList.filter(function(t){return!t.scheduled_at});
-    if(currentTaskFilter==='scheduled')return allTasksList.filter(function(t){return!!t.scheduled_at});
-    return allTasksList;
+    var list=allTasksList;
+    if(currentTaskFilter==='immediate')list=list.filter(function(t){return!t.scheduled_at});
+    if(currentTaskFilter==='scheduled')list=list.filter(function(t){return!!t.scheduled_at});
+    var bot=(ge('tf-bot')||{}).value||'';
+    if(bot)list=list.filter(function(t){return t.bot_name===bot});
+    var txt=((ge('tf-text')||{}).value||'').toLowerCase().trim();
+    if(txt)list=list.filter(function(t){
+      var title=(t.title||'').toLowerCase();
+      var instr=(t.instruction||'').toLowerCase();
+      return title.indexOf(txt)>=0||instr.indexOf(txt)>=0;
+    });
+    return list;
   }
 
   function updateTaskDeleteBtn(){
@@ -3348,7 +3656,22 @@ const kanbanHTML = `<!DOCTYPE html>
   function loadTasks(){
     if(!token){ge('tasks-list').innerHTML='<div class="empty-state">Sign in to view tasks</div>';return}
     api('GET','/api/v1/tasks')
-      .then(function(tasks){allTasksList=tasks||[];renderTaskList()})
+      .then(function(tasks){
+        allTasksList=tasks||[];
+        // Rebuild bot filter dropdown from current task list
+        var sel=ge('tf-bot');
+        if(sel){
+          var prev=sel.value;
+          sel.innerHTML='<option value="">All bots</option>';
+          var bots={};
+          allTasksList.forEach(function(t){if(t.bot_name)bots[t.bot_name]=1});
+          Object.keys(bots).sort().forEach(function(bn){
+            var o=document.createElement('option');o.value=bn;o.textContent=bn;sel.appendChild(o);
+          });
+          if(prev&&bots[prev])sel.value=prev;
+        }
+        renderTaskList();
+      })
       .catch(function(){ge('tasks-list').innerHTML='<div class="empty-state">Failed to load tasks</div>'});
   }
 
@@ -4099,9 +4422,26 @@ const kanbanHTML = `<!DOCTYPE html>
           : (it.description?esc(it.description):'&#x2014;'))+
         '</span></div>';
 
+      var isQueued=it.status==='queued';
+      var isErrored=it.status==='errored';
+      var queueRow='';
+      if(isQueued){
+        var qmode=it.queue_mode||'asap';
+        var qdetail='';
+        if(qmode==='run_at'&&it.queue_run_at)qdetail=' at '+esc(fmtQueueAt(it.queue_run_at));
+        else if(qmode==='run_after'&&it.queue_after_item_id){
+          var pred=allItems.find(function(x){return x.id===it.queue_after_item_id});
+          qdetail=' after "'+esc(pred?pred.title.substring(0,40):it.queue_after_item_id)+'"'+(it.queue_require_success?' (success required)':'');
+        }
+        queueRow='<div class="ctx-row"><span class="ctx-lbl">Queue</span><span class="ctx-val">'+
+          esc(qmode)+esc(qdetail)+
+          (token?' <button class="btn btn-ghost btn-sm" onclick="editQueueConfig(\''+esc(it.id)+'\')">&#x270E; Edit</button>':'')+
+          '</span></div>';
+      }
       var bActTask=boardCtxActivity&&boardCtxActivity.task;
       body.innerHTML=
         '<div class="ctx-row"><span class="ctx-lbl">Status</span><span class="ctx-val">'+esc(it.status)+'</span></div>'+
+        queueRow+
         botRow+
         descRow+
         '<div class="ctx-row"><span class="ctx-lbl">Work dir</span><span class="ctx-val" style="display:flex;align-items:center;gap:.5rem">'+
@@ -4111,8 +4451,9 @@ const kanbanHTML = `<!DOCTYPE html>
         '<div class="ctx-row"><span class="ctx-lbl">Attachments</span><span class="ctx-val"><a href="#" onclick="bctxTab(\'files\');return false" style="color:#60a5fa">'+attCount+' file'+(attCount!==1?'s':'')+'</a></span></div>'+
         '<div class="ctx-row"><span class="ctx-lbl">Created</span><span class="ctx-val">'+ago(it.created_at)+'</span></div>'+
         (it.active_task_id&&it.status==='in-progress'?'<div class="ctx-working">&#x2699; Bot is working&#x2026;</div>':'')+
+        (it.last_result&&(isDone||isErrored)?'<div class="ctx-row"><span class="ctx-lbl">Last result</span><span class="ctx-val" style="font-size:.78rem;white-space:pre-wrap;word-break:break-word;max-height:8rem;overflow:auto">'+esc(it.last_result.substring(0,500))+'</span></div>':'')+
         (canEdit?'<div style="margin-top:.75rem"><button id="bctx-save-btn" class="btn btn-primary btn-sm" disabled onclick="saveBoardAllEdits()" style="opacity:.4;cursor:not-allowed">Save changes</button></div>':'')+
-        (isDone&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'')+
+        ((isDone||isErrored)&&token?'<div style="margin-top:.5rem"><button class="btn btn-danger btn-sm" onclick="deleteBoardItem()">Delete item</button></div>':'')+
         (bActTask?runTimeFooter(bActTask.dispatched_at,bActTask.completed_at):'');
       // If we don't have activity timing yet, fetch it once to populate the footer.
       if(!boardCtxActivity){

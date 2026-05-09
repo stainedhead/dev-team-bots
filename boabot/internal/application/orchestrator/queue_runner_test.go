@@ -711,3 +711,161 @@ func TestQueueRunner_Launch_UpdateError(t *testing.T) {
 		t.Error("should not dispatch when Board.Update fails in launch")
 	}
 }
+
+// ── run_when tests ────────────────────────────────────────────────────────────
+
+// TestQueueRunner_RunWhen_TimeNotYetAndNoPred verifies that a run_when item
+// is NOT dispatched when the scheduled time is still in the future.
+func TestQueueRunner_RunWhen_TimeNotYetAndNoPred(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: &future},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+	if disp.dispatchedCount() != 0 {
+		t.Error("should not dispatch run_when item when time has not arrived")
+	}
+}
+
+// TestQueueRunner_RunWhen_TimePassedNoPred verifies that a run_when item with
+// no predecessor is dispatched once the scheduled time passes (QueueRunAt nil
+// means time condition is satisfied immediately).
+func TestQueueRunner_RunWhen_TimePassedNoPred(t *testing.T) {
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: nil, QueueAfterItemID: ""},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	if disp.dispatchedCount() == 0 {
+		t.Error("expected run_when item dispatched when time is nil (satisfied) and no predecessor")
+	}
+}
+
+// TestQueueRunner_RunWhen_BothConditionsMet verifies dispatch when both a past
+// run_at time and a done predecessor are satisfied.
+func TestQueueRunner_RunWhen_BothConditionsMet(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "pred", Status: domain.WorkItemStatusDone},
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: &past, QueueAfterItemID: "pred",
+			QueueRequireSuccess: true},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	if disp.dispatchedCount() == 0 {
+		t.Error("expected run_when item dispatched when both time and predecessor conditions are met")
+	}
+}
+
+// TestQueueRunner_RunWhen_PredErrored_RequireSuccess verifies that a run_when
+// item with require_success=true is NOT dispatched when predecessor errored.
+func TestQueueRunner_RunWhen_PredErrored_RequireSuccess(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "pred", Status: domain.WorkItemStatusErrored},
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: &past, QueueAfterItemID: "pred",
+			QueueRequireSuccess: true},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+	if disp.dispatchedCount() != 0 {
+		t.Error("should not dispatch run_when item when predecessor errored and require_success is true")
+	}
+}
+
+// TestQueueRunner_RunWhen_PredErrored_NoRequireSuccess verifies dispatch when
+// predecessor errored and require_success=false.
+func TestQueueRunner_RunWhen_PredErrored_NoRequireSuccess(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "pred", Status: domain.WorkItemStatusErrored},
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: &past, QueueAfterItemID: "pred",
+			QueueRequireSuccess: false},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	if disp.dispatchedCount() == 0 {
+		t.Error("expected run_when item dispatched when predecessor errored and require_success is false")
+	}
+}
+
+// TestQueueRunner_RunWhen_PredNotFound verifies that a run_when item is NOT
+// dispatched when the predecessor item cannot be found.
+func TestQueueRunner_RunWhen_PredNotFound(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_when", QueueRunAt: &past, QueueAfterItemID: "missing-pred"},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+	if disp.dispatchedCount() != 0 {
+		t.Error("should not dispatch run_when item when predecessor not found")
+	}
+}

@@ -181,8 +181,11 @@ func TestExecuteTask_SystemPromptPassedToProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedSystemPrompt != systemPrompt {
-		t.Fatalf("expected system prompt %q got %q", systemPrompt, capturedSystemPrompt)
+	if !strings.HasPrefix(capturedSystemPrompt, systemPrompt) {
+		t.Fatalf("expected system prompt to start with %q, got %q", systemPrompt, capturedSystemPrompt)
+	}
+	if !strings.Contains(capturedSystemPrompt, "TASK_OUTCOME") {
+		t.Fatalf("expected system prompt to contain TASK_OUTCOME instructions, got %q", capturedSystemPrompt)
 	}
 }
 

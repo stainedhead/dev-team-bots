@@ -86,6 +86,65 @@ func TestLoadTeamConfig_ValidYAML(t *testing.T) {
 	}
 }
 
+// ── resolveTaskOutcome ────────────────────────────────────────────────────────
+
+func TestResolveTaskOutcome(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		success   bool
+		wantTask  domain.DirectTaskStatus
+		wantBoard domain.WorkItemStatus
+	}{
+		{
+			name:      "success no marker → done",
+			output:    "All done.",
+			success:   true,
+			wantTask:  domain.DirectTaskStatusSucceeded,
+			wantBoard: domain.WorkItemStatusDone,
+		},
+		{
+			name:      "blocked marker overrides success",
+			output:    "Missing git repo.\nTASK_OUTCOME: blocked",
+			success:   true,
+			wantTask:  domain.DirectTaskStatusBlocked,
+			wantBoard: domain.WorkItemStatusBlocked,
+		},
+		{
+			name:      "errored marker overrides success",
+			output:    "Fatal failure.\nTASK_OUTCOME: errored",
+			success:   true,
+			wantTask:  domain.DirectTaskStatusErrored,
+			wantBoard: domain.WorkItemStatusErrored,
+		},
+		{
+			name:      "runtime failure with no marker → errored",
+			output:    "",
+			success:   false,
+			wantTask:  domain.DirectTaskStatusErrored,
+			wantBoard: domain.WorkItemStatusErrored,
+		},
+		{
+			name:      "blocked marker with runtime failure",
+			output:    "TASK_OUTCOME: blocked",
+			success:   false,
+			wantTask:  domain.DirectTaskStatusBlocked,
+			wantBoard: domain.WorkItemStatusBlocked,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTask, gotBoard := resolveTaskOutcome(tc.output, tc.success)
+			if gotTask != tc.wantTask {
+				t.Errorf("task status: got %q, want %q", gotTask, tc.wantTask)
+			}
+			if gotBoard != tc.wantBoard {
+				t.Errorf("board status: got %q, want %q", gotBoard, tc.wantBoard)
+			}
+		})
+	}
+}
+
 // ── teamAskRouter ─────────────────────────────────────────────────────────────
 
 func TestTeamAskRouter_GetOrCreate_SameChannel(t *testing.T) {

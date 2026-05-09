@@ -155,6 +155,25 @@ type dynamicBot struct {
 	done   chan struct{}
 }
 
+// resolveTaskOutcome maps a bot's output and runtime success flag to the
+// terminal DirectTask status and the corresponding WorkItem board status.
+// It checks the output for a TASK_OUTCOME marker first; the marker overrides
+// the runtime success flag.
+func resolveTaskOutcome(output string, success bool) (domain.DirectTaskStatus, domain.WorkItemStatus) {
+	if outcome := domain.ParseTaskOutcome(output); outcome != "" {
+		switch outcome {
+		case domain.DirectTaskStatusBlocked:
+			return domain.DirectTaskStatusBlocked, domain.WorkItemStatusBlocked
+		case domain.DirectTaskStatusErrored:
+			return domain.DirectTaskStatusErrored, domain.WorkItemStatusErrored
+		}
+	}
+	if success {
+		return domain.DirectTaskStatusSucceeded, domain.WorkItemStatusDone
+	}
+	return domain.DirectTaskStatusErrored, domain.WorkItemStatusErrored
+}
+
 // NewTeamManager constructs a TeamManager.  Call Run to start the team.
 func NewTeamManager(cfg ManagerConfig, router *queue.Router, bus *bus.Bus) *TeamManager {
 	cfg.applyDefaults()
@@ -854,7 +873,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			// Mark the task as completed.
 			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
 				now := time.Now().UTC()
-				task.Status = domain.DirectTaskStatusSucceeded
+				taskStatus, boardStatus := resolveTaskOutcome(p.Output, p.Success)
+				task.Status = taskStatus
 				task.CompletedAt = &now
 				task.Output = p.Output
 				_, _ = sharedTasks.Update(handlerCtx, task)
@@ -871,11 +891,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 							item.LastResultAt = &now
 						}
 						item.ActiveTaskID = ""
-						if p.Success {
-							item.Status = domain.WorkItemStatusDone
-						} else {
-							item.Status = domain.WorkItemStatusBlocked
-						}
+						item.Status = boardStatus
 						_, _ = tm.sharedBoard.Update(handlerCtx, item)
 					}
 				}

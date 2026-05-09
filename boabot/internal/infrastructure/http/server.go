@@ -1650,7 +1650,7 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 				if m.Direction == domain.ChatDirectionInbound {
 					who = m.BotName
 				}
-				sb.WriteString(fmt.Sprintf("%s: %s\n", who, m.Content))
+				fmt.Fprintf(&sb, "%s: %s\n", who, m.Content)
 			}
 			sb.WriteString("\nOperator: ")
 			sb.WriteString(req.Content)

@@ -198,6 +198,7 @@ type Client struct {
     installDir  string
     cliRunner   domain.CLIAgentRunner // NEW: nil if no CLI tools configured
     cliTools    config.CLIToolsConfig // NEW: zero value = all disabled
+    progressFn  func(line string)     // NEW: optional; called for each CLI output line
 }
 ```
 
@@ -209,4 +210,8 @@ func WithCLIRunner(r domain.CLIAgentRunner) func(*Client)
 
 // WithCLITools sets the CLI tools configuration used to gate tool availability.
 func WithCLITools(cfg config.CLIToolsConfig) func(*Client)
+
+// WithProgressFn sets the progress callback invoked for each output line from CLI tools.
+// If nil, progress lines are silently discarded.
+func WithProgressFn(fn func(line string)) func(*Client)
 ```

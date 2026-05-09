@@ -1531,7 +1531,7 @@ func buildTaskAskInstruction(task domain.DirectTask, question string, history fu
 	if title == "" {
 		title = "(no title)"
 	}
-	sb.WriteString(fmt.Sprintf("You are being asked a follow-up question about a task you previously completed.\n\nTask title: %s\n\nOriginal task instruction:\n%s\n\n", title, task.Instruction))
+	fmt.Fprintf(&sb, "You are being asked a follow-up question about a task you previously completed.\n\nTask title: %s\n\nOriginal task instruction:\n%s\n\n", title, task.Instruction)
 
 	msgs := history()
 	// msgs is newest-first; reverse for chronological, skip the just-appended outbound message.
@@ -1546,11 +1546,11 @@ func buildTaskAskInstruction(task domain.DirectTask, question string, history fu
 			if m.Direction == domain.ChatDirectionInbound {
 				who = task.BotName
 			}
-			sb.WriteString(fmt.Sprintf("%s: %s\n", who, m.Content))
+			fmt.Fprintf(&sb, "%s: %s\n", who, m.Content)
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString(fmt.Sprintf("Operator: %s", question))
+	fmt.Fprintf(&sb, "Operator: %s", question)
 	return sb.String()
 }
 
@@ -1762,31 +1762,6 @@ func isValidWorkItemStatus(status string) bool {
 	return false
 }
 
-// extractSlashCommand returns the command name if s starts with a slash command
-// (e.g. "/devflow:implm-frm-prd"), otherwise returns "". Only the first token
-// is checked so extra arguments are ignored.
-func extractSlashCommand(s string) string {
-	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "/") {
-		return ""
-	}
-	s = s[1:]
-	end := strings.IndexAny(s, " \t\n\r")
-	if end == -1 {
-		end = len(s)
-	}
-	cmd := s[:end]
-	if cmd == "" {
-		return ""
-	}
-	for _, c := range cmd {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == ':' || c == '-' || c == '_' || c == '.') {
-			return ""
-		}
-	}
-	return cmd
-}
 
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/png")

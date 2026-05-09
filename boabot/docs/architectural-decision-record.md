@@ -149,3 +149,18 @@ Keeping the cache in the adapter also means test doubles (`mocks.MockRegistryMan
 Placing the sentinel in the domain layer allows any adapter — HTTP server, CLI, future gRPC server — to check it via `errors.Is` by importing only the domain, which is always a legal dependency.
 
 **Rejected:** Infrastructure-local sentinel with re-export (creates lateral infra-to-infra coupling); string comparison on `err.Error()` (fragile and not idiomatic Go); wrapping with a custom type defined in a shared `errors` package (unnecessary indirection; domain package already serves this purpose).
+
+---
+
+## ADR-B015 — run_when as a composite queue mode rather than a flag combination
+
+**Decision:** A fourth queue mode `run_when` was introduced to `domain.WorkItem.QueueMode` (alongside `asap`, `run_at`, `run_after`). It satisfies both a time condition and a predecessor-item condition before the `QueueRunner` dispatches the item. Either sub-condition may be omitted, in which case `run_when` degenerates to `run_at` or `run_after` respectively.
+
+**Rationale:** Before `run_when`, operators had no way to express "start this task at 9 AM, but only if the previous task finished first." The options were to manually promote the item at the right time, or to chain two scheduled items with `run_after` and tolerate early dispatch if the predecessor finished before 9 AM. `run_when` eliminates both workarounds with a single scheduling rule.
+
+An alternative design would have added separate boolean flags to the existing `run_at` / `run_after` modes (e.g., `also_require_predecessor`). A named composite mode was preferred because:
+- The UI can present it as a distinct option with an intelligible label ("Run When both…") rather than showing confusing optional sub-fields inside a `run_at` form.
+- `isReady()` in `QueueRunner` remains a clean switch on `QueueMode`; there is no need to branch on multiple flags per mode.
+- The domain model remains self-documenting: the four mode names cover the four meaningful scheduling intents.
+
+**Rejected:** Boolean flag `require_time_and_predecessor` added to existing modes (unclear semantics, harder to validate in the UI); separate `run_when_time` and `run_when_predecessor` fields without a composite mode (would require the runner to infer intent from combinations of empty fields); orchestrator-side scheduled jobs that poll and re-queue items (adds state machine complexity with no benefit over in-runner readiness checks).

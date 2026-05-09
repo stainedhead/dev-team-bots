@@ -72,9 +72,22 @@ Supported provider types:
 Enabled by `orchestrator.enabled: true` in config. Adds:
 
 - **Control plane** — maintains the team registry. Accepts registration, heartbeat, and deregistration messages. Stores Agent Card per bot. Enforces one-instance-per-agent-type.
-- **Kanban board** — manages work items. States: backlog, in-progress, blocked, done. Notifies assigned bots on assignment. All mutations include client-supplied idempotency tokens.
+- **Kanban board** — manages work items. States: `backlog`, `queued`, `in-progress`, `blocked`, `done`, `errored`. Notifies assigned bots on assignment. All mutations include client-supplied idempotency tokens.
+- **Queue scheduling** — items in the `queued` state wait for a scheduling condition before the `QueueRunner` dispatches them. Four modes:
+  - `asap` (default) — dispatch as soon as a concurrency slot is free. FIFO by queue time.
+  - `run_at` — dispatch at or after a specified UTC time.
+  - `run_after` — dispatch after a predecessor item reaches `done` (or `done`/`errored` when `require_success: false`).
+  - `run_when` — dispatch when **both** a scheduled time has passed **and** a predecessor item has finished. Either condition can be omitted, behaving like `run_at` or `run_after` respectively.
+  `MaxConcurrent` (default 3) caps how many items can be `in-progress` at once. The `QueueRunner` polls every 5 seconds; any in-progress item whose task has succeeded or failed is automatically transitioned to `done`/`errored`.
 - **REST API** — JWT-authenticated access to control plane and board at `/api/v1/`. All 26 endpoints match the `baobotctl` CLI contract (auth, board, team, skills, users, profile, DLQ). Admin-only routes return 403 for non-admin callers.
-- **Web UI** — HTMX Kanban board at `/`; auto-refreshes board columns and team health every 30 seconds without a full page reload.
+- **Web UI** — single-page Kanban board at `/`. Features:
+  - Six colour-coded columns (backlog, queued, in-progress, blocked, done, errored).
+  - Cards show work item title, assignee, and the leaf folder of the working directory.
+  - Bot roster shows a per-type skill summary, status, and an info popup with capability bullet-points.
+  - Queue Config dialog lets operators set ASAP, Run At, or Run When scheduling with an inline predecessor picker (filtered to in-progress/queued items only).
+  - Task list includes a "Dir" column and supports filtering by bot and free-text search.
+  - Working-directory text fields trigger a file-path autocomplete popup on keystroke.
+  - Board and task list scroll horizontally on narrow screens without breaking the layout.
 - **User management** — two roles: Admin and User. JWT issued on login, forced password change on first use.
 - **Tech-lead pool** — dynamically allocates and deallocates tech-lead instances as kanban items move in and out of In Progress state. See [Tech-Lead Pool Management](#tech-lead-pool-management) below.
 

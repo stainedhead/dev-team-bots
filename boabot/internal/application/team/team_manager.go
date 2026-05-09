@@ -22,6 +22,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/cliagent"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	githubbackup "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/github/backup"
 	httpserver "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/http"
@@ -138,6 +139,11 @@ type TeamManager struct {
 	// the data race that occurred when goroutines wrote to struct fields concurrently.
 	resolvedPluginStore domain.PluginStore
 	resolvedInstallDir  string
+
+	// resolvedCLIRunner and resolvedCLITools are set once in Run() before goroutines
+	// start so all bots share the same immutable runner instance.
+	resolvedCLIRunner domain.CLIAgentRunner
+	resolvedCLITools  config.CLIToolsConfig
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -263,8 +269,13 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 			tm.resolvedPluginStore = ps
 			tm.resolvedInstallDir = installDir
 		}
+		// Pre-resolve CLI tools config from the orchestrator bot config.
+		tm.resolvedCLITools = orchCfg.Orchestrator.CLITools
 		break
 	}
+
+	// Pre-resolve CLI agent runner (shared across all bots; SubprocessRunner has no state).
+	tm.resolvedCLIRunner = cliagent.New()
 
 	// Wire the TechLeadPool with a board status-change hook.
 	psf := infrastructure.NewPoolStateFile(filepath.Join(orchestratorMemPath, "pool.json"))
@@ -740,6 +751,11 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	if tm.resolvedPluginStore != nil {
 		mcpOpts = append(mcpOpts, localmcp.WithPluginStore(tm.resolvedPluginStore))
 		mcpOpts = append(mcpOpts, localmcp.WithInstallDir(tm.resolvedInstallDir))
+	}
+	// Wire CLI runner if configured.
+	if tm.resolvedCLIRunner != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithCLIRunner(tm.resolvedCLIRunner))
+		mcpOpts = append(mcpOpts, localmcp.WithCLITools(tm.resolvedCLITools))
 	}
 	mcpClient := localmcp.NewClient(tm.cfg.AllowedWorkDirs, mcpOpts...)
 

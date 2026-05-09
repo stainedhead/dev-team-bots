@@ -252,6 +252,81 @@ func TestLoad_UnknownFieldRejected(t *testing.T) {
 	}
 }
 
+// TestLoad_CLIToolsConfig verifies that cli_tools fields round-trip through YAML.
+func TestLoad_CLIToolsConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `orchestrator:
+  enabled: true
+  cli_tools:
+    claude_code:
+      enabled: true
+      binary_path: /usr/local/bin/claude
+    codex:
+      enabled: false
+      binary_path: codex
+    openai_codex:
+      enabled: true
+      binary_path: openai-codex
+    opencode:
+      enabled: false
+      binary_path: opencode
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ct := cfg.Orchestrator.CLITools
+	if !ct.ClaudeCode.Enabled {
+		t.Error("expected ClaudeCode.Enabled=true")
+	}
+	if ct.ClaudeCode.BinaryPath != "/usr/local/bin/claude" {
+		t.Errorf("ClaudeCode.BinaryPath: got %q", ct.ClaudeCode.BinaryPath)
+	}
+	if ct.Codex.Enabled {
+		t.Error("expected Codex.Enabled=false")
+	}
+	if ct.Codex.BinaryPath != "codex" {
+		t.Errorf("Codex.BinaryPath: got %q", ct.Codex.BinaryPath)
+	}
+	if !ct.OpenAICodex.Enabled {
+		t.Error("expected OpenAICodex.Enabled=true")
+	}
+	if ct.OpenAICodex.BinaryPath != "openai-codex" {
+		t.Errorf("OpenAICodex.BinaryPath: got %q", ct.OpenAICodex.BinaryPath)
+	}
+	if ct.OpenCode.Enabled {
+		t.Error("expected OpenCode.Enabled=false")
+	}
+}
+
+// TestLoad_CLIToolsConfig_MissingBlock verifies that missing cli_tools block
+// uses safe defaults (all disabled).
+func TestLoad_CLIToolsConfig_MissingBlock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `orchestrator:
+  enabled: true
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ct := cfg.Orchestrator.CLITools
+	if ct.ClaudeCode.Enabled {
+		t.Error("expected ClaudeCode.Enabled=false by default")
+	}
+	if ct.Codex.Enabled {
+		t.Error("expected Codex.Enabled=false by default")
+	}
+	if ct.OpenAICodex.Enabled {
+		t.Error("expected OpenAICodex.Enabled=false by default")
+	}
+	if ct.OpenCode.Enabled {
+		t.Error("expected OpenCode.Enabled=false by default")
+	}
+}
+
 // TestLoad_OrchestratorJWTAndAdminPassword verifies that the new jwt_secret and
 // admin_password fields in OrchestratorConfig round-trip through YAML.
 func TestLoad_OrchestratorJWTAndAdminPassword(t *testing.T) {

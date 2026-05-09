@@ -65,14 +65,32 @@ type BotConfig struct {
 }
 
 type OrchestratorConfig struct {
-	Enabled       bool          `yaml:"enabled"`
-	APIPort       int           `yaml:"api_port"`
-	JWTSecret     string        `yaml:"jwt_secret"`     // generated randomly if empty
-	AdminPassword string        `yaml:"admin_password"` // defaults to "admin" if empty
-	WorkDirs      []string      `yaml:"work_dirs"`      // allowed base directories for board item workspaces
-	RetentionDays int           `yaml:"retention_days"` // auto-delete done board items and tasks older than this; default 10
-	MaxConcurrent int           `yaml:"max_concurrent"` // max items running in-progress simultaneously (1-7); default 3
-	Plugins       PluginsConfig `yaml:"plugins"`
+	Enabled       bool           `yaml:"enabled"`
+	APIPort       int            `yaml:"api_port"`
+	JWTSecret     string         `yaml:"jwt_secret"`     // generated randomly if empty
+	AdminPassword string         `yaml:"admin_password"` // defaults to "admin" if empty
+	WorkDirs      []string       `yaml:"work_dirs"`      // allowed base directories for board item workspaces
+	RetentionDays int            `yaml:"retention_days"` // auto-delete done board items and tasks older than this; default 10
+	MaxConcurrent int            `yaml:"max_concurrent"` // max items running in-progress simultaneously (1-7); default 3
+	Plugins       PluginsConfig  `yaml:"plugins"`
+	CLITools      CLIToolsConfig `yaml:"cli_tools"`
+}
+
+// CLIToolConfig configures a single CLI agent tool.
+type CLIToolConfig struct {
+	// Enabled controls whether the tool is available. Defaults to false.
+	Enabled bool `yaml:"enabled"`
+	// BinaryPath overrides the default binary name (e.g. "claude", "codex").
+	// May be an absolute path or a name resolved via PATH.
+	BinaryPath string `yaml:"binary_path"`
+}
+
+// CLIToolsConfig groups configuration for all supported CLI agent tools.
+type CLIToolsConfig struct {
+	ClaudeCode  CLIToolConfig `yaml:"claude_code"`
+	Codex       CLIToolConfig `yaml:"codex"`
+	OpenAICodex CLIToolConfig `yaml:"openai_codex"`
+	OpenCode    CLIToolConfig `yaml:"opencode"`
 }
 
 // PluginsConfig configures the plugin registry and installer.

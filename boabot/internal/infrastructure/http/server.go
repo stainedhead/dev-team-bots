@@ -108,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	// Static assets
 	if len(s.cfg.IconPNG) > 0 {
 		mux.HandleFunc("GET /imgs/boabot-icon.png", s.handleIcon)
+		mux.HandleFunc("GET /imgs/boabot-icon-raw.png", s.handleIconRaw)
 	}
 
 	// Public
@@ -1726,6 +1727,12 @@ func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(s.processedIcon)
 }
 
+func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(s.cfg.IconPNG)
+}
+
 // makeDarkPixelsTransparent decodes a PNG and sets any pixel whose luminance
 // falls below 50/255 to fully transparent. This lets CSS filters (invert, hue-rotate)
 // work correctly against a dark UI without producing a light rectangular halo.
@@ -1763,7 +1770,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BaoBot Control</title>
-  <link rel="icon" type="image/png" href="/imgs/boabot-icon.png">
+  <link rel="icon" type="image/png" href="/imgs/boabot-icon-raw.png">
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:system-ui,-apple-system,sans-serif;background:#080e1a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -2277,6 +2284,7 @@ const kanbanHTML = `<!DOCTYPE html>
 
 <!-- Login -->
 <dialog id="login-dlg">
+  <div style="text-align:center;margin-bottom:1.25rem"><img src="/imgs/boabot-icon-raw.png" alt="BaoBot" style="width:80px;height:80px;border-radius:.75rem"/></div>
   <h2>Sign In</h2>
   <div class="fg"><label class="fl">Username</label><input class="fi" id="login-u" type="text" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>
   <div class="fg"><label class="fl">Password</label><input class="fi" id="login-p" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin();if(event.key==='Escape')cls('login-dlg')"/></div>

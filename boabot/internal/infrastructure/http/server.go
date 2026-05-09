@@ -1391,10 +1391,16 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, userMsg)
 
-	// Route the question to the running bot for a mid-task reply.
+	// If the bot is actively executing a task, route as a mid-task question so
+	// it is answered between tool iterations without interrupting the execution.
+	// If the bot is idle (Enqueue returns false because no active Execute loop is
+	// draining the channel), fall back to dispatching a chat task so the question
+	// is always answered.
+	instruction := fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content)
+	midTaskRouted := false
 	if s.cfg.AskRouter != nil {
-		s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
-			Question: fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content),
+		midTaskRouted = s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
+			Question: instruction,
 			ReplyFn: func(reply string) {
 				botMsg := domain.ChatMessage{
 					ThreadID:  threadID,
@@ -1405,6 +1411,12 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 				_ = s.cfg.Chat.Append(context.Background(), botMsg)
 			},
 		})
+	}
+	if !midTaskRouted && s.cfg.Dispatcher != nil {
+		// Bot is idle — dispatch a chat task. The TaskResultHandler in TeamManager
+		// will write the output as an inbound message on this thread.
+		_, _ = s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil,
+			domain.DirectTaskSourceChat, threadID, item.WorkDir)
 	}
 
 	writeJSON(w, http.StatusCreated, userMsg)
@@ -2005,12 +2017,12 @@ const kanbanHTML = `<!DOCTYPE html>
 
     /* ── Board ── */
     .board{display:flex;gap:.875rem;flex:1;align-items:flex-start;min-height:0}
-    .col{background:#0f1829;border:1px solid #1a2744;border-radius:.5rem;flex:1;min-width:200px;display:flex;flex-direction:column;max-height:100%}
+    .col{background:#0f1829;border:1px solid #1a2744;border-radius:.5rem;flex:1;min-width:240px;display:flex;flex-direction:column;max-height:100%}
     .col.over{border-color:#3b82f6;background:#0d1d35}
     .col-hdr{padding:.6rem .75rem;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #1a2744;display:flex;align-items:center;gap:.4rem;flex-shrink:0}
     .col-cnt{padding:.05rem .35rem;border-radius:9999px;background:#1a2744;color:#475569;font-size:.6rem;font-weight:600}
     .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
-    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.55rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
+    .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
     .card:hover{border-color:#2d3e5a}
     .card.dragging{opacity:.35;cursor:grabbing}
     .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}

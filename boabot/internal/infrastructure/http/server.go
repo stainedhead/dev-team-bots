@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
@@ -93,8 +94,9 @@ type Config struct {
 // Server is the orchestrator HTTP server.
 type Server struct {
 	cfg           Config
-	processedIcon []byte // icon with dark pixels made transparent (sidebar watermark)
-	faviconIcon   []byte // icon with CSS-equivalent blue/white colour swap (browser tab)
+	processedIcon []byte    // icon with dark pixels made transparent (sidebar watermark)
+	faviconIcon   []byte    // icon with CSS-equivalent blue/white colour swap (browser tab)
+	iconOnce      sync.Once // guards lazy icon processing; runs at most once on first icon request
 }
 
 // New creates a Server with the given config.
@@ -107,12 +109,10 @@ func New(cfg Config) *Server {
 			AllowedWorkDirs: cfg.AllowedWorkDirs,
 		})
 	}
-	s := &Server{cfg: cfg}
-	if len(cfg.IconPNG) > 0 {
-		s.processedIcon = makeDarkPixelsTransparent(cfg.IconPNG)
-		s.faviconIcon = applyBlueWhiteFilter(cfg.IconPNG)
-	}
-	return s
+	// Icon bytes are stored in cfg.IconPNG and processed lazily on first request.
+	// Processing a 1 MB PNG under -race takes ~7 s; deferring it keeps server
+	// construction cheap even in test environments.
+	return &Server{cfg: cfg}
 }
 
 // Handler returns the root http.Handler for the server.
@@ -1814,7 +1814,21 @@ func isValidWorkItemStatus(status string) bool {
 	return false
 }
 
+// initIcons runs makeDarkPixelsTransparent and applyBlueWhiteFilter at most once,
+// on the first call, and stores the results in the Server.  Expensive under
+// -race (a 1 MB PNG takes ~7 s), so it is deferred to the first actual request
+// rather than run in New.
+func (s *Server) initIcons() {
+	if len(s.cfg.IconPNG) > 0 {
+		s.iconOnce.Do(func() {
+			s.processedIcon = makeDarkPixelsTransparent(s.cfg.IconPNG)
+			s.faviconIcon = applyBlueWhiteFilter(s.cfg.IconPNG)
+		})
+	}
+}
+
 func (s *Server) handleIcon(w http.ResponseWriter, _ *http.Request) {
+	s.initIcons()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(s.processedIcon)
@@ -1827,6 +1841,7 @@ func (s *Server) handleIconRaw(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	s.initIcons()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(s.faviconIcon)

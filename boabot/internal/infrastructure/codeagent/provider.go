@@ -96,7 +96,7 @@ func (p *Provider) Invoke(ctx context.Context, req domain.InvokeRequest) (domain
 	cmd.Dir = p.workDir
 	// Force-close I/O pipes and unblock Wait if child processes outlive the
 	// parent after context cancellation (e.g. sh spawning sleep).
-	cmd.WaitDelay = p.timeout + 500*time.Millisecond
+	cmd.WaitDelay = 500 * time.Millisecond
 
 	// Capture stderr for error reporting.
 	var stderrBuf strings.Builder

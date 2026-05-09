@@ -152,12 +152,13 @@ func (c *Client) ListTools(ctx context.Context) ([]domain.MCPTool, error) {
 	if c.boardStore != nil {
 		tools = append(tools, domain.MCPTool{
 			Name:        "complete_board_item",
-			Description: "Mark a Kanban board item as done. Only call this when you have independently finished all work on the item and it does not need team-lead review.",
+			Description: "Mark a Kanban board item as done. Only call this when you have independently finished all work on the item and it does not need team-lead review. Always provide a summary of what you did and what the outcome was.",
 			InputSchema: map[string]any{
 				"type":     "object",
-				"required": []string{"item_id"},
+				"required": []string{"item_id", "output"},
 				"properties": map[string]any{
 					"item_id": map[string]any{"type": "string", "description": "The board item ID (visible in the item details)"},
+					"output":  map[string]any{"type": "string", "description": "Summary of what you did and the outcome. Include any errors, blockers, or results. This is shown to the operator in the Output tab."},
 				},
 			},
 		})
@@ -509,6 +510,11 @@ func (c *Client) completeBoardItem(ctx context.Context, args map[string]any) (do
 		return errResult(fmt.Sprintf("complete_board_item: item not found: %v", err)), nil
 	}
 	item.Status = domain.WorkItemStatusDone
+	if output, _ := args["output"].(string); output != "" {
+		now := time.Now().UTC()
+		item.LastResult = output
+		item.LastResultAt = &now
+	}
 	if _, err := c.boardStore.Update(ctx, item); err != nil {
 		return errResult(fmt.Sprintf("complete_board_item: update failed: %v", err)), nil
 	}

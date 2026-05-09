@@ -1124,7 +1124,7 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	}
 	var filtered []domain.DirectTask
 	for _, t := range tasks {
-		if t.Source != domain.DirectTaskSourceChat {
+		if t.Source == domain.DirectTaskSourceOperator {
 			filtered = append(filtered, t)
 		}
 	}
@@ -1181,7 +1181,7 @@ func (s *Server) handleBotTaskList(w http.ResponseWriter, r *http.Request) {
 	}
 	var filtered []domain.DirectTask
 	for _, t := range tasks {
-		if t.Source != domain.DirectTaskSourceChat {
+		if t.Source == domain.DirectTaskSourceOperator {
 			filtered = append(filtered, t)
 		}
 	}

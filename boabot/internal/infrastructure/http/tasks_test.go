@@ -53,7 +53,7 @@ func (f *fakeDirectTaskStore) List(ctx context.Context, botName string) ([]domai
 	if f.listFn != nil {
 		return f.listFn(ctx, botName)
 	}
-	return []domain.DirectTask{{ID: "task-1", BotName: botName, Status: domain.DirectTaskStatusPending}}, nil
+	return []domain.DirectTask{{ID: "task-1", BotName: botName, Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusPending}}, nil
 }
 
 func (f *fakeDirectTaskStore) ListAll(ctx context.Context) ([]domain.DirectTask, error) {
@@ -61,8 +61,8 @@ func (f *fakeDirectTaskStore) ListAll(ctx context.Context) ([]domain.DirectTask,
 		return f.listAllFn(ctx)
 	}
 	return []domain.DirectTask{
-		{ID: "task-1", BotName: "dev-1", Status: domain.DirectTaskStatusPending},
-		{ID: "task-2", BotName: "qa-1", Status: domain.DirectTaskStatusRunning},
+		{ID: "task-1", BotName: "dev-1", Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusPending},
+		{ID: "task-2", BotName: "qa-1", Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusRunning},
 	}, nil
 }
 
@@ -275,7 +275,7 @@ func TestBotTaskList_ReturnsTasksForBot(t *testing.T) {
 		listFn: func(_ context.Context, botName string) ([]domain.DirectTask, error) {
 			capturedBotName = botName
 			return []domain.DirectTask{
-				{ID: "t1", BotName: botName, Status: domain.DirectTaskStatusPending},
+				{ID: "t1", BotName: botName, Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusPending},
 			}, nil
 		},
 	}
@@ -442,6 +442,73 @@ func TestBotTaskCreate_InvalidBody_Returns400(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestTaskList_ExcludesBoardSourceTasks(t *testing.T) {
+	store := &fakeDirectTaskStore{
+		listAllFn: func(_ context.Context) ([]domain.DirectTask, error) {
+			return []domain.DirectTask{
+				{ID: "op-1", Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusSucceeded},
+				{ID: "bd-1", Source: domain.DirectTaskSourceBoard, Status: domain.DirectTaskStatusSucceeded},
+				{ID: "ch-1", Source: domain.DirectTaskSourceChat, Status: domain.DirectTaskStatusSucceeded},
+			}, nil
+		},
+	}
+	s := httpserver.New(httpserver.Config{
+		Auth:       &fakeAuth{},
+		Board:      &fakeBoardStore{},
+		Team:       &fakeControlPlane{},
+		Users:      &fakeUserStore{},
+		Skills:     &fakeSkillRegistry{},
+		DLQ:        &fakeDLQStore{},
+		Tasks:      store,
+		Dispatcher: &fakeTaskDispatcher{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodGet, "tasks", "")
+	defer func() { _ = resp.Body.Close() }()
+	var tasks []domain.DirectTask
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "op-1" {
+		t.Errorf("expected only operator task, got %+v", tasks)
+	}
+}
+
+func TestBotTaskList_ExcludesBoardSourceTasks(t *testing.T) {
+	store := &fakeDirectTaskStore{
+		listFn: func(_ context.Context, _ string) ([]domain.DirectTask, error) {
+			return []domain.DirectTask{
+				{ID: "op-1", Source: domain.DirectTaskSourceOperator, Status: domain.DirectTaskStatusSucceeded},
+				{ID: "bd-1", Source: domain.DirectTaskSourceBoard, Status: domain.DirectTaskStatusSucceeded},
+			}, nil
+		},
+	}
+	s := httpserver.New(httpserver.Config{
+		Auth:       &fakeAuth{},
+		Board:      &fakeBoardStore{},
+		Team:       &fakeControlPlane{},
+		Users:      &fakeUserStore{},
+		Skills:     &fakeSkillRegistry{},
+		DLQ:        &fakeDLQStore{},
+		Tasks:      store,
+		Dispatcher: &fakeTaskDispatcher{},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := doJSON(t, srv, http.MethodGet, "bots/dev-1/tasks", "")
+	defer func() { _ = resp.Body.Close() }()
+	var tasks []domain.DirectTask
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "op-1" {
+		t.Errorf("expected only operator task, got %+v", tasks)
 	}
 }
 

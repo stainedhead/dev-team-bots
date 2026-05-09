@@ -56,6 +56,12 @@ func TestTeamManager_PluginStorePreResolved(t *testing.T) {
 		mu.Unlock()
 		// All bots run concurrently; increment counter to signal this goroutine ran.
 		atomic.AddInt32(&counter, 1)
+		// Read resolvedPluginStore and resolvedInstallDir from within the goroutine
+		// so the race detector observes the field access. If the pre-resolution in
+		// Run() were absent and goroutines wrote these fields concurrently, the
+		// detector would fire here.
+		_ = mgr.ResolvedPluginStore()
+		_ = mgr.ResolvedInstallDir()
 		// Wait briefly so all goroutines are in flight simultaneously (stress the race).
 		time.Sleep(5 * time.Millisecond)
 		return nil

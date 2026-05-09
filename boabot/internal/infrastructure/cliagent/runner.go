@@ -136,7 +136,7 @@ func (r *SubprocessRunner) Run(
 // drainStdin reads from stdinCh and writes each line to w until the channel is
 // closed or ctx is done. It always closes w when it exits.
 func drainStdin(ctx context.Context, stdinCh <-chan string, w io.WriteCloser) {
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	for {
 		select {
 		case line, ok := <-stdinCh:

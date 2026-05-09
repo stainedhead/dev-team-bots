@@ -2,8 +2,10 @@ package mcp_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/mocks"
@@ -19,6 +21,92 @@ func makeActivePlugin(name string, tools []domain.MCPTool) domain.Plugin {
 		Manifest: domain.PluginManifest{
 			Provides: domain.PluginProvides{Tools: tools},
 		},
+	}
+}
+
+// TestListTools_PassesContextToPluginStore verifies that ListTools passes the
+// caller's context (not context.Background()) to pluginStore.List.
+func TestListTools_PassesContextToPluginStore(t *testing.T) {
+	t.Parallel()
+
+	var receivedCtx context.Context
+	store := &mocks.PluginStore{
+		ListFn: func(ctx context.Context) ([]domain.Plugin, error) {
+			receivedCtx = ctx
+			return nil, errors.New("cancelled") // return error so we don't need real plugins
+		},
+	}
+
+	client := mcp.NewClient([]string{t.TempDir()},
+		mcp.WithPluginStore(store),
+		mcp.WithInstallDir(t.TempDir()),
+	)
+
+	// Create a pre-cancelled context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, _ = client.ListTools(ctx)
+
+	if receivedCtx == nil {
+		t.Fatal("pluginStore.List was not called")
+	}
+	if receivedCtx.Err() == nil {
+		t.Error("expected the received context to be cancelled (Err() != nil), but it was not")
+	}
+}
+
+// TestCallTool_PluginEntrypointNotExecutable verifies that calling a plugin tool
+// whose entrypoint exists but lacks the executable bit returns IsError=true.
+func TestCallTool_PluginEntrypointNotExecutable(t *testing.T) {
+	t.Parallel()
+
+	installDir := t.TempDir()
+	pluginDir := installDir + "/non-exec-plugin"
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file without the executable bit.
+	entrypointPath := pluginDir + "/run.sh"
+	if err := os.WriteFile(entrypointPath, []byte("#!/bin/sh\necho hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginTool := domain.MCPTool{Name: "non_exec_tool", Description: "test"}
+	plugin := domain.Plugin{
+		ID:     "non-exec-id",
+		Name:   "non-exec-plugin",
+		Status: domain.PluginStatusActive,
+		Manifest: domain.PluginManifest{
+			Entrypoint: "run.sh",
+			Provides:   domain.PluginProvides{Tools: []domain.MCPTool{pluginTool}},
+		},
+	}
+
+	store := &mocks.PluginStore{
+		ListFn: func(_ context.Context) ([]domain.Plugin, error) {
+			return []domain.Plugin{plugin}, nil
+		},
+	}
+
+	client := mcp.NewClient([]string{installDir},
+		mcp.WithPluginStore(store),
+		mcp.WithInstallDir(installDir),
+	)
+
+	result, err := client.CallTool(context.Background(), "non_exec_tool", map[string]any{})
+	if err != nil {
+		t.Fatalf("CallTool returned unexpected Go error: %v", err)
+	}
+	if !result.IsError {
+		t.Errorf("expected IsError=true for non-executable entrypoint, got success: %+v", result)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected non-empty error content")
+	}
+	if !strings.Contains(result.Content[0].Text, "not executable") {
+		t.Errorf("expected 'not executable' in error message, got: %q", result.Content[0].Text)
 	}
 }
 

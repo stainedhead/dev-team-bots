@@ -32,6 +32,18 @@ func SetBotRunner(tm *TeamManager, fn func(ctx context.Context, entry BotEntry, 
 	tm.botRunner = fn
 }
 
+// ResolvedPluginStore returns tm.resolvedPluginStore for use in race tests.
+// This allows goroutines in tests to read the field and make data races visible
+// to the race detector when the field is accessed concurrently.
+func (tm *TeamManager) ResolvedPluginStore() domain.PluginStore {
+	return tm.resolvedPluginStore
+}
+
+// ResolvedInstallDir returns tm.resolvedInstallDir for use in race tests.
+func (tm *TeamManager) ResolvedInstallDir() string {
+	return tm.resolvedInstallDir
+}
+
 // BotEntryForTest re-exports BotEntry so package-level tests can construct values.
 type BotEntryForTest = BotEntry
 

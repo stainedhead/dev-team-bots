@@ -187,4 +187,3 @@ func buildInstruction(req domain.InvokeRequest) string {
 	}
 	return strings.TrimSpace(sb.String())
 }
-

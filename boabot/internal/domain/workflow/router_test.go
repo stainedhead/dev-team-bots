@@ -133,3 +133,29 @@ func TestDefaultRouter_MultipleWorkflows(t *testing.T) {
 		t.Fatalf("expected admin, got %s", role)
 	}
 }
+
+// TestDefaultRouter_Advance_InvalidNextStep verifies that Advance returns an error
+// when the current step's NextStep name does not match any step in the workflow.
+func TestDefaultRouter_Advance_InvalidNextStep(t *testing.T) {
+	wf := workflow.WorkflowDefinition{
+		Name: "wf-bad-next",
+		Steps: []workflow.WorkflowStep{
+			{Name: "step1", RequiredRole: "dev", NextStep: "does-not-exist"},
+		},
+	}
+	r := workflow.NewDefaultRouter([]workflow.WorkflowDefinition{wf})
+	_, err := r.Advance("wf-bad-next", "step1")
+	if err == nil {
+		t.Fatal("expected error for non-existent NextStep")
+	}
+}
+
+// TestDefaultRouter_StepForRole_UnknownWorkflow verifies that StepForRole returns
+// an error when the workflow name is not registered.
+func TestDefaultRouter_StepForRole_UnknownWorkflow(t *testing.T) {
+	r := workflow.NewDefaultRouter(nil)
+	_, err := r.StepForRole("no-such-workflow", "dev")
+	if err == nil {
+		t.Fatal("expected error for unknown workflow in StepForRole")
+	}
+}

@@ -483,3 +483,19 @@ func TestScheduler_Start_ConcurrentTasksDontBlock(t *testing.T) {
 	// With 150ms sleep we're well above, but let's just check all ran.
 	_ = elapsed
 }
+
+// TestScheduler_RealClock_Now verifies that NewScheduler (without WithClock) uses
+// the real system clock. Start calls runDue immediately; runDue calls clock.Now().
+func TestScheduler_RealClock_Now(t *testing.T) {
+	t.Parallel()
+	store := &mockTaskStore{
+		listFn: func(_ context.Context) ([]scheduler.ScheduledTask, error) {
+			return nil, nil // nothing to run
+		},
+	}
+	s := scheduler.NewScheduler(store, &mockTaskRunner{}, nil)
+	// Cancel immediately — Start runs one runDue then exits.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = s.Start(ctx)
+}

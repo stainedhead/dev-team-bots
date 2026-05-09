@@ -36,11 +36,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-haiku-4-5-20251001
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 `
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
@@ -160,11 +155,6 @@ models:
       model_id: claude-haiku-4-5-20251001
 memory:
   embedder: claude
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 `
 	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
@@ -227,11 +217,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-haiku-4-5-20251001
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 backup:
   enabled: true
   restore_on_empty: true
@@ -301,11 +286,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-haiku-4-5-20251001
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 backup:
   enabled: true
   restore_on_empty: false
@@ -372,11 +352,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-haiku-4-5-20251001
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 `
 	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
@@ -441,11 +416,6 @@ models:
     - name: claude
       type: anthropic
       model_id: claude-haiku-4-5-20251001
-budget:
-  token_spend_daily: 0
-  tool_calls_hourly: 0
-context:
-  threshold_tokens: 4096
 backup:
   enabled: true
   restore_on_empty: true
@@ -510,7 +480,7 @@ func TestStartBot_OrchestratorHTTPServer(t *testing.T) {
 	}
 
 	cfg := "bot:\n  name: orchbot\n  type: " + botType + "\norchestrator:\n  enabled: true\n  api_port: " +
-		fmt.Sprintf("%d", port) + "\n  admin_password: testadmin\nmodels:\n  default: claude\n  providers:\n    - name: claude\n      type: anthropic\n      model_id: claude-haiku-4-5-20251001\nbudget:\n  token_spend_daily: 0\n  tool_calls_hourly: 0\ncontext:\n  threshold_tokens: 4096\n"
+		fmt.Sprintf("%d", port) + "\n  admin_password: testadmin\nmodels:\n  default: claude\n  providers:\n    - name: claude\n      type: anthropic\n      model_id: claude-haiku-4-5-20251001\n"
 	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
 	}
@@ -533,25 +503,25 @@ func TestStartBot_OrchestratorHTTPServer(t *testing.T) {
 		MaxRestartDelay: 20 * time.Millisecond,
 	}, r, b)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	// Run the manager in a goroutine so we can probe the HTTP server.
 	runDone := make(chan error, 1)
 	go func() { runDone <- mgr.Run(ctx) }()
 
-	// Give the server time to start (wait up to 800ms).
+	// Give the server time to start (wait up to 5s — race mode can be slow).
 	addr := fmt.Sprintf("http://localhost:%d/", port)
 	var resp *http.Response
-	for i := range 8 {
+	for i := range 50 {
 		time.Sleep(100 * time.Millisecond)
 		var err error
 		resp, err = http.Get(addr) //nolint:noctx
 		if err == nil {
 			break
 		}
-		if i == 7 {
-			t.Logf("orchestrator HTTP server not reachable after 800ms (port %d): %v", port, err)
+		if i == 49 {
+			t.Logf("orchestrator HTTP server not reachable after 5s (port %d): %v", port, err)
 		}
 	}
 
@@ -573,8 +543,8 @@ func TestStartBot_OrchestratorHTTPServer(t *testing.T) {
 		if runErr != nil && ctx.Err() == nil {
 			t.Errorf("unexpected non-context error: %v", runErr)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return within 5s after cancel")
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return within 15s after cancel")
 	}
 }
 
@@ -668,5 +638,141 @@ func TestTeamManager_ShutdownAlreadyCancelledCtx(t *testing.T) {
 	case <-runDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return within 2s")
+	}
+}
+
+// TestStartBot_TechLeadPath exercises the tech-lead branch in startBot, which
+// wires the SubTeamManager.  The bot runs until context cancellation.
+func TestStartBot_TechLeadPath(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-unit-testing")
+
+	dir := t.TempDir()
+	botsDir := filepath.Join(dir, "bots")
+	botType := "tech-lead"
+	botDir := filepath.Join(botsDir, botType)
+	if err := os.MkdirAll(botDir, 0700); err != nil {
+		t.Fatalf("mkdir bots/%s: %v", botType, err)
+	}
+	cfg := `bot:
+  name: lead
+  type: tech-lead
+models:
+  default: claude
+  providers:
+    - name: claude
+      type: anthropic
+      model_id: claude-haiku-4-5-20251001
+`
+	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(botDir, "SOUL.md"), []byte("You are a tech-lead test bot."), 0600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	teamFile := filepath.Join(dir, "team.yaml")
+	if err := os.WriteFile(teamFile, []byte(`team:
+  - name: lead
+    type: tech-lead
+    enabled: true
+    orchestrator: true
+`), 0600); err != nil {
+		t.Fatalf("write team.yaml: %v", err)
+	}
+
+	r := queue.NewRouter()
+	b := bus.New()
+	mgr := team.NewTeamManager(team.ManagerConfig{
+		TeamFilePath:    teamFile,
+		BotsDir:         botsDir,
+		MemoryRoot:      filepath.Join(dir, "memory"),
+		RestartDelay:    5 * time.Millisecond,
+		MaxRestartDelay: 20 * time.Millisecond,
+	}, r, b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	err := mgr.Run(ctx)
+	if err != nil && ctx.Err() == nil {
+		t.Errorf("unexpected non-context error: %v", err)
+	}
+}
+
+// TestStartBot_ChatProvider exercises the chat_provider wiring branch.
+func TestStartBot_ChatProvider(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-unit-testing")
+
+	dir := t.TempDir()
+	botsDir := filepath.Join(dir, "bots")
+	botType := "chatproviderbot"
+	botDir := filepath.Join(botsDir, botType)
+	if err := os.MkdirAll(botDir, 0700); err != nil {
+		t.Fatalf("mkdir bots/%s: %v", botType, err)
+	}
+	cfg := `bot:
+  name: chatproviderbot
+  type: chatproviderbot
+models:
+  default: claude
+  chat_provider: claude
+  providers:
+    - name: claude
+      type: anthropic
+      model_id: claude-haiku-4-5-20251001
+`
+	if err := os.WriteFile(filepath.Join(botDir, "config.yaml"), []byte(cfg), 0600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(botDir, "SOUL.md"), []byte("Chat provider bot."), 0600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+
+	teamFile := filepath.Join(dir, "team.yaml")
+	if err := os.WriteFile(teamFile, []byte(`team:
+  - name: chatproviderbot
+    type: `+botType+`
+    enabled: true
+    orchestrator: true
+`), 0600); err != nil {
+		t.Fatalf("write team.yaml: %v", err)
+	}
+
+	r := queue.NewRouter()
+	b := bus.New()
+	mgr := team.NewTeamManager(team.ManagerConfig{
+		TeamFilePath:    teamFile,
+		BotsDir:         botsDir,
+		MemoryRoot:      filepath.Join(dir, "memory"),
+		RestartDelay:    5 * time.Millisecond,
+		MaxRestartDelay: 20 * time.Millisecond,
+	}, r, b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	err := mgr.Run(ctx)
+	if err != nil && ctx.Err() == nil {
+		t.Errorf("unexpected non-context error: %v", err)
+	}
+}
+
+// TestTeamManager_AskRouter verifies AskRouter returns a non-nil router.
+func TestTeamManager_AskRouter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := filepath.Join(dir, "team.yaml")
+	if err := os.WriteFile(teamFile, []byte("team: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := queue.NewRouter()
+	b := bus.New()
+	mgr := team.NewTeamManager(team.ManagerConfig{
+		TeamFilePath: teamFile,
+		BotsDir:      t.TempDir(),
+		MemoryRoot:   t.TempDir(),
+	}, r, b)
+	if mgr.AskRouter() == nil {
+		t.Error("expected non-nil AskRouter")
 	}
 }

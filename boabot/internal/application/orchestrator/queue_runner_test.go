@@ -550,3 +550,164 @@ func TestQueueRunner_RunAfter_PredecessorNotFound(t *testing.T) {
 		t.Error("should not dispatch when predecessor not found")
 	}
 }
+
+// ── errOnListBoard returns an error from List ─────────────────────────────────
+
+type errOnListBoard struct{ inMemBoard }
+
+func (b *errOnListBoard) List(_ context.Context, _ domain.WorkItemFilter) ([]domain.WorkItem, error) {
+	return nil, errors.New("list fail")
+}
+
+// ── new coverage tests ────────────────────────────────────────────────────────
+
+// TestQueueRunner_Start_DefaultInterval verifies that Interval=0 is replaced with
+// the 5-second default (so the ticker is created without panic).
+func TestQueueRunner_Start_DefaultInterval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled — Start exits on ctx.Done without ticking
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:      &inMemBoard{},
+		Tasks:      &fakeTaskStore{},
+		Dispatcher: &fakeBoardItemDispatcher{},
+		Interval:   0, // triggers default branch
+	})
+	runner.Start(ctx) // must not panic
+}
+
+// TestQueueRunner_Tick_BoardListError verifies that tick (and reconcile) return
+// early without panic when Board.List returns an error.
+func TestQueueRunner_Tick_BoardListError(t *testing.T) {
+	board := &errOnListBoard{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    &fakeBoardItemDispatcher{},
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+}
+
+// TestQueueRunner_Sort_Mixed_ASAP_RunAt verifies that the priority sort correctly
+// places ASAP items before run_at items, exercising both sort branches.
+func TestQueueRunner_Sort_Mixed_ASAP_RunAt(t *testing.T) {
+	past1 := time.Now().Add(-3 * time.Hour)
+	past2 := time.Now().Add(-2 * time.Hour)
+	past3 := time.Now().Add(-1 * time.Hour)
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "run1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_at", QueueRunAt: &past1, QueuedAt: &past1},
+		{ID: "asap1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "asap", QueuedAt: &past2},
+		{ID: "run2", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "run_at", QueueRunAt: &past3, QueuedAt: &past3},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	go runner.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	if disp.dispatchedCount() == 0 {
+		t.Error("expected items to be dispatched")
+	}
+}
+
+// TestQueueRunner_Reconcile_TaskGetError verifies that reconcile skips items
+// whose ActiveTaskID cannot be resolved.
+func TestQueueRunner_Reconcile_TaskGetError(t *testing.T) {
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "item1", Status: domain.WorkItemStatusInProgress, ActiveTaskID: "t-bad"},
+	}}
+	tasks := &fakeTaskStore{getFn: func(_ context.Context, _ string) (domain.DirectTask, error) {
+		return domain.DirectTask{}, errors.New("not found")
+	}}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         tasks,
+		Dispatcher:    &fakeBoardItemDispatcher{},
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx) // must not panic
+}
+
+// TestQueueRunner_Reconcile_FailedTask_UpdateError verifies that when an item is
+// in DirectTaskStatusFailed and Board.Update errors, the runner logs and continues.
+func TestQueueRunner_Reconcile_FailedTask_UpdateError(t *testing.T) {
+	board := &errOnUpdateBoard{}
+	board.items = []domain.WorkItem{
+		{ID: "item1", Status: domain.WorkItemStatusInProgress, ActiveTaskID: "t1"},
+	}
+	tasks := &fakeTaskStore{getFn: func(_ context.Context, id string) (domain.DirectTask, error) {
+		return domain.DirectTask{ID: id, Status: domain.DirectTaskStatusFailed, Output: "err output"}, nil
+	}}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         tasks,
+		Dispatcher:    &fakeBoardItemDispatcher{},
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx) // must not panic despite Update error
+}
+
+// TestQueueRunner_IsReady_UnknownQueueMode verifies that isReady returns false
+// for an unrecognised QueueMode value.
+func TestQueueRunner_IsReady_UnknownQueueMode(t *testing.T) {
+	board := &inMemBoard{items: []domain.WorkItem{
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot",
+			QueueMode: "unsupported-mode"},
+	}}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+	if disp.dispatchedCount() != 0 {
+		t.Error("should not dispatch item with unknown queue mode")
+	}
+}
+
+// TestQueueRunner_Launch_UpdateError verifies that launch returns false and logs
+// a warning when Board.Update returns an error.
+func TestQueueRunner_Launch_UpdateError(t *testing.T) {
+	board := &errOnUpdateBoard{}
+	board.items = []domain.WorkItem{
+		{ID: "q1", Status: domain.WorkItemStatusQueued, AssignedTo: "bot", QueueMode: "asap"},
+	}
+	disp := &fakeBoardItemDispatcher{}
+	runner := orchestrator.NewQueueRunner(orchestrator.QueueRunnerConfig{
+		Board:         board,
+		Tasks:         &fakeTaskStore{},
+		Dispatcher:    disp,
+		MaxConcurrent: 3,
+		Interval:      10 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	runner.Start(ctx)
+	if disp.dispatchedCount() != 0 {
+		t.Error("should not dispatch when Board.Update fails in launch")
+	}
+}

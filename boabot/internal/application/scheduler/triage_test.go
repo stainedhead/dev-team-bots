@@ -193,3 +193,20 @@ func TestTriageUseCase_QuestionLabel_NotifyError(t *testing.T) {
 		t.Fatal("expected error from notifier")
 	}
 }
+
+// TestTriageUseCase_FeatureLabel_CreateError verifies that handleDevQueue
+// propagates a store error when creating a feature work item.
+func TestTriageUseCase_FeatureLabel_CreateError(t *testing.T) {
+	createErr := errors.New("db error")
+	store := &wfmocks.WorkItemStore{
+		CreateFn: func(_ context.Context, _ wf.WorkItem) error { return createErr },
+	}
+	uc := makeTriageUC(store, &notifmocks.NotificationSender{})
+	_, err := uc.Execute(context.Background(), scheduler.TriageInput{
+		Title:  "New Feature",
+		Labels: []string{"feature"},
+	})
+	if err == nil {
+		t.Fatal("expected error when createUC fails for feature label")
+	}
+}

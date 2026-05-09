@@ -441,3 +441,104 @@ func TestPool_SoftPoolLimit_LogsWarning(t *testing.T) {
 		_ = p.Deallocate(ctx, "item-"+string(rune('0'+i)))
 	}
 }
+
+// TestPool_ApplyDefaults_ZeroSpawnTimeout verifies that a zero SpawnTimeout is
+// replaced with the default (1s) during Pool construction.
+func TestPool_ApplyDefaults_ZeroSpawnTimeout(t *testing.T) {
+	t.Parallel()
+	p := pool.New(pool.Config{SpawnTimeout: 0, SoftPoolLimit: 5}, nil)
+	p.SetSpawnFn(noopSpawn)
+	entry, err := p.Allocate(context.Background(), "item-1")
+	if err != nil {
+		t.Fatalf("Allocate with zero SpawnTimeout: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("expected non-nil entry")
+	}
+}
+
+// TestPool_DefaultSpawnFn_ReturnsError verifies that Allocate fails with an
+// informative error when no spawnFn has been injected.
+func TestPool_DefaultSpawnFn_ReturnsError(t *testing.T) {
+	t.Parallel()
+	p := pool.New(pool.Config{SpawnTimeout: time.Second, SoftPoolLimit: 5}, nil)
+	// No SetSpawnFn — uses the default stub that always returns an error.
+	_, err := p.Allocate(context.Background(), "item-1")
+	if err == nil {
+		t.Fatal("expected error from default spawnFn")
+	}
+}
+
+// TestPool_DefaultStopFn_NoError verifies that Deallocate succeeds for a
+// non-last entry when no stopFn has been injected (default is a noop).
+func TestPool_DefaultStopFn_NoError(t *testing.T) {
+	t.Parallel()
+	p := pool.New(pool.Config{SpawnTimeout: time.Second, SoftPoolLimit: 5}, nil)
+	p.SetSpawnFn(noopSpawn)
+	// Deliberately do NOT call SetStopFn — exercises the default stopFn body.
+	ctx := context.Background()
+	if _, err := p.Allocate(ctx, "item-a"); err != nil {
+		t.Fatalf("Allocate a: %v", err)
+	}
+	if _, err := p.Allocate(ctx, "item-b"); err != nil {
+		t.Fatalf("Allocate b: %v", err)
+	}
+	// Deallocate item-a (not the last) — calls default stopFn (returns nil).
+	if err := p.Deallocate(ctx, "item-a"); err != nil {
+		t.Fatalf("Deallocate: %v", err)
+	}
+}
+
+// TestPool_DefaultIsRunFn_RemovesStaleEntries verifies that Reconcile discards
+// pool records when no isRunningFn has been injected (default returns false).
+func TestPool_DefaultIsRunFn_RemovesStaleEntries(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := infrastructure.NewPoolStateFile(filepath.Join(dir, "pool.json"))
+	_ = file.Save([]infrastructure.PoolStateRecord{
+		{InstanceName: "tech-lead-1", Status: "allocated"},
+	})
+	p := pool.New(pool.Config{SpawnTimeout: time.Second, SoftPoolLimit: 5}, file)
+	p.SetSpawnFn(noopSpawn)
+	// Do NOT call SetIsRunningFn — default returns false, marking the record stale.
+	if err := p.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	entries, _ := p.ListEntries(context.Background())
+	if len(entries) != 0 {
+		t.Errorf("expected stale entries removed by default isRunFn, got %d", len(entries))
+	}
+}
+
+// TestPool_SaveUnlocked_NilFile verifies that saveUnlocked is a no-op (no panic)
+// when Pool is created with a nil PoolStateFile.
+func TestPool_SaveUnlocked_NilFile(t *testing.T) {
+	t.Parallel()
+	p := pool.New(pool.Config{SpawnTimeout: time.Second, SoftPoolLimit: 5}, nil)
+	p.SetSpawnFn(noopSpawn)
+	if _, err := p.Allocate(context.Background(), "item-1"); err != nil {
+		t.Fatalf("Allocate with nil file: %v", err)
+	}
+}
+
+// TestPool_Deallocate_StopFnError verifies that Deallocate returns nil even
+// when the injected stopFn returns an error (the error is only logged).
+func TestPool_Deallocate_StopFnError(t *testing.T) {
+	t.Parallel()
+	p := pool.New(pool.Config{SpawnTimeout: time.Second, SoftPoolLimit: 5}, nil)
+	p.SetSpawnFn(noopSpawn)
+	p.SetStopFn(func(_ context.Context, _ string) error {
+		return errors.New("stop failed")
+	})
+	ctx := context.Background()
+	if _, err := p.Allocate(ctx, "item-a"); err != nil {
+		t.Fatalf("Allocate a: %v", err)
+	}
+	if _, err := p.Allocate(ctx, "item-b"); err != nil {
+		t.Fatalf("Allocate b: %v", err)
+	}
+	// Deallocate item-a (not the last) — stopFn errors but Deallocate should still return nil.
+	if err := p.Deallocate(ctx, "item-a"); err != nil {
+		t.Fatalf("Deallocate should succeed despite stopFn error: %v", err)
+	}
+}

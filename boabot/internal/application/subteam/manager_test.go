@@ -546,3 +546,24 @@ func TestManager_WithSessionFile_ClearsStaleRecords(t *testing.T) {
 		t.Errorf("expected 0 records after WithSessionFile (stale cleared), got %d", len(records))
 	}
 }
+
+// TestManager_Spawn_SoftSpawnLimit verifies that a warning is logged (no error)
+// when the number of spawned agents exceeds SoftSpawnLimit.
+func TestManager_Spawn_SoftSpawnLimit(t *testing.T) {
+	t.Parallel()
+	botsDir := makeBotsDir(t, "tech-lead")
+	m := subteam.New(subteam.Config{
+		BotsDir:        botsDir,
+		MemoryRoot:     t.TempDir(),
+		SoftSpawnLimit: 1, // triggers warning on second spawn
+	})
+	ctx := context.Background()
+	if _, err := m.Spawn(ctx, "tech-lead", "lead-1", ""); err != nil {
+		t.Fatalf("Spawn lead-1: %v", err)
+	}
+	// Second spawn: len(bots)+1 == 2 > 1 → logs warning but must not error.
+	if _, err := m.Spawn(ctx, "tech-lead", "lead-2", ""); err != nil {
+		t.Fatalf("Spawn lead-2 (should succeed despite soft limit): %v", err)
+	}
+	_ = m.TearDownAll(ctx)
+}

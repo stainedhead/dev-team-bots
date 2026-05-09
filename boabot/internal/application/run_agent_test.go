@@ -1275,3 +1275,95 @@ func TestRunAgent_SubTeamTerminate_NoManager_Graceful(t *testing.T) {
 		t.Fatal("timed out")
 	}
 }
+
+// TestRunAgent_Poll_TaskMessage_WithResultHandler verifies that when a task
+// completes and a result handler is set, the handler is called inline.
+func TestRunAgent_Poll_TaskMessage_WithResultHandler(t *testing.T) {
+	taskPayload, _ := json.Marshal(domain.TaskPayload{
+		TaskID:      "task-rh",
+		Instruction: "do something",
+	})
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{{
+		Message: domain.Message{
+			Type:    domain.MessageTypeTask,
+			From:    "orchestrator",
+			Payload: taskPayload,
+		},
+		ReceiptHandle: "rh-receipt",
+	}}
+	worker := &mocks.Worker{
+		ExecuteFn: func(_ context.Context, task domain.Task) (domain.TaskResult, error) {
+			return domain.TaskResult{TaskID: task.ID, Success: true, Output: "result text"}, nil
+		},
+	}
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, _ string) error { return nil },
+	}
+	handlerCalled := make(chan domain.TaskResultPayload, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: worker}, nil)
+	uc.WithTaskResultHandler(func(_ context.Context, p domain.TaskResultPayload) {
+		handlerCalled <- p
+	})
+	go func() { _ = uc.Run(ctx) }()
+	select {
+	case p := <-handlerCalled:
+		if p.TaskID != "task-rh" {
+			t.Errorf("expected task-rh, got %q", p.TaskID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for result handler")
+	}
+}
+
+// TestRunAgent_TaskResult_MalformedPayload verifies that handleTaskResult
+// handles a malformed JSON payload gracefully (logs and returns).
+func TestRunAgent_TaskResult_MalformedPayload(t *testing.T) {
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{{
+		Message: domain.Message{
+			Type:    domain.MessageTypeTaskResult,
+			From:    "dev-1",
+			Payload: []byte(`{invalid json`),
+		},
+		ReceiptHandle: "receipt-bad",
+	}}
+	deleted := make(chan string, 1)
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, rh string) error {
+			deleted <- rh
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: &mocks.Worker{}}, nil)
+	uc.WithTaskResultHandler(func(_ context.Context, _ domain.TaskResultPayload) {})
+	go func() { _ = uc.Run(ctx) }()
+	select {
+	case <-deleted:
+		// OK — message was processed (and deleted) despite bad payload.
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}

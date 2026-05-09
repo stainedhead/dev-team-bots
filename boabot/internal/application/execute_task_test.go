@@ -745,3 +745,360 @@ func TestExecuteTask_MemoryReadError_SkipsMemory(t *testing.T) {
 		t.Fatal("expected Success=true when memory read fails silently")
 	}
 }
+
+// TestExecuteTask_WithChatProvider_UsedForChatSource verifies that a dedicated
+// chat provider is used when task.Source == "chat".
+func TestExecuteTask_WithChatProvider_UsedForChatSource(t *testing.T) {
+	chatCalled := false
+	chatProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			chatCalled = true
+			return domain.InvokeResponse{Content: "chat response", StopReason: "stop"}, nil
+		},
+	}
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(defaultProvider, &mocks.MCPClient{}, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithChatProvider(chatProvider)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-chat-1", Source: "chat", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !chatCalled {
+		t.Error("expected chat provider to be called for chat-source task")
+	}
+}
+
+// TestExecuteTask_ProgressHandler_CallErr_InProgress verifies that formatProgressLine
+// includes the error string when CallTool returns a hard error (callErr != nil).
+func TestExecuteTask_ProgressHandler_CallErr_InProgress(t *testing.T) {
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c1", Name: "broken_tool", Args: map[string]any{}}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "broken_tool"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{}, errors.New("connection refused")
+		},
+	}
+
+	var progressLines []string
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithProgressHandler(func(_ string, line string) {
+		progressLines = append(progressLines, line)
+	})
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-callerr", Instruction: "do it"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(progressLines) == 0 {
+		t.Fatal("expected a progress line, got none")
+	}
+	if !strings.Contains(progressLines[0], "connection refused") {
+		t.Errorf("expected callErr text in progress line, got %q", progressLines[0])
+	}
+}
+
+// TestExecuteTask_ProgressHandler_NoArgTool verifies that formatProgressLine
+// emits the no-arg format when the tool has no "path" or "command" argument.
+func TestExecuteTask_ProgressHandler_NoArgTool(t *testing.T) {
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c1", Name: "get_time", Args: map[string]any{"format": "unix"}}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "get_time"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "1234567890"}}}, nil
+		},
+	}
+
+	var progressLines []string
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithProgressHandler(func(_ string, line string) {
+		progressLines = append(progressLines, line)
+	})
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-noarg", Instruction: "get time"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(progressLines) == 0 {
+		t.Fatal("expected progress line, got none")
+	}
+	if !strings.Contains(progressLines[0], "get_time") {
+		t.Errorf("expected tool name in no-arg progress line, got %q", progressLines[0])
+	}
+}
+
+// TestExecuteTask_RulesTracker_RunShell verifies that dirForToolCall extracts the
+// working_dir from a run_shell tool call and passes it to UpdateForDir.
+func TestExecuteTask_RulesTracker_RunShell(t *testing.T) {
+	var trackerDirs []string
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls: []domain.ToolCall{{
+						ID:   "c1",
+						Name: "run_shell",
+						Args: map[string]any{"working_dir": "/tmp/proj", "command": "ls"},
+					}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "run_shell"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "file.txt"}}}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{
+		UpdateForDirFn: func(_ context.Context, dir string) domain.RulesUpdate {
+			trackerDirs = append(trackerDirs, dir)
+			return domain.RulesUpdate{}
+		},
+	}
+
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-runshell", Instruction: "run ls"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(trackerDirs) == 0 {
+		t.Error("expected RulesTracker.UpdateForDir called for run_shell working_dir")
+	}
+	if len(trackerDirs) > 0 && trackerDirs[0] != "/tmp/proj" {
+		t.Errorf("expected dir /tmp/proj, got %q", trackerDirs[0])
+	}
+}
+
+// TestExecuteTask_RulesTracker_RemoveRules verifies that formatRulesMessage emits
+// [RULES ENDED] lines when a RulesUpdate contains Remove entries.
+func TestExecuteTask_RulesTracker_RemoveRules(t *testing.T) {
+	var secondCallMessages []domain.ProviderMessage
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls: []domain.ToolCall{{
+						ID:   "c1",
+						Name: "read_file",
+						Args: map[string]any{"path": "/tmp/leaving/file.txt"},
+					}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			secondCallMessages = req.Messages
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "read_file"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "content"}}}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{
+		UpdateForDirFn: func(_ context.Context, _ string) domain.RulesUpdate {
+			return domain.RulesUpdate{
+				Remove: []domain.RulesEntry{{Dir: "/tmp/leaving", File: "AGENTS.md"}},
+			}
+		},
+	}
+
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-removedrules", Instruction: "read file"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rulesEndedMsg := false
+	for _, msg := range secondCallMessages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "RULES ENDED") {
+			rulesEndedMsg = true
+			break
+		}
+	}
+	if !rulesEndedMsg {
+		t.Errorf("expected [RULES ENDED] message in second call; messages: %+v", secondCallMessages)
+	}
+}
+
+// TestExecuteTask_RulesTracker_UnknownTool verifies that dirForToolCall returns
+// "" for an unknown tool name, so UpdateForDir is not called.
+func TestExecuteTask_RulesTracker_UnknownTool(t *testing.T) {
+	updateCalled := false
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c1", Name: "unknown_tool", Args: map[string]any{}}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "unknown_tool"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "ok"}}}, nil
+		},
+	}
+	rt := &mocks.RulesTracker{
+		UpdateForDirFn: func(_ context.Context, _ string) domain.RulesUpdate {
+			updateCalled = true
+			return domain.RulesUpdate{}
+		},
+	}
+
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithRulesTracker(rt)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-unknown", Instruction: "run unknown"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updateCalled {
+		t.Error("expected RulesTracker.UpdateForDir NOT to be called for unknown tool")
+	}
+}
+
+// TestExecuteTask_DrainAsks_ClosedChannel verifies that drainAsks exits cleanly
+// when the ask channel is closed (channel not-ok case).
+func TestExecuteTask_DrainAsks_ClosedChannel(t *testing.T) {
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(provider, &mocks.MCPClient{}, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	// Set up a closed ask channel.
+	askCh := make(chan domain.AskRequest)
+	close(askCh)
+	uc.WithAskChannel(askCh)
+
+	// Execute should complete without hanging or panicking.
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-closed-ask", Instruction: "do it"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// dirAllowingMCPClient wraps MCPClient and adds an AllowDir method so the
+// dirAllower interface check in Execute is satisfied.
+type dirAllowingMCPClient struct {
+	*mocks.MCPClient
+	allowDirCalled bool
+}
+
+func (m *dirAllowingMCPClient) AllowDir(_ string) func() {
+	m.allowDirCalled = true
+	return func() {}
+}
+
+// TestExecuteTask_DirAllower_WorkDir verifies that AllowDir is called when the
+// task has a non-empty WorkDir and the MCP client implements dirAllower.
+func TestExecuteTask_DirAllower_WorkDir(t *testing.T) {
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcpClient := &dirAllowingMCPClient{MCPClient: &mocks.MCPClient{}}
+	uc := newExecuteTaskUseCase(provider, mcpClient, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-workdir", Instruction: "run", WorkDir: "/tmp/work"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !mcpClient.allowDirCalled {
+		t.Error("expected AllowDir to be called when task.WorkDir is set")
+	}
+}
+
+// TestExecuteTask_DrainAsks_ClosedChannel_WithToolCall verifies that drainAsks
+// exits cleanly via the !ok path when the ask channel is closed and drainAsks
+// is reached (requires at least one tool call to enter the tool-call loop).
+func TestExecuteTask_DrainAsks_ClosedChannel_WithToolCall(t *testing.T) {
+	n := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			n++
+			if n == 1 {
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c1", Name: "list_dir", Args: map[string]any{}}},
+					StopReason: "tool_calls",
+				}, nil
+			}
+			return domain.InvokeResponse{Content: "done"}, nil
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "list_dir"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "ok"}}}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	// Closed channel: drainAsks select reads zero value with ok=false → !ok branch.
+	askCh := make(chan domain.AskRequest)
+	close(askCh)
+	uc.WithAskChannel(askCh)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-drain-closed", Instruction: "list"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

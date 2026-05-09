@@ -268,3 +268,28 @@ func TestAdvanceWorkflowUseCase_SetsStartedAt_OnFirstAdvance(t *testing.T) {
 		t.Fatal("expected StartedAt to be set on first advance")
 	}
 }
+
+// TestAdvanceWorkflowUseCase_TerminalStep_UpdateError verifies that Execute
+// returns an error when the store fails while persisting the terminal-step transition.
+func TestAdvanceWorkflowUseCase_TerminalStep_UpdateError(t *testing.T) {
+	item := makeItem("item-8", "done")
+	updateErr := errors.New("db write error")
+
+	store := &wfmocks.WorkItemStore{
+		GetFn:    func(_ context.Context, _ string) (wf.WorkItem, error) { return item, nil },
+		UpdateFn: func(_ context.Context, _ wf.WorkItem) error { return updateErr },
+	}
+	router := &wfmocks.WorkflowAdvancer{
+		AdvanceFn: func(_, _ string) (domainwf.WorkflowStep, error) {
+			return domainwf.WorkflowStep{}, domainwf.ErrNoNextStep
+		},
+	}
+	notifier := &notifmocks.NotificationSender{}
+	m := &metricsmocks.MetricsStore{}
+
+	uc := wf.NewAdvanceWorkflowUseCase(store, router, notifier, m)
+	_, err := uc.Execute(context.Background(), "item-8")
+	if err == nil {
+		t.Fatal("expected error when store.Update fails on terminal step")
+	}
+}

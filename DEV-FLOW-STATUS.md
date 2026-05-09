@@ -27,5 +27,5 @@
 | 12 | Archive Fixes Spec              | ✅ Complete | 2026-05-09T19:11:00Z | 2026-05-09T19:12:00Z | 1 |
 | 13 | Final Quality Pass              | ✅ Complete | 2026-05-09T19:12:00Z | 2026-05-09T19:22:00Z | 10 |
 | 14 | Process Analysis Report         | ✅ Complete | 2026-05-09T19:22:00Z | 2026-05-09T19:32:00Z | 10 |
-| 15 | Archive Spec                    | ⬜ Pending | — | — | — |
-| 16 | Open Pull Request               | ⬜ Pending | — | — | — |
+| 15 | Archive Spec                    | ✅ Complete | 2026-05-09T19:32:00Z | 2026-05-09T19:32:00Z | 0 |
+| 16 | Open Pull Request               | 🔄 In Progress | 2026-05-09T19:32:00Z | — | — |

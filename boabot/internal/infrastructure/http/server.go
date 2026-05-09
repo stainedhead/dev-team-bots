@@ -2064,6 +2064,7 @@ const kanbanHTML = `<!DOCTYPE html>
     .col-body{flex:1;overflow-y:auto;padding:.375rem;min-height:60px}
     .card{background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;padding:.715rem .65rem;margin-bottom:.3rem;cursor:grab;user-select:none;transition:border-color .15s,opacity .15s}
     .card:hover{border-color:#2d3e5a}
+    .card.card-sel{border-color:#3b82f6;background:#0a1628;box-shadow:inset 3px 0 0 #3b82f6}
     .card.dragging{opacity:.35;cursor:grabbing}
     .card.drag-above{border-top:2px solid #3b82f6;border-top-left-radius:0;border-top-right-radius:0}
     .card.drag-below{border-bottom:2px solid #3b82f6;border-bottom-left-radius:0;border-bottom-right-radius:0}
@@ -2691,6 +2692,7 @@ const kanbanHTML = `<!DOCTYPE html>
     var bAt=boardCtxActivity&&boardCtxActivity.task;
     var ftrHtml=bAt?runTimeFooter(bAt.dispatched_at,bAt.completed_at):'';
     if(ftrHtml){var ftrEl=document.createElement('div');ftrEl.innerHTML=ftrHtml;if(ftrEl.firstElementChild)body.appendChild(ftrEl.firstElementChild);}
+    body.scrollTop=body.scrollHeight;
   }
   var taskCtxTask=null, taskCtxActiveTab='detail', taskOutputPollTimer=null, elapsedTimer=null;
   var dragging=false;
@@ -2894,9 +2896,17 @@ const kanbanHTML = `<!DOCTYPE html>
     return '';
   }
 
+  function markSelectedCard(){
+    document.querySelectorAll('.card.card-sel').forEach(function(el){el.classList.remove('card-sel');});
+    if(boardCtxItem){
+      document.querySelectorAll('.card[data-item-id="'+boardCtxItem.id+'"]').forEach(function(el){el.classList.add('card-sel');});
+    }
+  }
+
   function makeCard(it){
     var d=document.createElement('div');
     d.className='card';
+    d.setAttribute('data-item-id',it.id);
     d.draggable=!!token;
     d.style.cursor=token?'grab':'default';
     d.innerHTML=
@@ -2992,6 +3002,7 @@ const kanbanHTML = `<!DOCTYPE html>
       }
       list.forEach(function(it){body.appendChild(makeCard(it));});
     });
+    markSelectedCard();
   }
 
   function loadBoard(){
@@ -4403,6 +4414,7 @@ const kanbanHTML = `<!DOCTYPE html>
     panel.style.height=bctxH+'px';
     ge('board-ctx-title').textContent=item.title;
     updateBoardCtxMeta(item);
+    markSelectedCard();
     bctxTab(boardCtxTab);
     loadBoardCtx();
     if(cardEl){
@@ -4473,6 +4485,7 @@ const kanbanHTML = `<!DOCTYPE html>
     panel.style.display='none';
     boardCtxItem=null;
     boardCtxActivity=null;
+    markSelectedCard();
   }
 
   function bctxTab(name){

@@ -1391,15 +1391,13 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.cfg.Chat.Append(ctx, userMsg)
 
-	// If the bot is actively executing a task, route as a mid-task question so
-	// it is answered between tool iterations without interrupting the execution.
-	// If the bot is idle (Enqueue returns false because no active Execute loop is
-	// draining the channel), fall back to dispatching a chat task so the question
-	// is always answered.
+	// AskRouter delivers questions between tool-call iterations of an active
+	// Execute loop. It only makes sense when the item is in-progress; for any
+	// other status the bot's Execute loop is not running and the channel is
+	// never drained.
 	instruction := fmt.Sprintf("Regarding board item '%s': %s", item.Title, req.Content)
-	midTaskRouted := false
-	if s.cfg.AskRouter != nil {
-		midTaskRouted = s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
+	if item.Status == domain.WorkItemStatusInProgress && s.cfg.AskRouter != nil {
+		s.cfg.AskRouter.Enqueue(item.AssignedTo, domain.AskRequest{
 			Question: instruction,
 			ReplyFn: func(reply string) {
 				botMsg := domain.ChatMessage{
@@ -1411,10 +1409,10 @@ func (s *Server) handleBoardAsk(w http.ResponseWriter, r *http.Request) {
 				_ = s.cfg.Chat.Append(context.Background(), botMsg)
 			},
 		})
-	}
-	if !midTaskRouted && s.cfg.Dispatcher != nil {
-		// Bot is idle — dispatch a chat task. The TaskResultHandler in TeamManager
-		// will write the output as an inbound message on this thread.
+	} else if s.cfg.Dispatcher != nil {
+		// Bot is idle (or item not in-progress) — dispatch a chat task.
+		// The TaskResultHandler in TeamManager writes the output as an inbound
+		// message on this thread once the task completes.
 		_, _ = s.cfg.Dispatcher.Dispatch(ctx, item.AssignedTo, instruction, nil,
 			domain.DirectTaskSourceChat, threadID, item.WorkDir)
 	}

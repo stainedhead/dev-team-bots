@@ -30,3 +30,11 @@ Admins can install versioned capability packages (plugins) from one or more HTTP
 ## Dynamic Subteam Spawning (Tech-Lead Bots)
 
 Tech-lead bots can spawn and manage named sub-agent goroutines at runtime. Each spawned sub-agent runs in complete isolation with its own message bus and queue router. Spawning and termination are triggered via typed messages on the existing queue. A heartbeat watchdog on each spawned agent ensures stale goroutines are self-terminated automatically. Sub-agent state is persisted to a session file so the tech-lead survives process restarts without losing context.
+
+## Plugin Skill Access
+
+Any bot can call `read_skill(<name>)` to load the full Markdown instruction file for an installed Claude Code plugin skill. The bot receives the instructions and carries out the described steps autonomously using its own built-in tools — no external executor is involved. This allows the boabot ecosystem to consume Claude Code plugins (such as the `dev-flow` skill suite) without any changes to the plugin format.
+
+## CLI Agent Delegation Tools
+
+When the corresponding binary is installed and enabled in config, bots gain access to one or more of four CLI delegation tools: `run_claude_code`, `run_codex`, `run_openai_codex`, and `run_opencode`. Each tool spawns the named CLI agent as a managed subprocess, forwards a task instruction, streams progress lines to the operator UI in real time, and returns the complete output when the subprocess exits. Tools are gated by both a config `enabled` flag and binary availability at call time — teams that do not have a CLI installed simply do not see its tool.

@@ -65,6 +65,7 @@ internal/
                         # VerifyPassword validates credentials without issuing a token
     db/                 # PostgreSQL repository: work items, workflow, metrics, users
                         # UserRepo: CRUD against `users` table; Enabled inverts the `disabled` column
+    cliagent/           # SubprocessRunner: domain.CLIAgentRunner; SIGTERM→SIGKILL (5s), stdin channel, progress callback
     mcp/                # MCP client adapter
     otel/               # OpenTelemetry provider: OTLP/HTTP trace + metric exporters; noop fallback
     screening/          # RegexScreener: injection-pattern detection + [REDACTED] sanitisation
@@ -313,6 +314,47 @@ The MCP client (`internal/infrastructure/local/mcp/client.go`) holds optional re
 
 On each `CallTool` call, if `pluginStore` is set, `callPluginTool` scans active plugins for the named tool before falling through to builtins. The plugin entrypoint is executed with `exec.CommandContext` with a 30-second timeout; arguments are passed as a JSON object on stdin; the result is read from stdout as a `domain.MCPToolResult` JSON object. Non-zero exit or decode failure returns an `MCPToolResult` with `IsError: true`.
 
+If the plugin's entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), `callPluginTool` delegates to `readSkill` instead of attempting exec. This enables Claude Code plugins (whose entrypoints are JSON manifests rather than executables) to surface their Markdown skill instructions to bots.
+
+### `read_skill` Built-in Tool
+
+`read_skill(name string) → string` is a built-in MCP tool added when a `pluginStore` is configured. It scans active plugins for a tool matching the requested name, then reads `<installDir>/<pluginName>/commands/<name>.md` and returns the full Markdown content. Bots use this to load skill instructions before executing multi-step skill workflows using their own built-in tools (no external executor required).
+
+### Plugin Store Race Fix
+
+`TeamManager.Run()` pre-resolves the plugin store before launching any bot goroutines by scanning the team entries for the orchestrator, loading its config, and calling `localplugin.NewLocalPluginStore(installDir)`. The result is captured in `resolvedPluginStore` and `resolvedInstallDir` struct fields, which are read-only after Run starts goroutines. This eliminates the previous race where `startBot` goroutines could write `tm.pluginStore` concurrently while other goroutines read it.
+
+### CLIAgentRunner
+
+`domain.CLIAgentRunner` (in `internal/domain/cliagent.go`) is an interface for spawning CLI agent subprocesses. `CLIAgentConfig` carries binary path, work directory, additional args, optional model, and timeout (default 30 min).
+
+`cliagent.SubprocessRunner` (in `internal/infrastructure/cliagent/runner.go`) implements the interface:
+- Verifies the binary via `exec.LookPath` before starting.
+- Wraps the context in a timeout (30 min default, or `cfg.Timeout`).
+- Sends SIGTERM on cancel/timeout via `cmd.Cancel`; gives 5-second grace period via `cmd.WaitDelay` before SIGKILL.
+- Reads stdout line-by-line in a goroutine; calls `progress(line)` per non-empty line; accumulates full output.
+- Optional stdin channel: a goroutine drains the channel and writes to `cmd.Stdin`; closes the pipe on channel close or context cancellation. If `stdin == nil`, no stdin goroutine is started.
+- Scanner goroutine is always drained after `cmd.Wait()` to prevent goroutine leaks.
+
+### CLI Agent MCP Tools
+
+Four CLI agent tools are available in the local MCP client when a `CLIAgentRunner` is wired and the corresponding tool is enabled in config:
+
+| Tool | Binary | Key Flags |
+|---|---|---|
+| `run_claude_code` | `claude` | `--output-format=stream-json --dangerously-skip-permissions -p` |
+| `run_codex` | `codex` | `-q --approval-mode=full-auto` |
+| `run_openai_codex` | `openai-codex` | `--full-auto` |
+| `run_opencode` | `opencode` | `-q` |
+
+All tools accept `instruction` (required), `work_dir` (required), and `model` (optional) as tool arguments. The model flag is passed as `--model <value>` when non-empty.
+
+Binary availability is checked at `ListTools` call time via `exec.LookPath` (or `os.Stat` for absolute paths). Tools whose binary is not found or is disabled are silently omitted — this is a normal condition and generates no log output.
+
+Claude Code output is post-processed through `codeagent.ParseStreamLine` to extract text from stream-json events. Other tools accumulate plain-text stdout.
+
+A `progressFn func(line string)` field on the MCP client (set via `WithProgressFn`) receives each stdout line from CLI subprocesses, enabling real-time progress in the operator UI.
+
 ## QueueRunner
 
 **Clean Architecture placement:** Application layer (`internal/application/orchestrator/queue_runner.go`).
@@ -333,6 +375,75 @@ On each `CallTool` call, if `pluginStore` is set, `callPluginTool` scans active 
 | `run_when` | Both time condition (`run_at`) AND predecessor condition (`run_after`) satisfied; either may be omitted |
 
 **Launch.** Sets `status = in-progress`, clears scheduling fields, calls `Board.Update`, then calls `Dispatcher.DispatchBoardItem`. If `Update` fails, `launch` returns false and the item is not dispatched. If `DispatchBoardItem` fails, the item remains `in-progress` for operator investigation — it is not rolled back.
+
+## CLI Agent Delegation
+
+### New Package: `internal/infrastructure/cliagent/`
+
+`SubprocessRunner` implements `domain.CLIAgentRunner`. Each `Run` call is independent and safe for concurrent use.
+
+Key behaviours:
+- Verifies the binary via `exec.LookPath` before starting. Returns a descriptive error if the binary is not found.
+- Wraps the parent context in a `context.WithTimeout` (default 30 minutes; overridable via `CLIAgentConfig.Timeout`).
+- Sends `SIGTERM` on context cancellation via `cmd.Cancel`; gives 5 seconds for the process to exit cleanly before `WaitDelay` triggers force-close of pipes and `SIGKILL`.
+- Reads stdout line-by-line in a goroutine using `bufio.Scanner`. Each non-empty line is passed to `progress(line)` and accumulated in a `strings.Builder`. The scanner goroutine is always drained after `cmd.Wait()` to prevent goroutine leaks.
+- Optional stdin channel: a `drainStdin` goroutine reads from the channel and writes each line to the subprocess stdin pipe. Exits when the channel is closed or ctx is cancelled. If `stdin == nil`, no stdin goroutine is started.
+- Captures stderr to a buffer; includes it in the error message on non-zero exit.
+- Returns the accumulated stdout, trimmed of trailing newlines.
+
+### New Domain Interface: `internal/domain/cliagent.go`
+
+```go
+type CLIAgentConfig struct {
+    Binary  string
+    WorkDir string
+    Args    []string
+    Model   string
+    Timeout time.Duration
+}
+
+type CLIAgentRunner interface {
+    Run(ctx context.Context, cfg CLIAgentConfig, instruction string,
+        stdin <-chan string, progress func(line string)) (string, error)
+}
+```
+
+`CLIAgentRunner` is distinct from `domain.ModelProvider`. It models a long-running subprocess invoked as an MCP tool, not a turn-based prompt/response cycle.
+
+### MCP Client Changes (`internal/infrastructure/local/mcp/client.go`)
+
+**`read_skill` tool:** Added to `ListTools` when `pluginStore` is non-nil. Resolves the named skill across active plugins, reads `<installDir>/<pluginName>/commands/<name>.md`, and returns the Markdown content. Returns a descriptive error string if the skill is not found or the file cannot be read.
+
+**CLI tool dispatch:** Four tools (`run_claude_code`, `run_codex`, `run_openai_codex`, `run_opencode`) are appended to `ListTools` when a `CLIAgentRunner` is configured and the corresponding tool is enabled in config. Binary availability is checked at `ListTools` call time via `exec.LookPath` (or `os.Stat` for absolute paths). Tools whose binary is absent or disabled are silently omitted — no log output.
+
+`CallTool` dispatches to the appropriate `CLIAgentRunner.Run` call when a CLI tool name is matched. The `instruction`, `work_dir`, and `model` fields are extracted from the tool input. For `run_claude_code`, stdout is post-processed through `codeagent.ParseStreamLine` to extract text from `stream-json` events. Other tools accumulate plain-text stdout.
+
+**`isPluginJSONEntrypoint` routing fix:** `callPluginTool` now distinguishes three cases: (1) plugin not found or inactive — fall through to builtins; (2) active plugin with a `plugin.json` entrypoint — delegate to `readSkill`; (3) active plugin with an executable entrypoint — spawn subprocess. This prevents `exec: "plugin.json": executable file not found in $PATH` errors when bots call Claude Code plugin tools.
+
+### Config Additions (`internal/infrastructure/config/config.go`)
+
+```yaml
+orchestrator:
+  cli_tools:
+    claude_code:
+      enabled: false
+      binary_path: ""   # empty → PATH lookup of "claude"
+    codex:
+      enabled: false
+      binary_path: ""
+    openai_codex:
+      enabled: false
+      binary_path: ""
+    opencode:
+      enabled: false
+      binary_path: ""
+```
+
+`CLIToolsConfig` and `CLIToolConfig` are nested under `OrchestratorConfig`. The config loader uses `dec.KnownFields(true)`, so YAML tags must exactly match: `cli_tools`, `claude_code`, `codex`, `openai_codex`, `opencode`, `enabled`, `binary_path`.
+
+### Thread Safety: Plugin Store Pre-Resolution
+
+`TeamManager.Run()` now pre-resolves the plugin store before launching any bot goroutines. It scans `teamCfg.Team` for the orchestrator entry (the one with `Orchestrator.Plugins.InstallDir` set), loads that bot's config, and calls `localplugin.NewLocalPluginStore(installDir)`. The result is stored in read-only local variables (`resolvedPluginStore`, `resolvedInstallDir`) that are passed as parameters to each `startBot` call. No struct fields are written from goroutines. This eliminates the previous data race where concurrent `startBot` goroutines wrote `tm.pluginStore` while others read it.
 
 ## Key Design Decisions
 

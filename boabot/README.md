@@ -40,6 +40,11 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 - [`user-docs/plugins-api.md`](user-docs/plugins-api.md) — REST API reference (all 14 endpoints)
 - [`user-docs/plugins-manifest.md`](user-docs/plugins-manifest.md) — `plugin.yaml` format reference
 
+### Bot Capabilities
+
+- [`user-docs/plugin-skills.md`](user-docs/plugin-skills.md) — how bots discover and use plugin skills via `read_skill`
+- [`user-docs/cli-agent-tools.md`](user-docs/cli-agent-tools.md) — delegating tasks to Claude Code, Codex, and opencode via MCP tools
+
 ## Plugin Registry
 
 Admins can install versioned capability packages from one or more HTTPS-hosted registries. Each plugin provides MCP tools that are dynamically available to all bots.
@@ -48,6 +53,23 @@ Admins can install versioned capability packages from one or more HTTPS-hosted r
 - Trusted-registry plugins activate immediately after checksum verification; untrusted-registry plugins require admin approval.
 - Install, approve, reload, and remove plugins via the admin UI or `boabotctl plugin` commands.
 - Plugin archives are extracted atomically with SHA-256 checksum verification, zip-slip protection, and a 50 MB size cap.
+
+## Bot Capabilities
+
+Beyond the built-in harness tools, all bots have access to two additional capability layers:
+
+**Plugin skills via `read_skill`:** Any bot can call `read_skill(<name>)` to load the Markdown instruction file for any skill provided by an active plugin (e.g. `read_skill("review-code")`). The bot reads the instructions and executes each step autonomously — no separate executor is required. This is how Claude Code plugins (such as the `dev-flow` suite) are consumed by the bot ecosystem.
+
+**CLI agent delegation:** When enabled in config and the binary is on `PATH`, bots can delegate coding tasks to external CLI agents via four MCP tools:
+
+| Tool | Binary required | Use case |
+|---|---|---|
+| `run_claude_code` | `claude` | Delegate implementation or review tasks to Claude Code |
+| `run_codex` | `codex` | Delegate to the OpenAI Codex CLI |
+| `run_openai_codex` | `openai-codex` | Delegate to the open-source OpenAI Codex CLI |
+| `run_opencode` | `opencode` | Delegate to the opencode CLI |
+
+All four tools accept `instruction`, `work_dir`, and an optional `model` override. They are gated by config (`orchestrator.cli_tools.*`) and silently absent when the binary is not found. See [`user-docs/cli-agent-tools.md`](user-docs/cli-agent-tools.md) for setup instructions.
 
 ## Development
 

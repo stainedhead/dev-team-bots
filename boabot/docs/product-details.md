@@ -237,13 +237,41 @@ Bots can consume Claude Code plugins (those distributed as a `plugin.json` manif
 
 ### read_skill Tool
 
-When a plugin's entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), calling the plugin tool does not attempt to exec the JSON file. Instead, the MCP client reads `<install_dir>/<plugin_name>/commands/<tool_name>.md` and returns the Markdown content as the tool result. The bot then follows the instructions in that Markdown autonomously using its own built-in tools (`read_file`, `write_file`, `http_request`, etc.).
+`read_skill` is a built-in MCP tool that appears in `ListTools` whenever a plugin store is configured. A bot calls it by name to retrieve the full Markdown instruction file for any skill provided by an active plugin.
 
-The `read_skill` tool appears in `ListTools` whenever a plugin store is configured. It is not an opt-in per-tool — any active plugin with a `plugin.json` entrypoint is automatically routed through `read_skill` rather than subprocess exec.
+**Tool schema:**
+```json
+{
+  "name": "read_skill",
+  "description": "Read the Markdown instruction file for an installed plugin skill. Returns the full content of commands/<name>.md from the plugin's install directory. After reading, carry out the described steps yourself using your built-in tools — do not look for an external executor. Returns an error string if the skill is not found or its plugin is not active.",
+  "input_schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "The skill name (e.g. \"review-code\", \"create-prd\"). Must match a tool name listed in an active plugin's manifest."
+      }
+    }
+  }
+}
+```
+
+**Return value:** The full Markdown content of `<install_dir>/<plugin_name>/commands/<name>.md`. The bot reads these instructions and executes each step autonomously using its own built-in tools (`read_file`, `write_file`, `http_request`, etc.) — no external executor is involved.
+
+**Error cases:** If the named skill is not found in any active plugin, the tool returns `skill "<name>" not found in any active plugin`. If the Markdown file cannot be read, a descriptive file-read error is returned.
+
+**Routing:** When a plugin's entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), calling any of that plugin's tools does not attempt subprocess execution. Instead, the MCP client reads the corresponding `commands/<tool_name>.md` file. This is how all Claude Code plugins behave — their entrypoint is a JSON manifest, not an executable.
 
 ### Claude Code Plugin Lifecycle
 
 Claude Code plugins follow the same install / approve / enable / disable lifecycle as standard plugins. The only difference is in how tool calls are dispatched once the plugin is active. From the admin UI perspective, they are indistinguishable from regular plugins.
+
+### Plugin Store Race Fix
+
+Prior to this release, the plugin store was wired into bot goroutines by writing to a shared struct field inside `startBot`, which ran concurrently for all bots. This created a data race: non-orchestrator bots that started before the orchestrator goroutine wrote the field would receive a nil store and see no plugin tools.
+
+The fix pre-resolves the plugin store in `TeamManager.Run()` before any bot goroutines are spawned. The resolved store and install directory are captured in read-only local variables and passed as parameters to each `startBot` call. Plugin tools now reliably appear in `ListTools` for all bots regardless of goroutine start order.
 
 ## CLI Agent Tools
 

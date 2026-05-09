@@ -152,6 +152,44 @@ Placing the sentinel in the domain layer allows any adapter — HTTP server, CLI
 
 ---
 
+## ADR-B016 — read_skill over executable entrypoints for Claude Code plugins
+
+**Decision:** Claude Code plugins declare a `plugin.json` manifest as their entrypoint rather than an executable script. When a bot calls a plugin tool whose entrypoint is a `plugin.json` file (detected by `filepath.Base(entrypoint) == "plugin.json"`), the MCP client reads the plugin's `commands/<name>.md` Markdown file and returns it as the tool result, rather than attempting to exec the JSON file.
+
+**Rationale:** Claude Code plugins are designed to be executed by the Claude Code CLI, not by arbitrary subprocesses. Their "execution" model is: Claude reads the Markdown instructions and then carries out the described steps using its own built-in tools (`run_shell`, `read_file`, `write_file`, etc.). Attempting to exec `plugin.json` as a subprocess would always fail with a permission error and would not implement the intended behavior anyway.
+
+The `read_skill` built-in tool and the `callPluginTool` JSON-entrypoint routing give bots a way to consume these plugins without any changes to the plugin format. Bots receive the Markdown instructions and follow them autonomously.
+
+**Rejected:** Extracting a separate executable from plugin.json (would require changing the plugin format); adding an `is_markdown` flag to `PluginManifest` (unnecessary — the entrypoint filename is sufficient discrimination); requiring all plugins to have executable entrypoints (breaks compatibility with the Claude Code plugin ecosystem).
+
+---
+
+## ADR-B017 — CLIAgentRunner as a separate domain interface from codeagent.Provider
+
+**Decision:** `domain.CLIAgentRunner` is a distinct interface from `domain.ModelProvider`. The existing `codeagent.Provider` implements `ModelProvider` (Invoke → InvokeResponse). The new `cliagent.SubprocessRunner` implements `CLIAgentRunner` (Run → string). These are not merged.
+
+**Rationale:** The two abstractions serve different purposes:
+- `ModelProvider.Invoke` is a turn-based prompt/response interface for the main agent loop. It must be composable with the ToolGater, BudgetTracker, and ContextManager harness middleware.
+- `CLIAgentRunner.Run` is a long-running subprocess execution with streaming progress and optional stdin. It is invoked as an MCP tool, not as a model turn.
+
+Merging them would force either interface to carry concepts irrelevant to the other (a model provider does not need stdin channels; a CLI runner does not need InvokeRequest/InvokeResponse message types). The interface segregation principle applies: keep interfaces focused on a single responsibility.
+
+`ParseStreamLine` is the one piece of logic shared between the two worlds — it is now exported from `codeagent/stream.go` so the MCP client can post-process Claude Code stream-json output without duplicating the parser.
+
+**Rejected:** Using `codeagent.Provider` as the CLIAgentRunner implementation (would expose model-provider concerns inside the MCP tool layer; would make testing harder since Provider requires a full InvokeRequest); a single generic "subprocess" interface (too broad; loses type safety about what kinds of subprocesses are expected).
+
+---
+
+## ADR-B018 — Plugin store pre-resolved in TeamManager.Run() before goroutine spawn
+
+**Decision:** `TeamManager.Run()` resolves the plugin store and install directory once, synchronously, before launching any bot goroutines. The resolved values are passed as parameters to each `startBot` call rather than being written to struct fields inside goroutines.
+
+**Rationale:** The previous design wrote `tm.pluginStore` and `tm.pluginInstallDir` from inside `startBot`, which ran concurrently for all bots. Any bot goroutine that began executing before the orchestrator goroutine wrote these fields received nil values and therefore saw no plugin tools. With pre-resolution, the data is available before the first goroutine starts, eliminating the race entirely. Local variables closed over by each goroutine are read-only after the goroutine starts — no locking required.
+
+**Rejected:** A mutex protecting `tm.pluginStore` (adds locking overhead on every `ListTools` call; more complex than pre-resolution; still requires callers to handle the "not yet set" case); lazy initialisation inside each goroutine (each goroutine would race to load the same config file; adds redundant I/O and still requires synchronisation).
+
+---
+
 ## ADR-B015 — run_when as a composite queue mode rather than a flag combination
 
 **Decision:** A fourth queue mode `run_when` was introduced to `domain.WorkItem.QueueMode` (alongside `asap`, `run_at`, `run_after`). It satisfies both a time condition and a predecessor-item condition before the `QueueRunner` dispatches the item. Either sub-condition may be omitted, in which case `run_when` degenerates to `run_at` or `run_after` respectively.

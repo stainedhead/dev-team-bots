@@ -1,5 +1,7 @@
 # BaoBot Dev Team
 
+![BaoBot Control UI](imgs/baobot-control-ui.png)
+
 A system of cooperative, always-on AI agents that function as a software development team. Each agent carries a specialised role, its own evolving memory, and the ability to communicate with teammates — forming a self-coordinating unit that responds to commands, reacts to events, and completes complex work autonomously.
 
 "Bao" (เบา) is the Thai word for servant or helper.

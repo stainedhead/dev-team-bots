@@ -2401,7 +2401,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg"><label class="fl">Assign to bot</label><select class="fi" id="ni-bot"><option value="">Unassigned</option></select></div>
   <div class="fg"><label class="fl">Working directory</label><select class="fi" id="ni-workdir-sel" onchange="ge('ni-workdir-txt').style.display=this.value?'block':'none'"><option value="">None</option></select><input class="fi" id="ni-workdir-txt" type="text" placeholder="sub/path/within/root (optional)" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="ni-err" style="display:none"></div>
-  <div class="da"><button class="btn btn-secondary" onclick="cls('ni-dlg')">Cancel</button><button class="btn btn-primary" onclick="doCreateItem()">Create</button></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('ni-dlg')">Cancel</button><button class="btn btn-secondary" onclick="doCreateItem(true)">Create and add another</button><button class="btn btn-primary" onclick="doCreateItem()">Create</button></div>
 </dialog>
 
 <!-- Create User (admin) -->
@@ -2436,7 +2436,7 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Schedule At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
   <div class="fg"><label class="fl">Working directory (optional)</label><select class="fi" id="at-workdir-sel" onchange="ge('at-workdir-txt').style.display=this.value?'block':'none'"><option value="">None</option></select><input class="fi" id="at-workdir-txt" type="text" placeholder="sub/path/within/root (optional)" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="at-err" style="display:none"></div>
-  <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-primary" onclick="doDispatchTask()">Dispatch</button></div>
+  <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-secondary" onclick="doDispatchTask(true)">Create and add another</button><button class="btn btn-primary" onclick="doDispatchTask()">Create</button></div>
 </dialog>
 
 <!-- Change Own Password -->
@@ -3200,7 +3200,7 @@ const kanbanHTML = `<!DOCTYPE html>
     dlg('ni-dlg');
   }
 
-  function doCreateItem(){
+  function doCreateItem(addAnother){
     var title=ge('ni-title').value.trim(),desc=ge('ni-desc').value.trim(),bot=ge('ni-bot').value,e=ge('ni-err');
     e.style.display='none';
     if(!title){e.textContent='Title is required';e.style.display='block';return}
@@ -3209,7 +3209,11 @@ const kanbanHTML = `<!DOCTYPE html>
     var body={title:title,description:desc,assigned_to:bot};
     if(workdir)body.work_dir=workdir;
     api('POST','/api/v1/board',body)
-      .then(function(){cls('ni-dlg');ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir-sel').value='';ge('ni-workdir-txt').value='';ge('ni-workdir-txt').style.display='none';loadBoard()})
+      .then(function(){
+        ge('ni-title').value='';ge('ni-desc').value='';ge('ni-workdir-sel').value='';ge('ni-workdir-txt').value='';ge('ni-workdir-txt').style.display='none';
+        loadBoard();
+        if(addAnother){ge('ni-title').focus()}else{cls('ni-dlg')}
+      })
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 
@@ -3685,7 +3689,7 @@ const kanbanHTML = `<!DOCTYPE html>
     dlg('at-dlg');
   }
 
-  function doDispatchTask(){
+  function doDispatchTask(addAnother){
     var botName=ge('at-bot').textContent;
     var title=ge('at-title').value.trim();
     var instruction=ge('at-instr').value.trim();
@@ -3701,7 +3705,11 @@ const kanbanHTML = `<!DOCTYPE html>
     if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
     if(workDir){body.work_dir=workDir}
     api('POST','/api/v1/bots/'+botName+'/tasks',body)
-      .then(function(){cls('at-dlg');ge('at-title').value='';ge('at-instr').value='';setTaskFilter('immediate');tab('tasks');loadTasks()})
+      .then(function(){
+        ge('at-title').value='';ge('at-instr').value='';ge('at-now').checked=true;ge('at-sched-wrap').style.display='none';ge('at-sched').value='';ge('at-workdir-sel').value='';ge('at-workdir-txt').value='';ge('at-workdir-txt').style.display='none';
+        setTaskFilter('immediate');loadTasks();
+        if(addAnother){ge('at-instr').focus()}else{cls('at-dlg');tab('tasks')}
+      })
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
   }
 

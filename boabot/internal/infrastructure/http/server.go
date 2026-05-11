@@ -5113,6 +5113,178 @@ const kanbanHTML = `<!DOCTYPE html>
 
   function closeViewer(){ge('viewer-overlay').style.display='none'}
 
+  // ── Notifications ─────────────────────────────────────────────────────────────
+  function setNotifFilter(f){
+    currentNotifFilter=f;
+    ['all','single','recurring'].forEach(function(n){
+      var el=ge('nf-'+n);if(el)el.classList.toggle('active',n===f);
+    });
+    loadNotifications();
+  }
+
+  function notifStatusClass(st){
+    if(st==='unread')return'pill-warn';
+    if(st==='actioned')return'pill-ok';
+    return'pill-user';
+  }
+
+  function updateNotifDeleteBtn(){
+    var nl=ge('notif-list');
+    var cnt=nl?nl.querySelectorAll('input[data-nid]:checked').length:0;
+    var btn=ge('notif-del-btn');
+    if(!btn)return;
+    btn.disabled=cnt===0;btn.style.opacity=cnt?'1':'0.35';btn.style.cursor=cnt?'pointer':'not-allowed';
+  }
+
+  function loadNotifications(){
+    var el=ge('notif-list');
+    if(!el)return;
+    if(!token){el.innerHTML='<div class="empty-state">Sign in to view notifications</div>';return}
+    var params=[];
+    if(currentNotifFilter==='single')params.push('type=single');
+    if(currentNotifFilter==='recurring')params.push('type=recurring');
+    var bot=(ge('nf-bot')||{}).value||'';
+    if(bot)params.push('bot='+encodeURIComponent(bot));
+    var txt=((ge('nf-text')||{}).value||'').trim();
+    if(txt)params.push('q='+encodeURIComponent(txt));
+    var qs=params.length?'?'+params.join('&'):'';
+    api('GET','/api/v1/notifications'+qs,null)
+      .then(function(items){
+        allNotifList=items||[];
+        var sel=ge('nf-bot');
+        if(sel){
+          var prev=sel.value;
+          sel.innerHTML='<option value="">All bots</option>';
+          var bots={};
+          allNotifList.forEach(function(n){if(n.bot_name)bots[n.bot_name]=1});
+          Object.keys(bots).sort().forEach(function(bn){
+            var o=document.createElement('option');o.value=bn;o.textContent=bn;sel.appendChild(o);
+          });
+          if(prev&&bots[prev])sel.value=prev;
+        }
+        renderNotifList();
+      })
+      .catch(function(){el.innerHTML='<div class="empty-state">Failed to load notifications</div>'});
+  }
+
+  function renderNotifList(){
+    var el=ge('notif-list');
+    if(!el)return;
+    if(!allNotifList.length){el.innerHTML='<div class="empty-state">No notifications</div>';return}
+    var html='';
+    allNotifList.forEach(function(n){
+      var preview=esc((n.message||'').substring(0,80))+(n.message&&n.message.length>80?'&#x2026;':'');
+      var sc=notifStatusClass(n.status);
+      html+='<div class="notif-row'+(n.status==='unread'?' unread':'')+'" onclick="openNotification(\''+esc(n.id)+'\')">'
+        +'<input type="checkbox" class="notif-check" data-nid="'+esc(n.id)+'" onclick="event.stopPropagation();updateNotifDeleteBtn()"/>'
+        +'<span class="notif-bot">'+esc(n.bot_name||'&#x2014;')+'</span>'
+        +'<span class="notif-preview">'+preview+'</span>'
+        +'<span class="notif-status"><span class="pill '+sc+'">'+esc(n.status||'&#x2014;')+'</span></span>'
+        +'<span class="notif-time">'+ago(n.created_at)+'</span>'
+        +'</div>';
+    });
+    el.innerHTML=html;
+    updateNotifDeleteBtn();
+  }
+
+  function openNotification(id){
+    var n=allNotifList.find(function(x){return x.id===id});
+    if(!n)return;
+    notifDetailId=id;
+    ge('notif-list-view').style.display='none';
+    var dv=ge('notif-detail-view');
+    dv.style.display='flex';
+    dv.style.flexDirection='column';
+    var sc=notifStatusClass(n.status);
+    var meta=esc(n.bot_name||'&#x2014;')+' &nbsp;&middot;&nbsp; '+ago(n.created_at)
+      +' &nbsp;&middot;&nbsp; <span class="pill '+sc+'">'+esc(n.status||'&#x2014;')+'</span>';
+    ge('notif-detail-meta').innerHTML=meta;
+    var rqBtn=ge('notif-requeue-btn');
+    rqBtn.style.display=(n.task_id&&n.status!=='actioned')?'inline-block':'none';
+    var body='<div class="notif-detail-msg">'+esc(n.message||'')+'</div>';
+    if(n.context){
+      body+='<details style="margin-bottom:.75rem"><summary style="font-size:.72rem;color:#64748b;cursor:pointer;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Context</summary>'
+        +'<div style="font-size:.78rem;color:#94a3b8;padding:.5rem;white-space:pre-wrap">'+esc(JSON.stringify(n.context,null,2))+'</div></details>';
+    }
+    ge('notif-detail-body').innerHTML=body;
+    renderNotifDiscuss(n.discuss||[]);
+    ge('notif-discuss-input').value='';
+  }
+
+  function renderNotifDiscuss(items){
+    var el=ge('notif-discuss-list');
+    if(!el)return;
+    if(!items||!items.length){el.innerHTML='<div style="color:#475569;font-size:.75rem">No discussion yet.</div>';return}
+    var html='';
+    items.forEach(function(it){
+      html+='<div class="notif-discuss-item">'
+        +'<div class="notif-discuss-author">'+esc(it.author||'&#x2014;')+' &middot; '+ago(it.created_at)+'</div>'
+        +'<div>'+esc(it.message||'')+'</div>'
+        +'</div>';
+    });
+    el.innerHTML=html;
+  }
+
+  function closeNotifDetail(){
+    notifDetailId=null;
+    ge('notif-detail-view').style.display='none';
+    ge('notif-list-view').style.display='flex';
+    ge('notif-list-view').style.flexDirection='column';
+  }
+
+  function sendDiscuss(id){
+    if(!id||!token)return;
+    var inp=ge('notif-discuss-input');
+    var msg=inp?inp.value.trim():'';
+    if(!msg)return;
+    inp.value='';
+    api('POST','/api/v1/notifications/'+id+'/discuss',{message:msg})
+      .then(function(updated){
+        var idx=allNotifList.findIndex(function(x){return x.id===id});
+        if(idx>=0&&updated)allNotifList[idx]=updated;
+        openNotification(id);
+      })
+      .catch(function(e){alert('Failed: '+e.message)});
+  }
+
+  function requeueNotification(id){
+    if(!id||!token)return;
+    api('POST','/api/v1/notifications/'+id+'/requeue',{})
+      .then(function(){
+        alert('Task re-queued.');
+        loadNotifications();
+        closeNotifDetail();
+      })
+      .catch(function(e){alert('Re-queue failed: '+e.message)});
+  }
+
+  function deleteSelectedNotifications(){
+    var ids=[];
+    ge('notif-list').querySelectorAll('input[data-nid]:checked').forEach(function(cb){ids.push(cb.getAttribute('data-nid'))});
+    if(!ids.length)return;
+    if(!confirm('Delete '+ids.length+' notification'+(ids.length>1?'s':'')+' ?'))return;
+    api('DELETE','/api/v1/notifications',{ids:ids})
+      .then(function(){loadNotifications()})
+      .catch(function(e){alert('Delete failed: '+e.message);loadNotifications()});
+  }
+
+  function pollNotifCount(){
+    if(!token){schedulePollNotif();return}
+    api('GET','/api/v1/notifications/count',null)
+      .then(function(d){
+        var cnt=(d&&d.count)||0;
+        var badge=ge('notif-badge');
+        if(badge){badge.textContent=cnt;badge.style.display=cnt>0?'inline-flex':'none';}
+      })
+      .catch(function(){})
+      .then(function(){schedulePollNotif()});
+  }
+
+  function schedulePollNotif(){
+    clearTimeout(notifPollTimer);
+    notifPollTimer=setTimeout(pollNotifCount,15000);
+  }
+
   // ── Refresh loop ──────────────────────────────────────────────────────────────
   function loadWorkDirs(){
     api('GET','/api/v1/workdirs',null).then(function(dirs){allWorkDirs=dirs||[];}).catch(function(){allWorkDirs=[]});
@@ -5121,6 +5293,7 @@ const kanbanHTML = `<!DOCTYPE html>
   function refreshAll(){
     loadBoard(); loadTeam(); loadThreads(); loadPluginCmds();
     if(activeTab==='tasks')loadTasks();
+    if(activeTab==='notif')loadNotifications();
     if(activeTab==='chat')loadChat();
     if(activeTab==='plugins'){loadPlugins();loadRegistries();}
     if(activeTab==='dlq')loadDLQ();
@@ -5147,6 +5320,7 @@ const kanbanHTML = `<!DOCTYPE html>
   loadWorkDirs();
   refreshAll();
   startTick();
+  pollNotifCount();
 
   // ── Plugin panel drag-to-resize ───────────────────────────────────────────
   (function(){

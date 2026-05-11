@@ -30,6 +30,9 @@ type mockDirectTaskStore struct {
 
 	// tasks is an optional per-ID backing store for Get.
 	tasks map[string]domain.DirectTask
+
+	// getErr makes Get return this error (after tasks map and listDueResult are exhausted).
+	getErr error
 }
 
 func newMockStore() *mockDirectTaskStore {
@@ -87,6 +90,9 @@ func (m *mockDirectTaskStore) Get(_ context.Context, id string) (domain.DirectTa
 	defer m.mu.Unlock()
 	if t, ok := m.tasks[id]; ok {
 		return t, nil
+	}
+	if m.getErr != nil {
+		return domain.DirectTask{}, m.getErr
 	}
 	// Fall back to listDueResult — allows existing tests to work without seeding tasks map.
 	for _, t := range m.listDueResult {
@@ -639,6 +645,65 @@ func (d *storeAwareDispatcher) getRunNowCalls() []string {
 	out := make([]string, len(d.RunNowCalls))
 	copy(out, d.RunNowCalls)
 	return out
+}
+
+// TestTick_RecurringTask_GetAfterRunNowError_DoesNotPanic verifies that a Get
+// error after RunNow succeeds is logged and does not panic.
+func TestTick_RecurringTask_GetAfterRunNowError_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	task := recurringTask("task-get-err", dueAt)
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{task}
+	// Set getErr so Get always fails (simulates store error after RunNow).
+	store.getErr = errors.New("store error")
+
+	disp := &mockDispatcher{} // RunNow succeeds
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+
+	calls := disp.getRunNowCalls()
+	if len(calls) != 1 {
+		t.Errorf("expected 1 RunNow call, got %d", len(calls))
+	}
+	// No Update should have happened since Get failed.
+	if len(store.getUpdateCalls()) != 0 {
+		t.Errorf("expected 0 Update calls when Get fails, got %d", len(store.getUpdateCalls()))
+	}
+}
+
+// TestStartLoop_TickError_ContinuesAndCancels verifies that a Tick error during
+// the loop is logged and the loop continues until context cancellation.
+func TestStartLoop_TickError_ContinuesAndCancels(t *testing.T) {
+	t.Parallel()
+
+	store := newMockStore()
+
+	disp := &mockDispatcher{runNowErr: errors.New("run now failed")}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.StartLoop(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartLoop did not exit after context cancellation")
+	}
 }
 
 // TestStartLoop_CatchUpFails_ContinuesAndCancels verifies that StartLoop logs

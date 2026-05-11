@@ -28,14 +28,7 @@ func NewSchedulerService(store domain.DirectTaskStore, dispatcher domain.TaskDis
 // For recurring tasks: after dispatch, recalculates and persists NextRunAt.
 // For Future (one-shot) tasks: after dispatch, NextRunAt is not updated (task is done).
 func (s *SchedulerService) Tick(ctx context.Context, now time.Time) error {
-	tasks, err := s.store.ListDue(ctx, now)
-	if err != nil {
-		return err
-	}
-	for _, task := range tasks {
-		s.processTask(ctx, task, now)
-	}
-	return nil
+	return s.processAllDue(ctx, now)
 }
 
 // CatchUpMissedRuns is called once on startup. Finds all tasks with NextRunAt in
@@ -43,6 +36,12 @@ func (s *SchedulerService) Tick(ctx context.Context, now time.Time) error {
 // collapse into a single run — only one dispatch, then NextRunAt advances to the
 // next future occurrence.
 func (s *SchedulerService) CatchUpMissedRuns(ctx context.Context, now time.Time) error {
+	return s.processAllDue(ctx, now)
+}
+
+// processAllDue is the shared implementation for Tick and CatchUpMissedRuns.
+// It lists all due tasks and processes each one.
+func (s *SchedulerService) processAllDue(ctx context.Context, now time.Time) error {
 	tasks, err := s.store.ListDue(ctx, now)
 	if err != nil {
 		return err

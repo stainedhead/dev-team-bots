@@ -71,16 +71,16 @@ type Config struct {
 	Tasks            domain.DirectTaskStore
 	Dispatcher       domain.TaskDispatcher
 	Chat             domain.ChatStore
-	AskRouter        domain.AskRouter                      // optional; routes mid-task questions to running bots
-	Pool             domain.TechLeadPool                   // optional; nil means pool endpoint returns empty
-	AllowedWorkDirs  []string                              // whitelisted base directories for item working directories
-	TaskLogBase      string                                // base directory for per-task log directories (optional)
-	IconPNG          []byte                                // raw icon served at /imgs/boabot-icon-raw.png
-	ProcessedIconPNG []byte                                // dark-pixels-transparent variant served at /imgs/boabot-icon.png
-	FaviconIconPNG   []byte                                // blue/white-filter variant served at /imgs/boabot-favicon.png
-	BoardDispatcher  domain.BoardItemDispatcher            // use-case for dispatching board items to bots
-	MaxConcurrent    int                                   // max items in-progress simultaneously (0 = unlimited)
-	Notifications    notificationService // optional; notification endpoints return 501 when nil
+	AskRouter        domain.AskRouter           // optional; routes mid-task questions to running bots
+	Pool             domain.TechLeadPool        // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs  []string                   // whitelisted base directories for item working directories
+	TaskLogBase      string                     // base directory for per-task log directories (optional)
+	IconPNG          []byte                     // raw icon served at /imgs/boabot-icon-raw.png
+	ProcessedIconPNG []byte                     // dark-pixels-transparent variant served at /imgs/boabot-icon.png
+	FaviconIconPNG   []byte                     // blue/white-filter variant served at /imgs/boabot-favicon.png
+	BoardDispatcher  domain.BoardItemDispatcher // use-case for dispatching board items to bots
+	MaxConcurrent    int                        // max items in-progress simultaneously (0 = unlimited)
+	Notifications    notificationService        // optional; notification endpoints return 501 when nil
 	// ChatTaskManager handles intent detection and confirmation flow for task
 	// management requests sent via the chat interface.  Optional; nil means the
 	// feature is disabled and the message is forwarded to the bot as usual.

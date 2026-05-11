@@ -396,3 +396,37 @@ func TestParseScheduleNL_HHMMFormat(t *testing.T) {
 		t.Errorf("expected TimeOfDay=%v, got %v", wantTimeOfDay, schedule.Rule.TimeOfDay)
 	}
 }
+
+// --- TTL: expired pending intent (FR-010) ------------------------------------
+
+// TestDetectAndHandle_ExpiredIntent_NotConfirmable verifies that a pending
+// ChatTaskIntent older than the TTL is treated as absent — "yes" is not handled.
+func TestDetectAndHandle_ExpiredIntent_NotConfirmable(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	// Create manager with a very short TTL (1ms) so intents expire immediately.
+	m := orchestrator.NewChatTaskManagerWithTTL(d, time.Millisecond)
+
+	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
+	_, handled, err := m.DetectAndHandle(context.Background(), "thread-ttl", taskMsg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled=true for task request")
+	}
+
+	// Wait for TTL to expire.
+	time.Sleep(5 * time.Millisecond)
+
+	// "yes" with expired intent should not be confirmable.
+	_, handled2, err2 := m.DetectAndHandle(context.Background(), "thread-ttl", "yes")
+	if err2 != nil {
+		t.Fatalf("unexpected error on confirmation: %v", err2)
+	}
+	if handled2 {
+		t.Error("expected handled=false for expired intent, got true")
+	}
+	if len(d.calls) != 0 {
+		t.Errorf("expected 0 dispatch calls for expired intent, got %d", len(d.calls))
+	}
+}

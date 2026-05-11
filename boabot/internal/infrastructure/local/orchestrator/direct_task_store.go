@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,16 +63,21 @@ func (s *InMemoryDirectTaskStore) persist() {
 	}
 	data, err := json.Marshal(tasks)
 	if err != nil {
+		slog.Error("direct-task-store: marshal failed during persist", "err", err)
 		return
 	}
 	tmp := s.persistPath + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+		slog.Error("direct-task-store: mkdir failed during persist", "path", filepath.Dir(s.persistPath), "err", err)
 		return
 	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		slog.Error("direct-task-store: write failed during persist", "path", tmp, "err", err)
 		return
 	}
-	_ = os.Rename(tmp, s.persistPath)
+	if err := os.Rename(tmp, s.persistPath); err != nil {
+		slog.Error("direct-task-store: rename failed during persist", "from", tmp, "to", s.persistPath, "err", err)
+	}
 }
 
 // Create stores a new DirectTask with a generated ID and sets CreatedAt/UpdatedAt.

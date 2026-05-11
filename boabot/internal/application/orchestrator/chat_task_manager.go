@@ -12,24 +12,35 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
+// defaultPendingTTL is how long a pending intent is kept before it expires.
+const defaultPendingTTL = 10 * time.Minute
+
 // ChatTaskIntent holds the parsed intent from a task-management chat message.
 type ChatTaskIntent struct {
 	BotName     string
 	Instruction string
 	Schedule    domain.Schedule
-	NLText      string // original natural-language schedule description
+	NLText      string    // original natural-language schedule description
+	CreatedAt   time.Time // when the intent was stored; used for TTL expiry
 }
 
 // ChatTaskManager detects task-management intent in chat messages and drives
 // the confirmation flow.  It is safe for concurrent use.
 type ChatTaskManager struct {
 	dispatcher domain.ScheduledTaskDispatcher
-	pendingMap sync.Map // threadID (string) -> *ChatTaskIntent
+	pendingMap sync.Map      // threadID (string) -> *ChatTaskIntent
+	ttl        time.Duration // maximum age of a pending intent
 }
 
-// NewChatTaskManager constructs a ChatTaskManager.
+// NewChatTaskManager constructs a ChatTaskManager with the default 10-minute TTL.
 func NewChatTaskManager(dispatcher domain.ScheduledTaskDispatcher) *ChatTaskManager {
-	return &ChatTaskManager{dispatcher: dispatcher}
+	return NewChatTaskManagerWithTTL(dispatcher, defaultPendingTTL)
+}
+
+// NewChatTaskManagerWithTTL constructs a ChatTaskManager with the given TTL for
+// pending intents. Use this in tests to exercise TTL expiry with short durations.
+func NewChatTaskManagerWithTTL(dispatcher domain.ScheduledTaskDispatcher, ttl time.Duration) *ChatTaskManager {
+	return &ChatTaskManager{dispatcher: dispatcher, ttl: ttl}
 }
 
 // DetectAndHandle checks whether msg represents a task-management request or a
@@ -88,7 +99,15 @@ func (m *ChatTaskManager) loadPending(threadID string) (*ChatTaskIntent, bool) {
 		return nil, false
 	}
 	intent, ok := v.(*ChatTaskIntent)
-	return intent, ok
+	if !ok {
+		return nil, false
+	}
+	// Expire intents that are older than the TTL.
+	if m.ttl > 0 && !intent.CreatedAt.IsZero() && time.Since(intent.CreatedAt) > m.ttl {
+		m.pendingMap.Delete(threadID)
+		return nil, false
+	}
+	return intent, true
 }
 
 // --- intent detection --------------------------------------------------------
@@ -136,6 +155,7 @@ func detectIntent(msg string) (*ChatTaskIntent, bool) {
 		Instruction: instruction,
 		Schedule:    schedule,
 		NLText:      extractScheduleText(lower),
+		CreatedAt:   time.Now().UTC(),
 	}, true
 }
 
@@ -348,7 +368,6 @@ func parseTimeOfDay(lower string) time.Duration {
 	}
 
 	// Try "Xam" / "Xpm".
-	digits := strings.TrimFunc(rest, func(r rune) bool { return !unicode.IsDigit(r) })
 	// Extract leading digits.
 	numStr := ""
 	for _, ch := range rest {
@@ -359,7 +378,6 @@ func parseTimeOfDay(lower string) time.Duration {
 		}
 	}
 	if numStr == "" {
-		_ = digits
 		return 0
 	}
 	h, err := strconv.Atoi(numStr)

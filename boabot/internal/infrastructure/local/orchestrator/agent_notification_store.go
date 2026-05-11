@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,16 +64,21 @@ func (s *InMemoryAgentNotificationStore) persist() {
 	}
 	data, err := json.Marshal(notifications)
 	if err != nil {
+		slog.Error("notification-store: marshal failed during persist", "err", err)
 		return
 	}
 	tmp := s.persistPath + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+		slog.Error("notification-store: mkdir failed during persist", "path", filepath.Dir(s.persistPath), "err", err)
 		return
 	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		slog.Error("notification-store: write failed during persist", "path", tmp, "err", err)
 		return
 	}
-	_ = os.Rename(tmp, s.persistPath)
+	if err := os.Rename(tmp, s.persistPath); err != nil {
+		slog.Error("notification-store: rename failed during persist", "from", tmp, "to", s.persistPath, "err", err)
+	}
 }
 
 // Save stores or replaces a notification. If the notification has no ID, a UUID

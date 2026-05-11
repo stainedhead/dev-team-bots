@@ -81,7 +81,11 @@ func (s *Server) handleNotificationDiscuss(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "message must not be empty")
 		return
 	}
-	if err := s.cfg.Notifications.AppendDiscuss(r.Context(), id, "user", req.Message); err != nil {
+	author := claimsFromContext(r).Subject
+	if author == "" {
+		author = "unknown"
+	}
+	if err := s.cfg.Notifications.AppendDiscuss(r.Context(), id, author, req.Message); err != nil {
 		writeInternalError(w, "notification discuss", err)
 		return
 	}
@@ -115,6 +119,10 @@ func (s *Server) handleNotificationDelete(w http.ResponseWriter, r *http.Request
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids must not be empty")
 		return
 	}
 	if err := s.cfg.Notifications.Delete(r.Context(), req.IDs); err != nil {

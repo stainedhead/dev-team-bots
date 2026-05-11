@@ -302,12 +302,13 @@ func TestNotificationDiscuss_AppendsEntry(t *testing.T) {
 	if !out.OK {
 		t.Error("expected ok=true")
 	}
-	// Verify the entry was saved with author=user.
+	// Verify the entry was saved with author from JWT claims (Subject="admin" from fakeAuth).
 	if len(savedNotif.DiscussThread) != 1 {
 		t.Fatalf("expected 1 discuss entry, got %d", len(savedNotif.DiscussThread))
 	}
-	if savedNotif.DiscussThread[0].Author != "user" {
-		t.Errorf("expected author=user, got %q", savedNotif.DiscussThread[0].Author)
+	// fakeAuth returns Subject="admin"; FR-011 uses claimsFromContext(r).Subject as author.
+	if savedNotif.DiscussThread[0].Author != "admin" {
+		t.Errorf("expected author=admin (from JWT claims), got %q", savedNotif.DiscussThread[0].Author)
 	}
 	if savedNotif.DiscussThread[0].Message != "please check the logs" {
 		t.Errorf("unexpected message: %q", savedNotif.DiscussThread[0].Message)
@@ -733,6 +734,119 @@ func TestBotTaskCreate_WithScheduleRecurring_ValidTime2359_Returns201(t *testing
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 for valid time 23:59, got %d", resp.StatusCode)
+	}
+}
+
+// FR-015: Table-driven schedule parse tests via HTTP handler.
+func TestBotTaskCreate_ScheduleParsing_TableDriven(t *testing.T) {
+	futureTime := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+
+	tests := []struct {
+		name           string
+		body           string
+		wantStatusCode int
+	}{
+		{
+			name:           "nil schedule (no schedule field) — ASAP",
+			body:           `{"instruction":"do it"}`,
+			wantStatusCode: http.StatusCreated,
+		},
+		{
+			name:           "explicit asap mode",
+			body:           `{"instruction":"do it","schedule":{"mode":"asap"}}`,
+			wantStatusCode: http.StatusCreated,
+		},
+		{
+			name:           "unknown mode → error",
+			body:           `{"instruction":"bad","schedule":{"mode":"hourly"}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "future mode with nil run_at → error",
+			body:           `{"instruction":"later","schedule":{"mode":"future"}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "recurring with nil recurrence → error",
+			body:           `{"instruction":"daily","schedule":{"mode":"recurring"}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "recurring with invalid frequency → error",
+			body:           `{"instruction":"hourly","schedule":{"mode":"recurring","recurrence":{"frequency":"hourly","time":"09:00"}}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "recurring with invalid time (hour>23) → error",
+			body:           `{"instruction":"bad hour","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"25:00"}}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "recurring with invalid time (minute>59) → error",
+			body:           `{"instruction":"bad min","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"09:99"}}}`,
+			wantStatusCode: http.StatusBadRequest,
+		},
+		{
+			name:           "valid future schedule",
+			body:           `{"instruction":"later","schedule":{"mode":"future","run_at":"` + futureTime.Format(time.RFC3339) + `"}}`,
+			wantStatusCode: http.StatusCreated,
+		},
+		{
+			name:           "valid daily recurring schedule",
+			body:           `{"instruction":"daily","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"09:00"}}}`,
+			wantStatusCode: http.StatusCreated,
+		},
+		{
+			name:           "valid weekly recurring schedule",
+			body:           `{"instruction":"weekly","schedule":{"mode":"recurring","recurrence":{"frequency":"weekly","days":["monday"],"time":"09:00"}}}`,
+			wantStatusCode: http.StatusCreated,
+		},
+		{
+			name:           "valid monthly recurring schedule",
+			body:           `{"instruction":"monthly","schedule":{"mode":"recurring","recurrence":{"frequency":"monthly","month_day":15,"time":"09:00"}}}`,
+			wantStatusCode: http.StatusCreated,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dispatcher := &fakeScheduledDispatcher{}
+			s := httpserver.New(httpserver.Config{
+				Auth:       &fakeAuth{},
+				Board:      &fakeBoardStore{},
+				Team:       &fakeControlPlane{},
+				Users:      &fakeUserStore{},
+				Skills:     &fakeSkillRegistry{},
+				DLQ:        &fakeDLQStore{},
+				Tasks:      &fakeDirectTaskStore{},
+				Dispatcher: dispatcher,
+			})
+			srv := httptest.NewServer(s.Handler())
+			defer srv.Close()
+
+			resp := doJSON(t, srv, http.MethodPost, "bots/dev-1/tasks", tc.body)
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != tc.wantStatusCode {
+				t.Errorf("expected %d, got %d", tc.wantStatusCode, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// FR-016: Empty IDs → 400.
+func TestHandleNotificationDelete_EmptyIDs_Returns400(t *testing.T) {
+	store := &fakeNotificationStore{}
+	svc := newNotifSvc(store, &fakeNotifTaskStore{})
+	srv := newNotifTestServer(svc)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/notifications", strings.NewReader(`{"ids":[]}`))
+	req.Header.Set("Authorization", authHeader())
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty ids, got %d", resp.StatusCode)
 	}
 }
 

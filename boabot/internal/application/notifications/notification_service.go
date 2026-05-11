@@ -21,9 +21,9 @@ const discussCap = 100
 
 // NotificationService manages in-app agent notifications.
 type NotificationService struct {
-	store         domain.AgentNotificationStore
-	taskStore     domain.DirectTaskStore
-	appendDiscMu  sync.Mutex // serialises concurrent AppendDiscuss calls
+	store        domain.AgentNotificationStore
+	taskStore    domain.DirectTaskStore
+	appendDiscMu sync.Mutex // serialises concurrent AppendDiscuss calls
 }
 
 // NewNotificationService constructs a NotificationService.

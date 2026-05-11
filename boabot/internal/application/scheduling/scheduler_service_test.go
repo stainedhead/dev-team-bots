@@ -28,7 +28,8 @@ type mockDirectTaskStore struct {
 	UpdateCalls []domain.DirectTask
 	updateErr   error
 
-	// other methods are no-ops.
+	// tasks is an optional per-ID backing store for Get.
+	tasks map[string]domain.DirectTask
 }
 
 func newMockStore() *mockDirectTaskStore {
@@ -63,6 +64,9 @@ func (m *mockDirectTaskStore) Update(_ context.Context, task domain.DirectTask) 
 		return domain.DirectTask{}, m.updateErr
 	}
 	m.UpdateCalls = append(m.UpdateCalls, task)
+	if m.tasks != nil {
+		m.tasks[task.ID] = task
+	}
 	return task, nil
 }
 
@@ -78,8 +82,28 @@ func (m *mockDirectTaskStore) getUpdateCalls() []domain.DirectTask {
 func (m *mockDirectTaskStore) Create(_ context.Context, task domain.DirectTask) (domain.DirectTask, error) {
 	return task, nil
 }
-func (m *mockDirectTaskStore) Get(_ context.Context, _ string) (domain.DirectTask, error) {
-	return domain.DirectTask{}, errors.New("not implemented")
+func (m *mockDirectTaskStore) Get(_ context.Context, id string) (domain.DirectTask, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.tasks[id]; ok {
+		return t, nil
+	}
+	// Fall back to listDueResult — allows existing tests to work without seeding tasks map.
+	for _, t := range m.listDueResult {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return domain.DirectTask{}, errors.New("not found")
+}
+
+func (m *mockDirectTaskStore) setTask(task domain.DirectTask) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tasks == nil {
+		m.tasks = make(map[string]domain.DirectTask)
+	}
+	m.tasks[task.ID] = task
 }
 func (m *mockDirectTaskStore) List(_ context.Context, _ string) ([]domain.DirectTask, error) {
 	return nil, nil
@@ -537,6 +561,84 @@ func TestCatchUpMissedRuns_ListDueError_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from CatchUpMissedRuns when ListDue fails")
 	}
+}
+
+// TestTick_RecurringTask_StatusRemainsRunningAfterDispatch verifies that after
+// processTask dispatches a recurring task, the Update call uses the fresh record
+// from the store (status=running), not the stale snapshot (status=pending).
+// FR-001: processTask was previously overwriting status with the stale snapshot.
+func TestTick_RecurringTask_StatusRemainsRunningAfterDispatch(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	task := recurringTask("task-status", dueAt)
+
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{task}
+	// Seed the tasks map so Get works; RunNow will update it to running.
+	store.setTask(task)
+
+	// mockDispatcher with a store-aware RunNow that sets status=running.
+	disp := &storeAwareDispatcher{store: store}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+
+	calls := disp.getRunNowCalls()
+	if len(calls) != 1 || calls[0] != "task-status" {
+		t.Errorf("expected RunNow called once with task-status, got %v", calls)
+	}
+
+	// NextRunAt must be updated (recurring reschedule).
+	updates := store.getUpdateCalls()
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 Update call, got %d", len(updates))
+	}
+
+	// The updated task's Status must be running (fresh from store), not pending (stale snapshot).
+	if updates[0].Status != domain.DirectTaskStatusRunning {
+		t.Errorf("expected status=running after recurring dispatch, got %s — stale snapshot overwrote the status", updates[0].Status)
+	}
+	// NextRunAt must still be advanced.
+	if updates[0].NextRunAt == nil || !updates[0].NextRunAt.After(now) {
+		t.Errorf("NextRunAt %v should be a future time after now %v", updates[0].NextRunAt, now)
+	}
+}
+
+// storeAwareDispatcher simulates RunNow updating the store's task to running status.
+type storeAwareDispatcher struct {
+	mu          sync.Mutex
+	RunNowCalls []string
+	store       *mockDirectTaskStore
+}
+
+func (d *storeAwareDispatcher) RunNow(_ context.Context, id string) (domain.DirectTask, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.RunNowCalls = append(d.RunNowCalls, id)
+	// Simulate RunNow: update the store record to running.
+	runningTask := domain.DirectTask{
+		ID:     id,
+		Status: domain.DirectTaskStatusRunning,
+	}
+	d.store.setTask(runningTask)
+	return runningTask, nil
+}
+
+func (d *storeAwareDispatcher) Dispatch(_ context.Context, _, _ string, _ *time.Time, _ domain.DirectTaskSource, _, _ string) (domain.DirectTask, error) {
+	return domain.DirectTask{}, errors.New("not implemented")
+}
+
+func (d *storeAwareDispatcher) getRunNowCalls() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.RunNowCalls))
+	copy(out, d.RunNowCalls)
+	return out
 }
 
 // TestStartLoop_CatchUpFails_ContinuesAndCancels verifies that StartLoop logs

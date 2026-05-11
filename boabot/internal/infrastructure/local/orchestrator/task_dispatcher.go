@@ -155,7 +155,7 @@ func (d *LocalTaskDispatcher) RunNow(ctx context.Context, id string) (domain.Dir
 	if err != nil {
 		return domain.DirectTask{}, err
 	}
-	if task.Status == domain.DirectTaskStatusRunning {
+	if task.Status == domain.DirectTaskStatusRunning || task.Status == domain.DirectTaskStatusDispatching {
 		return task, nil
 	}
 	return d.dispatchNow(ctx, task)

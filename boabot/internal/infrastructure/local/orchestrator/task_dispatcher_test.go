@@ -381,6 +381,76 @@ func TestLocalTaskDispatcher_DispatchWithSchedule_FutureFuture_Pending(t *testin
 	}
 }
 
+// TestRunNow_DispatchingStatus_ReturnsEarlyWithoutDispatch verifies that RunNow
+// returns immediately without dispatching if the task is in DirectTaskStatusDispatching.
+// FR-002: RunNow only guarded against Running; Dispatching was not excluded.
+func TestRunNow_DispatchingStatus_ReturnsEarlyWithoutDispatch(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	// Create a task in dispatching status.
+	task, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "work", domain.Schedule{Mode: domain.ScheduleModeASAP},
+		domain.DirectTaskSourceOperator, "", "", "")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule: %v", err)
+	}
+	// Manually set status to dispatching in the store.
+	ok, err := store.ClaimDue(ctx, task.ID)
+	// ClaimDue only works on pending; the task dispatched immediately (running status).
+	// So we need a pending task: create via DispatchWithSchedule with future schedule.
+	_ = ok
+	_ = err
+
+	// Create a future-pending task, then manually put it in dispatching state.
+	futureTime := time.Now().Add(1 * time.Hour)
+	pendingTask, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "pending work",
+		domain.Schedule{Mode: domain.ScheduleModeFuture, RunAt: &futureTime},
+		domain.DirectTaskSourceOperator, "", "", "")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule for pending: %v", err)
+	}
+
+	// ClaimDue transitions it to dispatching.
+	claimed, err := store.ClaimDue(ctx, pendingTask.ID)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected ClaimDue to succeed")
+	}
+
+	// Verify it's now dispatching.
+	stored, err := store.Get(ctx, pendingTask.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Status != domain.DirectTaskStatusDispatching {
+		t.Fatalf("expected dispatching status, got %q", stored.Status)
+	}
+
+	// Count messages before RunNow.
+	msgsBefore := len(q.getSent())
+
+	// RunNow on a dispatching task must not dispatch again.
+	result, err := dispatcher.RunNow(ctx, pendingTask.ID)
+	if err != nil {
+		t.Fatalf("RunNow on dispatching task: %v", err)
+	}
+
+	// No additional messages should be sent.
+	if len(q.getSent()) != msgsBefore {
+		t.Errorf("expected no new messages sent for dispatching task, got %d extra", len(q.getSent())-msgsBefore)
+	}
+
+	// Returned task should still be in dispatching status.
+	if result.Status != domain.DirectTaskStatusDispatching {
+		t.Errorf("expected result status=dispatching, got %q", result.Status)
+	}
+}
+
 func TestLocalTaskDispatcher_DispatchWithSchedule_Recurring_Pending(t *testing.T) {
 	t.Parallel()
 	store := orchestrator.NewInMemoryDirectTaskStore("")

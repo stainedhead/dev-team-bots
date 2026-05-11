@@ -105,9 +105,14 @@ func (s *SchedulerService) processTask(ctx context.Context, task domain.DirectTa
 		return
 	}
 
-	task.NextRunAt = next
-	task.Status = domain.DirectTaskStatusPending
-	if _, err := s.store.Update(ctx, task); err != nil {
+	// Fetch the fresh record so we don't overwrite the status that RunNow set.
+	fresh, err := s.store.Get(ctx, task.ID)
+	if err != nil {
+		slog.Error("scheduling: Get after RunNow failed", "task_id", task.ID, "err", err)
+		return
+	}
+	fresh.NextRunAt = next
+	if _, err := s.store.Update(ctx, fresh); err != nil {
 		slog.Error("scheduling: Update NextRunAt failed", "task_id", task.ID, "err", err)
 	}
 }

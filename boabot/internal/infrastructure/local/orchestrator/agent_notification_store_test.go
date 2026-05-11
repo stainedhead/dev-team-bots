@@ -266,6 +266,27 @@ func TestAgentNotificationStore_List_FilterBySearch(t *testing.T) {
 	}
 }
 
+func TestAgentNotificationStore_List_FilterByWorkDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	_ = s.Save(ctx, domain.AgentNotification{BotName: "bot-a", Message: "msg1", WorkDir: "/home/user/alpha", Status: domain.AgentNotificationStatusUnread})
+	_ = s.Save(ctx, domain.AgentNotification{BotName: "bot-a", Message: "msg2", WorkDir: "/home/user/beta", Status: domain.AgentNotificationStatusUnread})
+	_ = s.Save(ctx, domain.AgentNotification{BotName: "bot-a", Message: "msg3", WorkDir: "", Status: domain.AgentNotificationStatusUnread})
+
+	list, err := s.List(ctx, domain.AgentNotificationFilter{WorkDir: "alpha"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 notification for dir=alpha, got %d", len(list))
+	}
+	if list[0].Message != "msg1" {
+		t.Errorf("unexpected notification: %q", list[0].Message)
+	}
+}
+
 func TestAgentNotificationStore_List_FilterCombined(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

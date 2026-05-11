@@ -45,7 +45,7 @@ func newID() (string, error) {
 
 // RaiseNotification creates and persists a new AgentNotification.
 // Generates a UUID for the ID, sets Status=unread, sets CreatedAt=now.
-func (s *NotificationService) RaiseNotification(ctx context.Context, botName, taskID, workItemID, message, contextSummary string) (domain.AgentNotification, error) {
+func (s *NotificationService) RaiseNotification(ctx context.Context, botName, taskID, workItemID, workDir, message, contextSummary string) (domain.AgentNotification, error) {
 	id, err := newID()
 	if err != nil {
 		return domain.AgentNotification{}, fmt.Errorf("notifications: generate ID: %w", err)
@@ -56,6 +56,7 @@ func (s *NotificationService) RaiseNotification(ctx context.Context, botName, ta
 		BotName:        botName,
 		TaskID:         taskID,
 		WorkItemID:     workItemID,
+		WorkDir:        workDir,
 		Message:        message,
 		ContextSummary: contextSummary,
 		Status:         domain.AgentNotificationStatusUnread,

@@ -15,6 +15,15 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
+// leafDir returns the last path component of p (equivalent to filepath.Base
+// but returns "" for empty input instead of ".").
+func leafDir(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.Base(p)
+}
+
 // ErrAgentNotificationNotFound is returned when the requested notification does not exist.
 var ErrAgentNotificationNotFound = errors.New("orchestrator: agent notification not found")
 
@@ -131,6 +140,9 @@ func (s *InMemoryAgentNotificationStore) List(_ context.Context, filter domain.A
 			continue
 		}
 		if filter.Search != "" && !strings.Contains(n.Message, filter.Search) {
+			continue
+		}
+		if filter.WorkDir != "" && leafDir(n.WorkDir) != filter.WorkDir {
 			continue
 		}
 		result = append(result, n)

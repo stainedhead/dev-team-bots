@@ -2268,6 +2268,20 @@ const kanbanHTML = `<!DOCTYPE html>
 
     <!-- Board -->
     <div class="pane on" id="pane-board" style="overflow:hidden">
+      <div class="sec-hdr">
+        <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+          <select id="bf-bot" onchange="renderBoard()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+            <option value="">All bots</option>
+          </select>
+          <input id="bf-text" type="text" placeholder="Search title&hellip;" oninput="renderBoard()" style="background:#0f1829;border:1px solid #1a2744;color:#e2e8f0;font-size:.72rem;padding:.25rem .5rem;border-radius:4px;width:10rem"/>
+          <select id="bf-dir" onchange="renderBoard()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+            <option value="">All dirs</option>
+          </select>
+        </div>
+        <div class="sec-acts">
+          <button class="btn btn-secondary btn-sm" onclick="loadBoard()">Refresh</button>
+        </div>
+      </div>
       <div class="board" id="board" style="flex:1;overflow:auto;min-height:0;min-width:0">
         <div class="col col-backlog" id="col-backlog" data-status="backlog" ondragover="ov(event)" ondragleave="ol(event)" ondrop="dp(event)">
           <div class="col-hdr">Backlog <span class="col-cnt" id="n-backlog">0</span></div>
@@ -2329,6 +2343,9 @@ const kanbanHTML = `<!DOCTYPE html>
             <option value="">All bots</option>
           </select>
           <input id="tf-text" type="text" placeholder="Search title&hellip;" oninput="renderTaskList()" style="background:#0f1829;border:1px solid #1a2744;color:#e2e8f0;font-size:.72rem;padding:.25rem .5rem;border-radius:4px;width:10rem"/>
+          <select id="tf-dir" onchange="renderTaskList()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+            <option value="">All dirs</option>
+          </select>
         </div>
         <div class="sec-acts">
           <button id="task-run-btn" class="btn btn-primary btn-sm" disabled onclick="runSelectedTasks()" style="opacity:.35;cursor:not-allowed">Run Selected</button>
@@ -2467,6 +2484,9 @@ const kanbanHTML = `<!DOCTYPE html>
               <option value="">All bots</option>
             </select>
             <input id="nf-text" type="text" placeholder="Search&#x2026;" oninput="loadNotifications()" style="background:#0f1829;border:1px solid #1a2744;color:#e2e8f0;font-size:.72rem;padding:.25rem .5rem;border-radius:4px;width:10rem"/>
+            <select id="nf-dir" onchange="loadNotifications()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+              <option value="">All dirs</option>
+            </select>
           </div>
           <div class="sec-acts">
             <button id="notif-del-btn" class="btn btn-danger btn-sm" disabled onclick="deleteSelectedNotifications()" style="opacity:.35;cursor:not-allowed">Delete Selected</button>
@@ -2691,6 +2711,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var currentTaskFilter='all', taskBotFilter='', taskTextFilter='';
   var allTasksList=[];
   var currentNotifFilter='all', allNotifList=[], notifDetailId=null, notifPollTimer=null;
+  var boardBotFilter='', boardTextFilter='', boardDirFilter='';
 
   function renderBoardAskMsgs(msgs){
     var body=ge('board-ctx-body');
@@ -3003,9 +3024,22 @@ const kanbanHTML = `<!DOCTYPE html>
     return d;
   }
 
+  function getFilteredItems(){
+    var bot=(ge('bf-bot')||{}).value||'';
+    var txt=((ge('bf-text')||{}).value||'').toLowerCase().trim();
+    var dir=(ge('bf-dir')||{}).value||'';
+    return allItems.filter(function(it){
+      if(bot&&it.assigned_to!==bot)return false;
+      if(txt&&(it.title||'').toLowerCase().indexOf(txt)<0&&(it.description||'').toLowerCase().indexOf(txt)<0)return false;
+      if(dir&&leafDir(it.work_dir)!==dir)return false;
+      return true;
+    });
+  }
+
   function renderBoard(){
+    var items=getFilteredItems();
     var buckets={backlog:[],queued:[],'in-progress':[],blocked:[],done:[],errored:[]};
-    allItems.forEach(function(it){(buckets[it.status]||(buckets[it.status]=[])).push(it)});
+    items.forEach(function(it){(buckets[it.status]||(buckets[it.status]=[])).push(it)});
     colCfg.forEach(function(c){
       var body=ge(c.hdr),cnt=ge(c.cnt),list=buckets[c.status]||[];
       cnt.textContent=list.length;
@@ -3042,6 +3076,21 @@ const kanbanHTML = `<!DOCTYPE html>
         if(boardCtxItem){
           var fresh=allItems.find(function(x){return x.id===boardCtxItem.id});
           if(fresh){var prev=boardCtxItem.status;boardCtxItem=fresh;updateBoardCtxMeta(fresh);if(fresh.status!==prev)loadBoardCtx();}
+        }
+        // Rebuild board filter dropdowns.
+        var bsel=ge('bf-bot');
+        if(bsel){
+          var bprev=bsel.value;bsel.innerHTML='<option value="">All bots</option>';
+          var bots={};allItems.forEach(function(it){if(it.assigned_to)bots[it.assigned_to]=1});
+          Object.keys(bots).sort().forEach(function(b){var o=document.createElement('option');o.value=b;o.textContent=b;bsel.appendChild(o)});
+          if(bprev&&bots[bprev])bsel.value=bprev;
+        }
+        var dsel=ge('bf-dir');
+        if(dsel){
+          var dprev=dsel.value;dsel.innerHTML='<option value="">All dirs</option>';
+          var dirs={};allItems.forEach(function(it){var d=leafDir(it.work_dir);if(d)dirs[d]=1});
+          Object.keys(dirs).sort().forEach(function(d){var o=document.createElement('option');o.value=d;o.textContent=d;dsel.appendChild(o)});
+          if(dprev&&dirs[dprev])dsel.value=dprev;
         }
         renderBoard();renderRoster();
       })
@@ -3761,6 +3810,8 @@ const kanbanHTML = `<!DOCTYPE html>
       var instr=(t.instruction||'').toLowerCase();
       return title.indexOf(txt)>=0||instr.indexOf(txt)>=0;
     });
+    var dir=(ge('tf-dir')||{}).value||'';
+    if(dir)list=list.filter(function(t){return leafDir(t.work_dir)===dir});
     return list;
   }
 
@@ -3815,6 +3866,18 @@ const kanbanHTML = `<!DOCTYPE html>
             var o=document.createElement('option');o.value=bn;o.textContent=bn;sel.appendChild(o);
           });
           if(prev&&bots[prev])sel.value=prev;
+        }
+        // Rebuild directory filter dropdown from current task list
+        var dsel=ge('tf-dir');
+        if(dsel){
+          var dprev=dsel.value;
+          dsel.innerHTML='<option value="">All dirs</option>';
+          var dirs={};
+          allTasksList.forEach(function(t){var d=leafDir(t.work_dir);if(d)dirs[d]=1});
+          Object.keys(dirs).sort().forEach(function(d){
+            var o=document.createElement('option');o.value=d;o.textContent=d;dsel.appendChild(o);
+          });
+          if(dprev&&dirs[dprev])dsel.value=dprev;
         }
         renderTaskList();
       })
@@ -5167,6 +5230,8 @@ const kanbanHTML = `<!DOCTYPE html>
     if(bot)params.push('bot='+encodeURIComponent(bot));
     var txt=((ge('nf-text')||{}).value||'').trim();
     if(txt)params.push('q='+encodeURIComponent(txt));
+    var ndir=(ge('nf-dir')||{}).value||'';
+    if(ndir)params.push('dir='+encodeURIComponent(ndir));
     var qs=params.length?'?'+params.join('&'):'';
     api('GET','/api/v1/notifications'+qs,null)
       .then(function(items){
@@ -5181,6 +5246,18 @@ const kanbanHTML = `<!DOCTYPE html>
             var o=document.createElement('option');o.value=bn;o.textContent=bn;sel.appendChild(o);
           });
           if(prev&&bots[prev])sel.value=prev;
+        }
+        // Rebuild directory filter dropdown from loaded notifications.
+        var dsel=ge('nf-dir');
+        if(dsel){
+          var dprev=dsel.value;
+          dsel.innerHTML='<option value="">All dirs</option>';
+          var ndirs={};
+          allNotifList.forEach(function(n){var d=leafDir(n.work_dir);if(d)ndirs[d]=1});
+          Object.keys(ndirs).sort().forEach(function(d){
+            var o=document.createElement('option');o.value=d;o.textContent=d;dsel.appendChild(o);
+          });
+          if(dprev&&ndirs[dprev])dsel.value=dprev;
         }
         renderNotifList();
       })

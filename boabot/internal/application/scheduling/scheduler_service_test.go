@@ -521,3 +521,50 @@ func TestStartLoop_CancelsCleanly(t *testing.T) {
 		t.Fatal("StartLoop did not exit after context cancellation")
 	}
 }
+
+// TestCatchUpMissedRuns_ListDueError_ReturnsError verifies that CatchUpMissedRuns
+// propagates a ListDue error.
+func TestCatchUpMissedRuns_ListDueError_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := newMockStore()
+	store.listDueErr = errors.New("store unavailable")
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	err := svc.CatchUpMissedRuns(context.Background(), time.Now())
+	if err == nil {
+		t.Fatal("expected error from CatchUpMissedRuns when ListDue fails")
+	}
+}
+
+// TestStartLoop_CatchUpFails_ContinuesAndCancels verifies that StartLoop logs
+// a CatchUpMissedRuns error but still enters the tick loop and exits cleanly
+// on context cancellation.
+func TestStartLoop_CatchUpFails_ContinuesAndCancels(t *testing.T) {
+	t.Parallel()
+
+	store := newMockStore()
+	store.listDueErr = errors.New("store unavailable")
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.StartLoop(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartLoop did not exit after context cancellation")
+	}
+}

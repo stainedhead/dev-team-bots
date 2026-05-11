@@ -484,3 +484,136 @@ func TestDelete_DelegatesToStore(t *testing.T) {
 		t.Errorf("after Delete: got %d notifications, want 0", len(all))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Error-path tests (store returns errors)
+// ---------------------------------------------------------------------------
+
+// errStore is an AgentNotificationStore that returns configurable errors.
+type errStore struct {
+	saveErr         error
+	getResult       domain.AgentNotification
+	getErr          error
+	markActionedErr error
+	deleteErr       error
+}
+
+func (e *errStore) Save(_ context.Context, _ domain.AgentNotification) error { return e.saveErr }
+func (e *errStore) Get(_ context.Context, _ string) (domain.AgentNotification, error) {
+	return e.getResult, e.getErr
+}
+func (e *errStore) List(_ context.Context, _ domain.AgentNotificationFilter) ([]domain.AgentNotification, error) {
+	return nil, nil
+}
+func (e *errStore) UnreadCount(_ context.Context) (int, error) { return 0, nil }
+func (e *errStore) AppendDiscuss(_ context.Context, _ string, _ domain.DiscussEntry) error {
+	return nil
+}
+func (e *errStore) MarkActioned(_ context.Context, _ string) error { return e.markActionedErr }
+func (e *errStore) Delete(_ context.Context, _ []string) error     { return e.deleteErr }
+
+func TestRaiseNotification_StoreSaveError_ReturnsError(t *testing.T) {
+	saveErr := errors.New("store: save failed")
+	svc := notifications.NewNotificationService(&errStore{saveErr: saveErr}, newFakeDirectTaskStore())
+	_, err := svc.RaiseNotification(context.Background(), "bot", "", "", "msg", "")
+	if err == nil {
+		t.Fatal("expected error when store.Save fails")
+	}
+}
+
+func TestAppendDiscuss_GetError_ReturnsError(t *testing.T) {
+	getErr := errors.New("store: not found")
+	svc := notifications.NewNotificationService(&errStore{getErr: getErr}, newFakeDirectTaskStore())
+	err := svc.AppendDiscuss(context.Background(), "missing-id", "user", "hello")
+	if err == nil {
+		t.Fatal("expected error when store.Get fails")
+	}
+}
+
+func TestAppendDiscuss_SaveError_ReturnsError(t *testing.T) {
+	saveErr := errors.New("store: save failed")
+	// Get succeeds (returns zero AgentNotification), Save fails.
+	svc := notifications.NewNotificationService(&errStore{saveErr: saveErr}, newFakeDirectTaskStore())
+	err := svc.AppendDiscuss(context.Background(), "any-id", "user", "hello")
+	if err == nil {
+		t.Fatal("expected error when store.Save fails in AppendDiscuss")
+	}
+}
+
+func TestActionNotification_MarkActionedError_ReturnsError(t *testing.T) {
+	markErr := errors.New("store: mark actioned failed")
+	svc := notifications.NewNotificationService(&errStore{markActionedErr: markErr}, newFakeDirectTaskStore())
+	err := svc.ActionNotification(context.Background(), "any-id")
+	if err == nil {
+		t.Fatal("expected error when store.MarkActioned fails")
+	}
+}
+
+func TestDelete_StoreError_ReturnsError(t *testing.T) {
+	delErr := errors.New("store: delete failed")
+	svc := notifications.NewNotificationService(&errStore{deleteErr: delErr}, newFakeDirectTaskStore())
+	err := svc.Delete(context.Background(), []string{"id-1"})
+	if err == nil {
+		t.Fatal("expected error when store.Delete fails")
+	}
+}
+
+func TestRequeueTask_UpdateError_ReturnsError(t *testing.T) {
+	_, notifStore, _ := newSvc(t)
+	ctx := context.Background()
+
+	// Seed a task store that fails on Update.
+	failingTS := &failOnUpdateTaskStore{tasks: make(map[string]domain.DirectTask)}
+	task := domain.DirectTask{
+		ID:          "task-upd-err",
+		Instruction: "do it",
+		Status:      domain.DirectTaskStatusSucceeded,
+	}
+	failingTS.tasks[task.ID] = task
+
+	svc2 := notifications.NewNotificationService(notifStore, failingTS)
+	n, _ := svc2.RaiseNotification(ctx, "bot", "task-upd-err", "", "blocked", "")
+
+	err := svc2.RequeueTask(ctx, n.ID)
+	if err == nil {
+		t.Fatal("expected error when taskStore.Update fails")
+	}
+}
+
+// failOnUpdateTaskStore is a DirectTaskStore that fails only on Update.
+type failOnUpdateTaskStore struct {
+	mu    sync.RWMutex
+	tasks map[string]domain.DirectTask
+}
+
+func (f *failOnUpdateTaskStore) Create(_ context.Context, t domain.DirectTask) (domain.DirectTask, error) {
+	return t, nil
+}
+func (f *failOnUpdateTaskStore) Update(_ context.Context, _ domain.DirectTask) (domain.DirectTask, error) {
+	return domain.DirectTask{}, errors.New("fake: update failed")
+}
+func (f *failOnUpdateTaskStore) Get(_ context.Context, id string) (domain.DirectTask, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	t, ok := f.tasks[id]
+	if !ok {
+		return domain.DirectTask{}, errors.New("fake: not found")
+	}
+	return t, nil
+}
+func (f *failOnUpdateTaskStore) List(_ context.Context, _ string) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (f *failOnUpdateTaskStore) ListAll(_ context.Context) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (f *failOnUpdateTaskStore) ListBySource(_ context.Context, _ domain.DirectTaskSource) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (f *failOnUpdateTaskStore) Delete(_ context.Context, _ string) error { return nil }
+func (f *failOnUpdateTaskStore) ListDue(_ context.Context, _ time.Time) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (f *failOnUpdateTaskStore) ClaimDue(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}

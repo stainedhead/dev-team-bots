@@ -307,3 +307,92 @@ func TestDetectAndHandle_DifferentThreads_Isolated(t *testing.T) {
 		t.Errorf("expected 0 dispatch calls, got %d", len(d.calls))
 	}
 }
+
+// --- ASAP schedule (no time keyword) ----------------------------------------
+
+// TestDetectAndHandle_ASAPDispatch_SuccessMessageHasASAP verifies that when a
+// task is confirmed with an ASAP schedule, the success message contains "ASAP"
+// and not a formatted timestamp.
+func TestDetectAndHandle_ASAPDispatch_SuccessMessageHasASAP(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	m := orchestrator.NewChatTaskManager(d)
+
+	// "create task" = action, "architect" = known bot keyword → 2 hits, no time.
+	taskMsg := "create task for the architect bot"
+	_, handled, err := m.DetectAndHandle(context.Background(), "thread-asap", taskMsg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled=true")
+	}
+
+	resp, handled2, err := m.DetectAndHandle(context.Background(), "thread-asap", "yes")
+	if err != nil {
+		t.Fatalf("unexpected error on confirm: %v", err)
+	}
+	if !handled2 {
+		t.Fatal("expected handled=true on confirm")
+	}
+	if !strings.Contains(resp, "ASAP") {
+		t.Errorf("expected 'ASAP' in success message for ASAP schedule, got: %s", resp)
+	}
+}
+
+// --- "at N" time detection ---------------------------------------------------
+
+// TestDetectAndHandle_AtTimeKeyword_Detected verifies that " at N" (digit
+// after "at") triggers time detection even without standard recurrence words.
+func TestDetectAndHandle_AtTimeKeyword_Detected(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	m := orchestrator.NewChatTaskManager(d)
+
+	// No "every"/"daily"/day-name — relies on " at 2pm" digit detection.
+	msg := "schedule a task at 2pm for the architect bot"
+	_, handled, err := m.DetectAndHandle(context.Background(), "thread-at", msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Errorf("expected handled=true when ' at N' present, got false")
+	}
+}
+
+// --- "for" without "the" bot name extraction ---------------------------------
+
+// TestDetectAndHandle_ForWithoutThe_ExtractsBotName verifies that
+// extractBotNameFromFor handles the " for " pattern (no "the").
+func TestDetectAndHandle_ForWithoutThe_ExtractsBotName(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	m := orchestrator.NewChatTaskManager(d)
+
+	// "add task" = action, "bot" present, " for " (no "for the") → bot name extraction
+	msg := "add task run reports for reporting bot"
+	_, handled, err := m.DetectAndHandle(context.Background(), "thread-for", msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Two signals: action + bot. Should be detected.
+	if !handled {
+		t.Errorf("expected handled=true, got false (resp would be empty)")
+	}
+}
+
+// --- ParseScheduleNL: HH:MM format ------------------------------------------
+
+// TestParseScheduleNL_HHMMFormat verifies that "at 09:30" is parsed as a
+// 9h30m TimeOfDay on a recurring daily rule.
+func TestParseScheduleNL_HHMMFormat(t *testing.T) {
+	schedule := orchestrator.ParseScheduleNL("daily at 09:30")
+
+	if schedule.Mode != domain.ScheduleModeRecurring {
+		t.Fatalf("expected Recurring, got %q", schedule.Mode)
+	}
+	if schedule.Rule == nil {
+		t.Fatal("expected Rule to be set")
+	}
+	wantTimeOfDay := 9*time.Hour + 30*time.Minute
+	if schedule.Rule.TimeOfDay != wantTimeOfDay {
+		t.Errorf("expected TimeOfDay=%v, got %v", wantTimeOfDay, schedule.Rule.TimeOfDay)
+	}
+}

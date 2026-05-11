@@ -173,6 +173,9 @@ Operators can currently only schedule a task to run once — either immediately 
 - [ ] A user can instruct the Orchestrator via Chat to create a recurring task; the Orchestrator requests confirmation before saving
 - [ ] Only users with the human or orchestrator role can create tasks; attempts by other bots are rejected
 - [ ] If the Orchestrator restarts and one or more scheduled runs were missed, those tasks execute immediately on restart (collapsing multiple missed occurrences of the same task into a single catch-up run)
+- [ ] Entering a natural language recurrence string shows a structured preview of the parsed rule before the task is saved; saving is blocked until the user confirms
+- [ ] The Notifications list screen shows All / Single / Recurring filters, a bot filter, a search field, Refresh, and Delete Selected — all functional
+- [ ] A bot can request assistance from another bot via a subagent thread; the assisting bot receives the requesting bot's task context and its response is returned into the requester's active task context
 
 ---
 
@@ -184,6 +187,11 @@ Operators can currently only schedule a task to run once — either immediately 
 | Orchestrator task approval UX in Chat is complex to get right | Medium | Prototype the confirmation flow early; iterate |
 | DB migration on existing deployments with many tasks | Low | Non-breaking defaults; run migration in transaction |
 | Scheduling loop contention with task execution goroutines | Low | Loop only enqueues; workers consume — no shared mutable state beyond DB |
+| Scheduler double-enqueue on concurrent ticks | Medium | `Tick` must be guarded: use DB-level idempotent upsert or application-level mutex so the same task cannot be enqueued twice before its status updates to `running` |
+| Invalid recurrence rule (no valid days selected) | Medium | `RecurrenceRule.Validate()` must reject rules that produce no future occurrences; `NextAfter()` must never loop infinitely |
+| NL parse failure at task creation | Medium | If the model returns no parseable rule, surface an error to the user and leave the dialog open; never silently persist an empty or default rule |
+| `RequeueTask` race on already-running task | Low | Check task status before requeue; return a 409 Conflict if task is currently running |
+| Unbounded `discuss_thread` growth | Low | Cap discuss thread at a configurable max entries (default 100); oldest entries truncated on overflow |
 
 ---
 
@@ -201,6 +209,11 @@ Operators can currently only schedule a task to run once — either immediately 
 | M8 — Integration + quality pass | Full test suite, lint, coverage |
 
 ---
+
+## Open Questions
+
+- **Tick concurrency guard:** What mechanism prevents double-enqueue when two `Tick` calls overlap? Options: DB-level `UPDATE … WHERE status = 'pending'` returning affected rows (preferred), or application-level mutex. Decision must be made before M2 starts.
+- **Max discuss thread size:** Configurable cap (default 100 entries) chosen to bound DB row size. Confirm this default is acceptable before M3 starts.
 
 ## References
 

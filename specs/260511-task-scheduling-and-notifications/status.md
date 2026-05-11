@@ -27,7 +27,7 @@
 - [x] spec.md populated from PRD
 - [x] All phase files initialized
 - [x] Research questions identified (see research.md)
-- [ ] Phase 0 sign-off
+- [x] Phase 0 sign-off — spec reviewed; 3 warnings resolved (missing ACs, edge cases, open questions)
 
 ---
 
@@ -40,3 +40,4 @@ None.
 ## Recent Activity
 
 - 2026-05-11: Spec directory created from PRD; all phase files initialized
+- 2026-05-11: Spec review complete; added 3 missing ACs (FR-005, FR-012, FR-016), 5 edge cases, 2 open questions

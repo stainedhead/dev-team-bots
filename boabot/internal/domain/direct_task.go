@@ -31,6 +31,8 @@ type DirectTask struct {
 	DispatchedAt *time.Time       `json:"dispatched_at,omitempty"`
 	CompletedAt  *time.Time       `json:"completed_at,omitempty"`
 	Output       string           `json:"output,omitempty"`
+	Schedule     Schedule         `json:"schedule,omitempty"`
+	NextRunAt    *time.Time       `json:"next_run_at,omitempty"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
@@ -41,6 +43,9 @@ type DirectTaskStatus string
 const (
 	// DirectTaskStatusPending means the task has been created but not yet sent to the bot.
 	DirectTaskStatusPending DirectTaskStatus = "pending"
+	// DirectTaskStatusDispatching is a transient status set by ClaimDue to atomically
+	// reserve a pending task before it is handed to the dispatcher.
+	DirectTaskStatusDispatching DirectTaskStatus = "dispatching"
 	// DirectTaskStatusRunning means the task message has been sent and the bot is executing it.
 	DirectTaskStatusRunning DirectTaskStatus = "running"
 	// DirectTaskStatusFailed means the task could not be dispatched or the bot reported an error.
@@ -64,6 +69,11 @@ type DirectTaskStore interface {
 	ListBySource(ctx context.Context, source DirectTaskSource) ([]DirectTask, error)
 	// Delete removes the task with the given ID from the store.
 	Delete(ctx context.Context, id string) error
+	// ListDue returns all pending tasks whose NextRunAt is non-nil and <= now.
+	ListDue(ctx context.Context, now time.Time) ([]DirectTask, error)
+	// ClaimDue atomically transitions the task from pending to dispatching.
+	// Returns true if the claim succeeded; false if the task was not in pending status.
+	ClaimDue(ctx context.Context, id string) (bool, error)
 }
 
 // TaskDispatcher assigns immediate or scheduled tasks to bots.

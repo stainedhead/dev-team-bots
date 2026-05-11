@@ -263,3 +263,118 @@ func TestInMemoryDirectTaskStore_ListAll_SortedNewestFirst(t *testing.T) {
 		t.Errorf("expected last item to have CreatedAt=%v, got %v", t1, items[2].CreatedAt)
 	}
 }
+
+func TestInMemoryDirectTaskStore_ListDue_ReturnsPendingTasksWithNextRunAtInPast(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	past := time.Now().Add(-1 * time.Minute)
+	future := time.Now().Add(1 * time.Hour)
+
+	// due: pending + NextRunAt in past
+	due, _ := store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending, NextRunAt: &past})
+	// not due: pending + NextRunAt in future
+	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending, NextRunAt: &future})
+	// not due: pending + nil NextRunAt
+	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending})
+	// not due: running + NextRunAt in past
+	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusRunning, NextRunAt: &past})
+
+	results, err := store.ListDue(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("ListDue: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 due task, got %d", len(results))
+	}
+	if results[0].ID != due.ID {
+		t.Errorf("expected due task ID=%q, got %q", due.ID, results[0].ID)
+	}
+}
+
+func TestInMemoryDirectTaskStore_ListDue_ExactlyAtNow_Included(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	now := time.Now()
+	at := now
+	_, _ = store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending, NextRunAt: &at})
+
+	results, err := store.ListDue(ctx, now)
+	if err != nil {
+		t.Fatalf("ListDue: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected 1 due task at exact time, got %d", len(results))
+	}
+}
+
+func TestInMemoryDirectTaskStore_ClaimDue_PendingTask_ReturnsTrue(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	past := time.Now().Add(-1 * time.Minute)
+	created, _ := store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending, NextRunAt: &past})
+
+	claimed, err := store.ClaimDue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if !claimed {
+		t.Error("expected ClaimDue to return true for pending task")
+	}
+
+	got, _ := store.Get(ctx, created.ID)
+	if got.Status != domain.DirectTaskStatusDispatching {
+		t.Errorf("expected status=dispatching after claim, got %q", got.Status)
+	}
+}
+
+func TestInMemoryDirectTaskStore_ClaimDue_AlreadyClaimed_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	past := time.Now().Add(-1 * time.Minute)
+	created, _ := store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusPending, NextRunAt: &past})
+
+	_, _ = store.ClaimDue(ctx, created.ID)
+	claimed, err := store.ClaimDue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ClaimDue second call: %v", err)
+	}
+	if claimed {
+		t.Error("expected ClaimDue to return false for already-claimed task")
+	}
+}
+
+func TestInMemoryDirectTaskStore_ClaimDue_RunningTask_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	past := time.Now().Add(-1 * time.Minute)
+	created, _ := store.Create(ctx, domain.DirectTask{BotName: "dev-1", Status: domain.DirectTaskStatusRunning, NextRunAt: &past})
+
+	claimed, err := store.ClaimDue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ClaimDue running: %v", err)
+	}
+	if claimed {
+		t.Error("expected ClaimDue to return false for running task")
+	}
+}
+
+func TestInMemoryDirectTaskStore_ClaimDue_NotFound_ReturnsError(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	ctx := context.Background()
+
+	_, err := store.ClaimDue(ctx, "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent task ID, got nil")
+	}
+}

@@ -130,12 +130,18 @@ Operators can currently only schedule a task to run once — either immediately 
 - `boabot/internal/application/scheduling/scheduler_service_test.go`
 - `boabot/internal/application/notifications/notification_service.go`
 - `boabot/internal/application/notifications/notification_service_test.go`
-- `boabot/internal/infrastructure/db/migrations/YYYYMMDD_add_scheduling_and_notifications.sql`
+- `boabot/internal/domain/agent_notification.go` — replaces spec's `notification.go` (avoids collision with existing `domain/notification` outbound package)
+- `boabot/internal/domain/mocks/mock_agent_notification_store.go`
+- `boabot/internal/application/scheduling/scheduler_service.go`
+- `boabot/internal/application/scheduling/scheduler_service_test.go`
+- `boabot/internal/application/notifications/notification_service.go`
+- `boabot/internal/application/notifications/notification_service_test.go`
+- `boabot/internal/infrastructure/local/orchestrator/agent_notification_store.go`
 
 ### Files to Modify
-- `boabot/internal/domain/orchestrator.go` — extend Task type
-- `boabot/internal/application/orchestrator/` — task creation/update use cases
-- `boabot/internal/infrastructure/db/` — task repo, new notification repo
+- `boabot/internal/domain/direct_task.go` — add `Schedule`, `NextRunAt`; extend `DirectTaskStore` with `ListDue`, `ClaimDue`
+- `boabot/internal/infrastructure/local/orchestrator/direct_task_store.go` — implement `ListDue`, `ClaimDue`
+- `boabot/internal/infrastructure/local/orchestrator/task_dispatcher.go` — integrate with scheduling
 - `boabot/internal/infrastructure/http/server.go` — UI + API
 
 ### Dependencies
@@ -212,8 +218,10 @@ Operators can currently only schedule a task to run once — either immediately 
 
 ## Open Questions
 
-- **Tick concurrency guard:** What mechanism prevents double-enqueue when two `Tick` calls overlap? Options: DB-level `UPDATE … WHERE status = 'pending'` returning affected rows (preferred), or application-level mutex. Decision must be made before M2 starts.
-- **Max discuss thread size:** Configurable cap (default 100 entries) chosen to bound DB row size. Confirm this default is acceptable before M3 starts.
+None — all resolved before implementation.
+
+- **Tick concurrency guard:** ✅ Resolved — `DirectTaskStore` uses a file-backed in-memory store (not MariaDB). Concurrency guard is implemented as an atomic `ClaimDue(id) bool` method on the store that checks-and-sets status under mutex. Only tasks successfully claimed proceed to dispatch.
+- **Max discuss thread size:** ✅ Resolved — Hard cap of 100 entries. Oldest entries truncated on overflow.
 
 ## References
 

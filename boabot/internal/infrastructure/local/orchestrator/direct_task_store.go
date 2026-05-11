@@ -180,3 +180,42 @@ func (s *InMemoryDirectTaskStore) ListBySource(_ context.Context, source domain.
 	})
 	return result, nil
 }
+
+// ListDue returns all pending tasks whose NextRunAt is non-nil and <= now.
+func (s *InMemoryDirectTaskStore) ListDue(_ context.Context, now time.Time) ([]domain.DirectTask, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]domain.DirectTask, 0)
+	for _, task := range s.tasks {
+		if task.Status != domain.DirectTaskStatusPending {
+			continue
+		}
+		if task.NextRunAt == nil || task.NextRunAt.After(now) {
+			continue
+		}
+		result = append(result, task)
+	}
+	return result, nil
+}
+
+// ClaimDue atomically transitions the given task from pending to dispatching.
+// Returns true if the claim succeeded (task was pending). Returns false, nil
+// if the task exists but is not in pending status.
+func (s *InMemoryDirectTaskStore) ClaimDue(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[id]
+	if !ok {
+		return false, ErrDirectTaskNotFound
+	}
+	if task.Status != domain.DirectTaskStatusPending {
+		return false, nil
+	}
+	task.Status = domain.DirectTaskStatusDispatching
+	task.UpdatedAt = time.Now().UTC()
+	s.tasks[id] = task
+	s.persist()
+	return true, nil
+}

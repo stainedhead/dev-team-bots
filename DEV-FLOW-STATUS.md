@@ -1,7 +1,7 @@
 # Dev-Flow Implementation Status
 
 **PRD:** task-scheduling-and-notifications-PRD.md
-**Spec:** specs/260511-task-scheduling-and-notifications (set after Step 1)
+**Spec:** specs/260511-task-scheduling-and-notifications
 **Branch:** feat/repeative-tasks-scheduling
 **Review PRD:** task-scheduling-and-notifications-auto-review-PRD.md
 **Process Start:** 2026-05-11T00:00:00Z
@@ -12,9 +12,9 @@
 
 | Step | Name | Status | Start | End | Runtime (min) |
 |------|------|--------|-------|-----|---------------|
-| 1  | Create Spec from PRD            | 🔄 In Progress | 2026-05-11T00:00:00Z | — | — |
-| 2  | Review Spec                     | ⬜ Pending | — | — | — |
-| 3  | Implement Product               | ⬜ Pending | — | — | — |
+| 1  | Create Spec from PRD            | ✅ Complete | 2026-05-11T00:00:00Z | 2026-05-11T00:15:00Z | 15 |
+| 2  | Review Spec                     | ✅ Complete | 2026-05-11T00:15:00Z | 2026-05-11T00:30:00Z | 15 |
+| 3  | Implement Product               | 🔄 In Progress | 2026-05-11T00:30:00Z | — | — |
 | 4  | Documentation and User Docs     | ⬜ Pending | — | — | — |
 | 5  | Code and Design Review          | ⬜ Pending | — | — | — |
 | 6  | Prepare Review PRD              | ⬜ Pending | — | — | — |

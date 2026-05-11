@@ -39,6 +39,10 @@ func (f *fakeTaskStore) ListBySource(ctx context.Context, source domain.DirectTa
 	return nil, nil
 }
 func (f *fakeTaskStore) Delete(ctx context.Context, id string) error { return nil }
+func (f *fakeTaskStore) ListDue(_ context.Context, _ time.Time) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (f *fakeTaskStore) ClaimDue(_ context.Context, _ string) (bool, error) { return false, nil }
 
 type fakeBoardItemDispatcher struct {
 	mu         sync.Mutex

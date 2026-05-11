@@ -15,8 +15,8 @@
 | 2 | Research & Data Modeling | ✅ Complete | |
 | 3 | Architecture & Planning | ✅ Complete | |
 | 4 | Task Breakdown | ✅ Complete | |
-| 5 | Implementation | 🔄 In Progress | M8 quality pass complete; docs pending |
-| 6 | Completion & Archival | ⬜ Not Started | |
+| 5 | Implementation | ✅ Complete | All M1–M8 tasks done; docs updated |
+| 6 | Completion & Archival | 🔄 In Progress | Archiving spec now |
 
 ---
 

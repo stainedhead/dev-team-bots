@@ -10,6 +10,8 @@
 - Maintains a local filesystem memory directory (`local/fs` package); optional scheduled GitHub git backup keeps memory durable across restarts (configurable, default every 30 minutes).
 - Performs semantic search via a local BM25 feature-hash embedder (`local/bm25`) and cosine similarity vector store (`local/vector`) — no external embedding API required.
 - Tracks token spend and tool call counts in a local budget tracker (`local/budget`), persisted to a JSON file.
+- Schedules tasks at ASAP, future, or recurring (daily/weekly/monthly) times via a `SchedulerService` that polls every 10 seconds with atomic claim-and-dispatch to prevent double-execution.
+- Raises in-app `AgentNotification` records that appear in the operator UI, supporting a discuss thread and operator-initiated task requeue.
 - Monitors heap usage via a configurable watchdog (`local/watchdog`) that logs a warning at a soft limit and shuts down gracefully if the hard limit is exceeded.
 - Anthropic Claude is the primary model provider, configured via `ANTHROPIC_API_KEY`; AWS Bedrock is supported as an optional alternative model provider via `internal/infrastructure/aws/bedrock`.
 - Configuration loaded from per-bot `config.yaml` and a shared `team.yaml`; credentials loaded from `~/.boabot/credentials` INI file and environment variables — no secrets are stored in config files.

@@ -40,6 +40,44 @@ All message handlers in the orchestrator are idempotent. SQS visibility timeouts
 
 On first startup with an empty database, the orchestrator creates a bootstrap Admin account. Credentials are logged once and only once — capture them immediately. Use `baobotctl user set-pwd` to change the password after first login.
 
+## Task Scheduling
+
+When creating a task via `POST /api/bots/:name/tasks`, include a `schedule` field to control when it runs:
+
+- **ASAP** (default) — task is dispatched immediately when a slot is free.
+- **Future** — provide `"mode": "future"` and `"run_at": "<RFC3339 timestamp>"`. The task is held until that time.
+- **Recurring** — provide `"mode": "recurring"` and a `"rule"` object with `"frequency"` (`"daily"`, `"weekly"`, or `"monthly"`), and the appropriate time fields (`"time_of_day_seconds"`, `"days_mask"` for weekly, `"month_day"` for monthly). After each run the next occurrence is computed automatically.
+
+The scheduling loop checks for due tasks every 10 seconds. If the process was restarted, any tasks that became due during downtime are dispatched immediately on startup (catch-up pass).
+
+When using the Assign Task dialog in the web UI, a schedule builder lets you select the mode and configure recurrence options — day checkboxes, a time picker, or a natural-language text field (e.g., "every Monday at 9am").
+
+You can also create scheduled tasks through operator chat. Type a request such as "ask Claude to run the daily report every morning at 8am" — the orchestrator detects the scheduling intent, describes what it understood, and asks for confirmation before creating the task.
+
+## Agent Notifications
+
+Bots can surface notifications in the orchestrator UI when they need operator attention (for example, when a task is blocked or requires a decision). Notifications appear on the Notifications tab of the kanban board.
+
+### Lifecycle
+
+| Status | Meaning |
+|---|---|
+| `unread` | Notification has not been viewed. The tab badge shows the unread count. |
+| `read` | Operator has opened the discuss thread. |
+| `actioned` | Operator has explicitly marked the notification actioned. |
+
+### Discuss Thread
+
+Each notification has a discuss thread (capped at 100 entries). You can post messages to the bot directly from the notification detail panel. The bot can reply, giving you a back-and-forth channel on the specific notification without leaving the UI.
+
+### Requeue
+
+The Requeue button re-submits the originating task to the bot at ASAP priority, with the full discuss thread prepended as context. Use this to give the bot updated instructions or clarification after a discussion.
+
+### Bulk Delete
+
+Select one or more notifications and use the Delete button to remove them. This is a permanent action.
+
 ## Monitoring
 
 The orchestrator logs:

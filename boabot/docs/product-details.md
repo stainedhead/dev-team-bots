@@ -319,6 +319,65 @@ Each CLI tool call spawns a subprocess via `CLIAgentRunner.Run`. The subprocess 
 
 Claude Code output is parsed as `stream-json` events. Only `content_block_delta` text deltas are extracted; internal scaffolding events (tool calls, system prompts) are filtered out. The returned string is the accumulated assistant text, trimmed of trailing newlines.
 
+## Task Scheduling and Notifications
+
+### Direct-Task Scheduling
+
+Each `DirectTask` carries a `Schedule` field that selects one of three dispatch modes:
+
+| Mode | Behaviour |
+|---|---|
+| `asap` (default) | Dispatched immediately. |
+| `future` | Dispatched at or after `NextRunAt`. |
+| `recurring` | Dispatched on a `RecurrenceRule` (daily/weekly/monthly). After each run the next `NextRunAt` is computed and the task is re-persisted. |
+
+A `RecurrenceRule` specifies `Frequency` (`daily`, `weekly`, `monthly`), `DaysMask` (bitmask 0–127 for days Sun–Sat, weekly only), `TimeOfDaySeconds` (seconds from midnight), and `MonthDay` (1–31, monthly only).
+
+### Scheduling Loop
+
+A `SchedulerService` runs every 10 seconds. Each tick calls `ListDue` to find tasks whose `NextRunAt` is in the past, then calls `ClaimDue` to atomically mark each due task `dispatching` before handing it off. The `dispatching` status acts as a claim guard — a second scheduler tick cannot dispatch the same task while a dispatch is in flight. On process startup, `CatchUpMissedRuns` fires once to dispatch any tasks that became due during downtime.
+
+### Agent Notifications
+
+Bots can raise `AgentNotification` records that appear in the operator UI (distinct from outbound Slack or SNS notifications). Each notification has:
+
+- **Status lifecycle:** `unread` → `read` (automatically on first discuss entry) → `actioned`.
+- **Discuss thread:** a capped FIFO queue of up to 100 entries. Operators post messages; the associated bot can reply. Thread context is prepended to the task when a requeue is requested.
+- **RequeueTask:** the operator action that prepends the discuss thread as context and re-queues the originating task at ASAP priority, giving the bot full conversation history.
+
+Notifications are persisted to `notifications.json` alongside other local store files.
+
+### HTTP API (Notifications)
+
+Five new endpoints expose notification management:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/notifications` | List notifications. Optional `?bot=`, `?status=`, `?search=` filters. |
+| `GET` | `/api/notifications/count` | Unread count. |
+| `POST` | `/api/notifications/:id/discuss` | Append an entry to the discuss thread. |
+| `POST` | `/api/notifications/:id/requeue` | Prepend discuss thread as context and re-queue the originating task. |
+| `DELETE` | `/api/notifications` | Bulk delete. Request body: `{"ids": [...]}`. |
+
+The task creation endpoint `POST /api/bots/:name/tasks` is extended to accept a `schedule` object:
+
+```json
+{
+  "mode": "asap|future|recurring",
+  "run_at": "<RFC3339>",
+  "rule": {
+    "frequency": "daily|weekly|monthly",
+    "days_mask": 0,
+    "time_of_day_seconds": 0,
+    "month_day": 1
+  }
+}
+```
+
+### Chat-Driven Task Management
+
+The `ChatTaskManager` (wired into the orchestrator chat endpoint) detects task-management intent in operator messages using keyword scoring across three signal categories: action words, time references, and bot names. A score of 2 or more triggers a confirmation flow: the bot describes the inferred intent and the operator confirms or cancels before the task is dispatched. `ParseScheduleNL` converts natural-language schedule strings such as "every Monday at 9am" into a structured `RecurrenceRule`. Non-orchestrator bots are unaffected.
+
 ## Tech-Lead Pool Management
 
 The orchestrator maintains a pool of tech-lead instances keyed to In Progress kanban items. The goal is that every active work item always has a dedicated tech-lead standing by to coordinate it, with minimal cold-start latency.

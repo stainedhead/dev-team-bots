@@ -77,6 +77,14 @@ func (f *fakeDirectTaskStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeDirectTaskStore) ListDue(_ context.Context, _ time.Time) ([]domain.DirectTask, error) {
+	return []domain.DirectTask{}, nil
+}
+
+func (f *fakeDirectTaskStore) ClaimDue(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 type fakeTaskDispatcher struct {
 	dispatchFn func(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string, workDir string) (domain.DirectTask, error)
 }

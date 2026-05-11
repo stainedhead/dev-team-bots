@@ -16,9 +16,11 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/imgs"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	appbackup "github.com/stainedhead/dev-team-bots/boabot/internal/application/backup"
+	appnotifications "github.com/stainedhead/dev-team-bots/boabot/internal/application/notifications"
 	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	appplugin "github.com/stainedhead/dev-team-bots/boabot/internal/application/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/pool"
+	appscheduling "github.com/stainedhead/dev-team-bots/boabot/internal/application/scheduling"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/subteam"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure"
@@ -594,6 +596,9 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		orchChatStore = tm.sharedChatStore
 
+		// Wire ChatTaskManager for intent detection in chat messages.
+		chatTaskMgr := apporchestrator.NewChatTaskManager(dispatcher)
+
 		// Wire LocalSkillRegistry; fall back to noop if the directory cannot be created.
 		var skillReg domain.SkillRegistry = orchestratorlocal.NoopSkillRegistry{}
 		if sr, srErr := orchestratorlocal.NewLocalSkillRegistry(filepath.Join(memPath, "skills")); srErr == nil {
@@ -615,6 +620,12 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 		})
 
+		// Wire AgentNotificationStore and NotificationService.
+		notifStore := orchestratorlocal.NewInMemoryAgentNotificationStore(
+			filepath.Join(memPath, "notifications.json"),
+		)
+		notifSvc := appnotifications.NewNotificationService(notifStore, orchTaskStore)
+
 		// Wire plugin system if install_dir is configured.
 		srvCfg := httpserver.Config{
 			Auth:             oAuth,
@@ -634,6 +645,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			FaviconIconPNG:   imgs.FaviconIcon,
 			BoardDispatcher:  boardDispatch,
 			MaxConcurrent:    maxConcurrent,
+			Notifications:    notifSvc,
+			ChatTaskManager:  chatTaskMgr,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.
@@ -700,6 +713,14 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		})
 		go func() {
 			queueRunner.Start(httpCtx)
+		}()
+
+		// Start SchedulerService loop — drives recurring and future-scheduled tasks.
+		schedulerSvc := appscheduling.NewSchedulerService(orchTaskStore, dispatcher)
+		go func() {
+			if err := schedulerSvc.StartLoop(httpCtx); err != nil && err != context.Canceled {
+				slog.Error("scheduler loop exited with error", "bot", entry.Name, "err", err)
+			}
 		}()
 
 		// Run retention cleanup immediately on start, then daily.

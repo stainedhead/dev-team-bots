@@ -222,12 +222,14 @@ func TestInMemoryChatStore_ListThreads_ReturnsSortedByUpdatedAt(t *testing.T) {
 	t1, _ := store.CreateThread(ctx, "older", []string{"dev-1"})
 	t2, _ := store.CreateThread(ctx, "newer", []string{"qa-1"})
 
-	// Append a message to t2 to advance its UpdatedAt.
+	// Append a message to t2 with an explicit future timestamp to advance its
+	// UpdatedAt deterministically regardless of parallel test load.
 	_ = store.Append(ctx, domain.ChatMessage{
 		ThreadID:  t2.ID,
 		BotName:   "qa-1",
 		Direction: domain.ChatDirectionOutbound,
 		Content:   "ping",
+		CreatedAt: t2.CreatedAt.Add(time.Second),
 	})
 
 	threads, err := store.ListThreads(ctx)

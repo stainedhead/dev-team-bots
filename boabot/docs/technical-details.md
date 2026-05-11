@@ -445,6 +445,53 @@ orchestrator:
 
 `TeamManager.Run()` now pre-resolves the plugin store before launching any bot goroutines. It scans `teamCfg.Team` for the orchestrator entry (the one with `Orchestrator.Plugins.InstallDir` set), loads that bot's config, and calls `localplugin.NewLocalPluginStore(installDir)`. The result is stored in read-only local variables (`resolvedPluginStore`, `resolvedInstallDir`) that are passed as parameters to each `startBot` call. No struct fields are written from goroutines. This eliminates the previous data race where concurrent `startBot` goroutines wrote `tm.pluginStore` while others read it.
 
+## Task Scheduling and Notifications
+
+### New Domain Files
+
+| File | Purpose |
+|---|---|
+| `internal/domain/schedule.go` | `Schedule` (mode + `NextRunAt`), `RecurrenceRule` (frequency, `DaysMask`, `TimeOfDaySeconds`, `MonthDay`), `ScheduleMode` constants (`asap`, `future`, `recurring`), `DirectTask.Schedule` field extension |
+| `internal/domain/agent_notification.go` | `AgentNotification`, `NotificationStatus` (`unread`, `read`, `actioned`), `DiscussEntry`, `AgentNotificationStore` interface |
+
+### New Application Packages
+
+**`internal/application/scheduling/`**
+
+`SchedulerService` polls `DirectTaskStore.ListDue` every 10 seconds. For each due task it calls `DirectTaskStore.ClaimDue`, which atomically sets the task status to `dispatching` under a mutex. Only the goroutine that wins `ClaimDue` dispatches the task; concurrent ticks skip tasks already in `dispatching` state. On startup, `CatchUpMissedRuns` performs one immediate pass to cover tasks that became due during downtime. After a recurring task fires, `AdvanceRecurrence` computes the next `NextRunAt` and persists it before dispatching.
+
+**`internal/application/notifications/`**
+
+`NotificationService` implements create, list (with bot / status / search filters), read-mark, discuss-append, requeue, and bulk-delete operations. Requeue prepends the full discuss thread as context to the originating task payload and calls the task dispatcher at ASAP priority. All mutations are delegated to `AgentNotificationStore`.
+
+**`internal/application/orchestrator/chat_task_manager.go`**
+
+`ChatTaskManager` scores operator chat messages across three keyword categories (action verbs, time expressions, bot names). Messages scoring 2+ signals enter a two-step confirmation flow: the bot responds with its interpretation; the operator confirms or cancels. `ParseScheduleNL` converts natural-language strings (e.g., "every Monday at 9am") into a `RecurrenceRule`. This path is active only in orchestrator mode; non-orchestrator bot chat is unaffected.
+
+### New Infrastructure
+
+**`internal/infrastructure/local/orchestrator/agent_notification_store.go`**
+
+File-backed `AgentNotificationStore`. Reads and writes `notifications.json` in the orchestrator memory directory. All mutations lock a `sync.Mutex`, marshal the full notification slice to JSON, and write atomically via temp-file + `os.Rename`. On load, a missing file returns an empty slice; a corrupt file logs a warning and returns an empty slice.
+
+**`internal/infrastructure/local/orchestrator/direct_task_store.go` (extended)**
+
+`ListDue` returns all tasks whose `NextRunAt` is non-nil and in the past. `ClaimDue(id)` is mutex-guarded: it sets the task's status to `dispatching` and persists the change only if the task is still in its previous (non-dispatching) state. Concurrent callers for the same task ID see a not-eligible error and skip dispatch, preventing double-execution.
+
+### New HTTP Endpoints
+
+Five notification endpoints are registered in `internal/infrastructure/http/server.go`:
+
+| Method | Path | Handler |
+|---|---|---|
+| `GET` | `/api/notifications` | `listNotifications` — supports `?bot=`, `?status=`, `?search=` |
+| `GET` | `/api/notifications/count` | `countNotifications` — returns `{"unread": N}` |
+| `POST` | `/api/notifications/:id/discuss` | `discussNotification` — appends a `DiscussEntry` |
+| `POST` | `/api/notifications/:id/requeue` | `requeueNotification` — prepends discuss as task context and dispatches |
+| `DELETE` | `/api/notifications` | `deleteNotifications` — accepts `{"ids": [...]}` |
+
+`POST /api/bots/:name/tasks` is extended: if the request body includes a `schedule` key, it is decoded into a `domain.Schedule` and attached to the created `DirectTask`.
+
 ## Key Design Decisions
 
 See [`architectural-decision-record.md`](architectural-decision-record.md) for module-specific ADRs. See root [`docs/architectural-decision-record.md`](../../docs/architectural-decision-record.md) for system-level decisions.

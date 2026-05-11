@@ -190,6 +190,16 @@ Merging them would force either interface to carry concepts irrelevant to the ot
 
 ---
 
+## ADR-B019 — File-backed in-memory store for agent notifications (not MariaDB)
+
+**Decision:** `AgentNotificationStore` is implemented as a file-backed JSON store (`notifications.json` in the orchestrator memory directory), following the same pattern used by `DirectTaskStore` and `PoolStateFile`. No SQL schema or migration is required.
+
+**Rationale:** The existing local storage pattern (load once at startup, mutate in-memory under a mutex, persist atomically via temp-file + `os.Rename`) is already proven by `DirectTaskStore`, `SessionFile`, and `PoolStateFile`. Notifications are orchestrator-local data — they do not need cross-node sharing or relational queries. Adding a MariaDB table would require a schema migration, a migration runner, and a DB dependency on the notification path, all of which add complexity with no operational benefit for single-process deployments. The JSON file approach keeps the system infrastructure-free and consistent with ADR-B008.
+
+**Rejected:** MariaDB table (requires schema migration and DB dependency for local-only data); in-memory only without persistence (notifications would be lost on process restart, breaking the operator workflow); separate SQLite file (adds a CGO dependency and an additional storage layer for a small dataset).
+
+---
+
 ## ADR-B015 — run_when as a composite queue mode rather than a flag combination
 
 **Decision:** A fourth queue mode `run_when` was introduced to `domain.WorkItem.QueueMode` (alongside `asap`, `run_at`, `run_after`). It satisfies both a time condition and a predecessor-item condition before the `QueueRunner` dispatches the item. Either sub-condition may be omitted, in which case `run_when` degenerates to `run_at` or `run_after` respectively.

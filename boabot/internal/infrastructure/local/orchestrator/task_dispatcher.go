@@ -28,8 +28,10 @@ func NewLocalTaskDispatcher(store domain.DirectTaskStore, queue domain.MessageQu
 // Dispatch creates a DirectTask and either dispatches it immediately or schedules it.
 //
 // If scheduledAt is nil or in the past, the task is dispatched immediately and
-// returns with status=dispatched. If scheduledAt is in the future, the task is
-// stored with status=pending and a goroutine is spawned to dispatch it at that time.
+// returns with status=running. The task's Schedule is set to ASAP and NextRunAt is nil.
+// If scheduledAt is in the future, the task is stored with status=pending, Schedule is
+// set to Future mode with RunAt=scheduledAt, NextRunAt=scheduledAt, and a goroutine is
+// spawned to dispatch it at that time.
 func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction string, scheduledAt *time.Time, source domain.DirectTaskSource, threadID string, workDir string) (domain.DirectTask, error) {
 	now := time.Now().UTC()
 
@@ -47,6 +49,15 @@ func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction
 	// Title is set by callers that populate the struct directly; Dispatch does not
 	// accept it as a parameter to keep the signature stable.
 
+	// Populate Schedule and NextRunAt based on scheduledAt.
+	if scheduledAt == nil || !scheduledAt.After(now) {
+		task.Schedule = domain.Schedule{Mode: domain.ScheduleModeASAP}
+		task.NextRunAt = nil
+	} else {
+		task.Schedule = domain.Schedule{Mode: domain.ScheduleModeFuture, RunAt: scheduledAt}
+		task.NextRunAt = scheduledAt
+	}
+
 	created, err := d.store.Create(ctx, task)
 	if err != nil {
 		return domain.DirectTask{}, err
@@ -60,6 +71,61 @@ func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction
 	// Schedule for future dispatch.
 	go d.dispatchAt(created, *scheduledAt)
 	return created, nil
+}
+
+// DispatchWithSchedule creates a DirectTask with the given Schedule and dispatches it.
+// For ASAP and past-Future schedules: dispatches immediately.
+// For future-Future schedules: stores with NextRunAt set, returns pending (picked up by SchedulerService).
+// For Recurring schedules: stores with NextRunAt set to Schedule.NextRunAt(now), returns pending (driven by SchedulerService).
+func (d *LocalTaskDispatcher) DispatchWithSchedule(ctx context.Context, botName, instruction string, schedule domain.Schedule, source domain.DirectTaskSource, threadID, workDir, title string) (domain.DirectTask, error) {
+	now := time.Now().UTC()
+
+	task := domain.DirectTask{
+		BotName:     botName,
+		Source:      source,
+		ThreadID:    threadID,
+		Instruction: instruction,
+		Status:      domain.DirectTaskStatusPending,
+		WorkDir:     workDir,
+		Schedule:    schedule,
+		Title:       title,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	// Determine NextRunAt and whether to dispatch immediately.
+	switch schedule.Mode {
+	case domain.ScheduleModeASAP:
+		task.NextRunAt = nil
+	case domain.ScheduleModeFuture:
+		if schedule.RunAt != nil && schedule.RunAt.After(now) {
+			// Future run: store pending for SchedulerService to pick up.
+			task.NextRunAt = schedule.RunAt
+			created, err := d.store.Create(ctx, task)
+			if err != nil {
+				return domain.DirectTask{}, err
+			}
+			return created, nil
+		}
+		// Past or zero RunAt: dispatch immediately.
+		task.NextRunAt = nil
+	case domain.ScheduleModeRecurring:
+		// Compute next occurrence and store pending for SchedulerService.
+		nextRunAt := schedule.NextRunAt(now)
+		task.NextRunAt = nextRunAt
+		created, err := d.store.Create(ctx, task)
+		if err != nil {
+			return domain.DirectTask{}, err
+		}
+		return created, nil
+	}
+
+	// ASAP or past-Future: dispatch immediately.
+	created, err := d.store.Create(ctx, task)
+	if err != nil {
+		return domain.DirectTask{}, err
+	}
+	return d.dispatchNow(ctx, created)
 }
 
 // dispatchNow sends the task message immediately and updates the store.

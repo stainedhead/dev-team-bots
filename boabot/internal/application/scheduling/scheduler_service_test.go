@@ -361,3 +361,163 @@ func TestCatchUpMissedRuns_NoMissedTasks_NoDispatches(t *testing.T) {
 		t.Errorf("expected no RunNow calls, got %d", len(disp.getRunNowCalls()))
 	}
 }
+
+// --- processTask error-path tests ---
+
+// TestTick_ListDueError_ReturnsError verifies that Tick propagates a ListDue error.
+func TestTick_ListDueError_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := newMockStore()
+	store.listDueErr = errors.New("store unavailable")
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	err := svc.Tick(context.Background(), time.Now())
+	if err == nil {
+		t.Fatal("expected error from Tick when ListDue fails")
+	}
+}
+
+// TestTick_ClaimDueError_SkipsTask verifies that a ClaimDue error is logged and
+// the task is skipped (no RunNow call).
+func TestTick_ClaimDueError_SkipsTask(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{futureTask("task-err", dueAt)}
+	store.claimErr = errors.New("claim failed")
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+
+	if len(disp.getRunNowCalls()) != 0 {
+		t.Errorf("expected 0 RunNow calls when ClaimDue errors, got %d", len(disp.getRunNowCalls()))
+	}
+}
+
+// TestTick_RunNowError_DoesNotPanic verifies that a RunNow error is logged and
+// the scheduler continues without panicking.
+func TestTick_RunNowError_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{futureTask("task-rn-err", dueAt)}
+
+	disp := &mockDispatcher{runNowErr: errors.New("dispatch failed")}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+
+	// RunNow should have been called once despite the error.
+	calls := disp.getRunNowCalls()
+	if len(calls) != 1 {
+		t.Errorf("expected 1 RunNow call, got %d", len(calls))
+	}
+}
+
+// TestTick_RecurringTask_UpdateError_DoesNotPanic verifies that an Update error
+// after a recurring task dispatch is logged without panicking.
+func TestTick_RecurringTask_UpdateError_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{recurringTask("task-upd-err", dueAt)}
+	store.updateErr = errors.New("update failed")
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+}
+
+// TestTick_RecurringTask_NilRule_SkipsNextRunAtUpdate verifies that a Recurring
+// task with a nil Rule does not update NextRunAt (advanceToFuture returns nil).
+func TestTick_RecurringTask_NilRule_SkipsNextRunAtUpdate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-time.Minute)
+
+	task := domain.DirectTask{
+		ID:        "task-nil-rule",
+		BotName:   "bot-a",
+		Status:    domain.DirectTaskStatusPending,
+		NextRunAt: &dueAt,
+		Schedule: domain.Schedule{
+			Mode: domain.ScheduleModeRecurring,
+			Rule: nil, // nil rule: advanceToFuture returns nil
+		},
+	}
+
+	store := newMockStore()
+	store.listDueResult = []domain.DirectTask{task}
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatalf("Tick returned error: %v", err)
+	}
+
+	// RunNow should be called once (task was dispatched).
+	calls := disp.getRunNowCalls()
+	if len(calls) != 1 {
+		t.Errorf("expected 1 RunNow call, got %d", len(calls))
+	}
+
+	// No Update should be issued since Rule is nil.
+	if len(store.getUpdateCalls()) != 0 {
+		t.Errorf("expected no Update calls for nil Rule, got %d", len(store.getUpdateCalls()))
+	}
+}
+
+// --- StartLoop tests ---
+
+// TestStartLoop_CancelsCleanly verifies that StartLoop exits when the context
+// is cancelled and returns context.Canceled.
+func TestStartLoop_CancelsCleanly(t *testing.T) {
+	t.Parallel()
+
+	store := newMockStore()
+	store.listDueResult = nil
+
+	disp := &mockDispatcher{}
+	svc := scheduling.NewSchedulerService(store, disp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.StartLoop(ctx)
+	}()
+
+	// Cancel the context quickly.
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartLoop did not exit after context cancellation")
+	}
+}

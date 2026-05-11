@@ -215,3 +215,206 @@ func TestLocalTaskDispatcher_Dispatch_StoreIsUpdated(t *testing.T) {
 		t.Errorf("stored ID mismatch: got %q, want %q", all[0].ID, task.ID)
 	}
 }
+
+// --- Dispatch Schedule population tests ---
+
+func TestLocalTaskDispatcher_Dispatch_NilScheduledAt_SetsASAP(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "do it now", nil, domain.DirectTaskSourceOperator, "", "")
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	stored, err := store.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Schedule.Mode != domain.ScheduleModeASAP {
+		t.Errorf("Schedule.Mode: got %q, want %q", stored.Schedule.Mode, domain.ScheduleModeASAP)
+	}
+	if stored.NextRunAt != nil {
+		t.Errorf("NextRunAt should be nil for ASAP, got %v", stored.NextRunAt)
+	}
+}
+
+func TestLocalTaskDispatcher_Dispatch_PastScheduledAt_SetsASAP(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	past := time.Now().Add(-10 * time.Minute)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "past task", &past, domain.DirectTaskSourceOperator, "", "")
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	stored, err := store.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Schedule.Mode != domain.ScheduleModeASAP {
+		t.Errorf("Schedule.Mode: got %q, want %q", stored.Schedule.Mode, domain.ScheduleModeASAP)
+	}
+	if stored.NextRunAt != nil {
+		t.Errorf("NextRunAt should be nil for past scheduledAt, got %v", stored.NextRunAt)
+	}
+}
+
+func TestLocalTaskDispatcher_Dispatch_FutureScheduledAt_SetsFuture(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	future := time.Now().Add(1 * time.Hour)
+	task, err := dispatcher.Dispatch(ctx, "dev-1", "future task", &future, domain.DirectTaskSourceOperator, "", "")
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	stored, err := store.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Schedule.Mode != domain.ScheduleModeFuture {
+		t.Errorf("Schedule.Mode: got %q, want %q", stored.Schedule.Mode, domain.ScheduleModeFuture)
+	}
+	if stored.Schedule.RunAt == nil {
+		t.Fatal("Schedule.RunAt should be set for Future mode")
+	}
+	if !stored.Schedule.RunAt.Equal(future) {
+		t.Errorf("Schedule.RunAt: got %v, want %v", stored.Schedule.RunAt, future)
+	}
+	if stored.NextRunAt == nil {
+		t.Fatal("NextRunAt should be set for Future task")
+	}
+	if !stored.NextRunAt.Equal(future) {
+		t.Errorf("NextRunAt: got %v, want %v", stored.NextRunAt, future)
+	}
+}
+
+// --- DispatchWithSchedule tests ---
+
+func TestLocalTaskDispatcher_DispatchWithSchedule_ASAP(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	sched := domain.Schedule{Mode: domain.ScheduleModeASAP}
+	task, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "asap work", sched,
+		domain.DirectTaskSourceOperator, "", "", "My Task")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule: %v", err)
+	}
+
+	if task.Status != domain.DirectTaskStatusRunning {
+		t.Errorf("expected running for ASAP, got %q", task.Status)
+	}
+	if task.Title != "My Task" {
+		t.Errorf("Title: got %q, want My Task", task.Title)
+	}
+	if len(q.getSent()) != 1 {
+		t.Errorf("expected 1 message sent for ASAP, got %d", len(q.getSent()))
+	}
+}
+
+func TestLocalTaskDispatcher_DispatchWithSchedule_FuturePast_ASAP(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	pastTime := time.Now().Add(-5 * time.Minute)
+	sched := domain.Schedule{Mode: domain.ScheduleModeFuture, RunAt: &pastTime}
+	task, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "past future", sched,
+		domain.DirectTaskSourceOperator, "", "", "")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule: %v", err)
+	}
+
+	// Past Future should dispatch immediately.
+	if task.Status != domain.DirectTaskStatusRunning {
+		t.Errorf("expected running for past Future, got %q", task.Status)
+	}
+	if len(q.getSent()) != 1 {
+		t.Errorf("expected 1 message, got %d", len(q.getSent()))
+	}
+}
+
+func TestLocalTaskDispatcher_DispatchWithSchedule_FutureFuture_Pending(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	futureTime := time.Now().Add(1 * time.Hour)
+	sched := domain.Schedule{Mode: domain.ScheduleModeFuture, RunAt: &futureTime}
+	task, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "future task", sched,
+		domain.DirectTaskSourceOperator, "", "", "")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule: %v", err)
+	}
+
+	if task.Status != domain.DirectTaskStatusPending {
+		t.Errorf("expected pending for future Future, got %q", task.Status)
+	}
+	if task.NextRunAt == nil {
+		t.Fatal("NextRunAt should be set")
+	}
+	if !task.NextRunAt.Equal(futureTime) {
+		t.Errorf("NextRunAt: got %v, want %v", task.NextRunAt, futureTime)
+	}
+	if len(q.getSent()) != 0 {
+		t.Errorf("expected 0 messages for future Future, got %d", len(q.getSent()))
+	}
+}
+
+func TestLocalTaskDispatcher_DispatchWithSchedule_Recurring_Pending(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	rule := domain.RecurrenceRule{
+		Frequency: domain.RecurrenceFrequencyDaily,
+		TimeOfDay: 9 * time.Hour,
+	}
+	sched := domain.Schedule{Mode: domain.ScheduleModeRecurring, Rule: &rule}
+	task, err := dispatcher.DispatchWithSchedule(ctx, "dev-1", "daily standup", sched,
+		domain.DirectTaskSourceOperator, "", "", "Daily Standup")
+	if err != nil {
+		t.Fatalf("DispatchWithSchedule: %v", err)
+	}
+
+	if task.Status != domain.DirectTaskStatusPending {
+		t.Errorf("expected pending for Recurring, got %q", task.Status)
+	}
+	if task.NextRunAt == nil {
+		t.Fatal("NextRunAt should be set for Recurring task")
+	}
+	if !task.NextRunAt.After(time.Now().UTC().Add(-time.Second)) {
+		t.Errorf("NextRunAt %v should be a future time", task.NextRunAt)
+	}
+	if task.Schedule.Mode != domain.ScheduleModeRecurring {
+		t.Errorf("Schedule.Mode: got %q, want %q", task.Schedule.Mode, domain.ScheduleModeRecurring)
+	}
+	if len(q.getSent()) != 0 {
+		t.Errorf("expected 0 messages for Recurring, got %d", len(q.getSent()))
+	}
+	if task.Title != "Daily Standup" {
+		t.Errorf("Title: got %q, want Daily Standup", task.Title)
+	}
+}

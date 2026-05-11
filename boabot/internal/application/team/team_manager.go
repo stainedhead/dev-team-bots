@@ -596,6 +596,9 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 
 		orchChatStore = tm.sharedChatStore
 
+		// Wire ChatTaskManager for intent detection in chat messages.
+		chatTaskMgr := apporchestrator.NewChatTaskManager(dispatcher)
+
 		// Wire LocalSkillRegistry; fall back to noop if the directory cannot be created.
 		var skillReg domain.SkillRegistry = orchestratorlocal.NoopSkillRegistry{}
 		if sr, srErr := orchestratorlocal.NewLocalSkillRegistry(filepath.Join(memPath, "skills")); srErr == nil {
@@ -643,6 +646,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			BoardDispatcher:  boardDispatch,
 			MaxConcurrent:    maxConcurrent,
 			Notifications:    notifSvc,
+			ChatTaskManager:  chatTaskMgr,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.

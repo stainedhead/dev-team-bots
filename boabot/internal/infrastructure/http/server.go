@@ -89,6 +89,10 @@ type Config struct {
 	BoardDispatcher  domain.BoardItemDispatcher            // use-case for dispatching board items to bots
 	MaxConcurrent    int                                   // max items in-progress simultaneously (0 = unlimited)
 	Notifications    *appnotifications.NotificationService // optional; notification endpoints return 501 when nil
+	// ChatTaskManager handles intent detection and confirmation flow for task
+	// management requests sent via the chat interface.  Optional; nil means the
+	// feature is disabled and the message is forwarded to the bot as usual.
+	ChatTaskManager *apporchestrator.ChatTaskManager
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -1714,6 +1718,30 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 	if err := s.cfg.Chat.Append(ctx, msg); err != nil {
 		writeInternalError(w, "chat append", err)
 		return
+	}
+
+	// Check for task-management intent before forwarding to the bot.
+	if ctm := s.cfg.ChatTaskManager; ctm != nil {
+		chatResp, handled, handleErr := ctm.DetectAndHandle(ctx, threadID, req.Content)
+		if handleErr != nil {
+			writeInternalError(w, "chat task manager", handleErr)
+			return
+		}
+		if handled {
+			// Write the orchestrator's reply as an inbound chat message.
+			orchMsg := domain.ChatMessage{
+				ThreadID:  threadID,
+				BotName:   "orchestrator",
+				Direction: domain.ChatDirectionInbound,
+				Content:   chatResp,
+			}
+			if appendErr := s.cfg.Chat.Append(ctx, orchMsg); appendErr != nil {
+				writeInternalError(w, "chat append orchestrator reply", appendErr)
+				return
+			}
+			writeJSON(w, http.StatusCreated, orchMsg)
+			return
+		}
 	}
 
 	// Build instruction with conversation context (last 10 messages in thread).

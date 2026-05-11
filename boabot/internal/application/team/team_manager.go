@@ -617,6 +617,12 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			AllowedWorkDirs: botCfg.Orchestrator.WorkDirs,
 		})
 
+		// Wire AgentNotificationStore and NotificationService.
+		notifStore := orchestratorlocal.NewInMemoryAgentNotificationStore(
+			filepath.Join(memPath, "notifications.json"),
+		)
+		notifSvc := appnotifications.NewNotificationService(notifStore, orchTaskStore)
+
 		// Wire plugin system if install_dir is configured.
 		srvCfg := httpserver.Config{
 			Auth:             oAuth,
@@ -636,6 +642,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			FaviconIconPNG:   imgs.FaviconIcon,
 			BoardDispatcher:  boardDispatch,
 			MaxConcurrent:    maxConcurrent,
+			Notifications:    notifSvc,
 		}
 		if pluginInstallDir := botCfg.Orchestrator.Plugins.InstallDir; pluginInstallDir != "" {
 			// Resolve relative paths relative to memory dir.
@@ -703,12 +710,6 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		go func() {
 			queueRunner.Start(httpCtx)
 		}()
-
-		// Wire AgentNotificationStore and NotificationService.
-		notifStore := orchestratorlocal.NewInMemoryAgentNotificationStore(
-			filepath.Join(memPath, "notifications.json"),
-		)
-		_ = appnotifications.NewNotificationService(notifStore, orchTaskStore)
 
 		// Start SchedulerService loop — drives recurring and future-scheduled tasks.
 		schedulerSvc := appscheduling.NewSchedulerService(orchTaskStore, dispatcher)

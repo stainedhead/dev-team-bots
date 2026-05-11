@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	appnotifications "github.com/stainedhead/dev-team-bots/boabot/internal/application/notifications"
 	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	domainauth "github.com/stainedhead/dev-team-bots/boabot/internal/domain/auth"
@@ -60,6 +61,13 @@ type PluginRegistryUseCase interface {
 	FetchIndex(ctx context.Context, name string, force bool) (domain.RegistryIndex, error)
 }
 
+// ScheduledTaskDispatcher is the optional extension of TaskDispatcher that supports
+// schedule-aware dispatch. The HTTP handler uses a type assertion to detect whether
+// the configured dispatcher supports this interface.
+type ScheduledTaskDispatcher interface {
+	DispatchWithSchedule(ctx context.Context, botName, instruction string, schedule domain.Schedule, source domain.DirectTaskSource, threadID, workDir, title string) (domain.DirectTask, error)
+}
+
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
 	Auth             AuthProvider
@@ -71,15 +79,16 @@ type Config struct {
 	Tasks            domain.DirectTaskStore
 	Dispatcher       domain.TaskDispatcher
 	Chat             domain.ChatStore
-	AskRouter        domain.AskRouter           // optional; routes mid-task questions to running bots
-	Pool             domain.TechLeadPool        // optional; nil means pool endpoint returns empty
-	AllowedWorkDirs  []string                   // whitelisted base directories for item working directories
-	TaskLogBase      string                     // base directory for per-task log directories (optional)
-	IconPNG          []byte                     // raw icon served at /imgs/boabot-icon-raw.png
-	ProcessedIconPNG []byte                     // dark-pixels-transparent variant served at /imgs/boabot-icon.png
-	FaviconIconPNG   []byte                     // blue/white-filter variant served at /imgs/boabot-favicon.png
-	BoardDispatcher  domain.BoardItemDispatcher // use-case for dispatching board items to bots
-	MaxConcurrent    int                        // max items in-progress simultaneously (0 = unlimited)
+	AskRouter        domain.AskRouter                      // optional; routes mid-task questions to running bots
+	Pool             domain.TechLeadPool                   // optional; nil means pool endpoint returns empty
+	AllowedWorkDirs  []string                              // whitelisted base directories for item working directories
+	TaskLogBase      string                                // base directory for per-task log directories (optional)
+	IconPNG          []byte                                // raw icon served at /imgs/boabot-icon-raw.png
+	ProcessedIconPNG []byte                                // dark-pixels-transparent variant served at /imgs/boabot-icon.png
+	FaviconIconPNG   []byte                                // blue/white-filter variant served at /imgs/boabot-favicon.png
+	BoardDispatcher  domain.BoardItemDispatcher            // use-case for dispatching board items to bots
+	MaxConcurrent    int                                   // max items in-progress simultaneously (0 = unlimited)
+	Notifications    *appnotifications.NotificationService // optional; notification endpoints return 501 when nil
 	// Plugin system — optional. Routes are registered only when Plugins is non-nil.
 	Plugins        domain.PluginStore
 	RegistryMgr    domain.RegistryManager
@@ -200,6 +209,13 @@ func (s *Server) Handler() http.Handler {
 
 	// Tech-lead pool
 	mux.HandleFunc("GET /api/v1/pool", s.auth(s.handlePoolList))
+
+	// Notifications — always registered; handlers return 501 when Notifications is nil
+	mux.HandleFunc("GET /api/v1/notifications", s.auth(s.handleNotificationList))
+	mux.HandleFunc("GET /api/v1/notifications/count", s.auth(s.handleNotificationCount))
+	mux.HandleFunc("POST /api/v1/notifications/{id}/discuss", s.auth(s.handleNotificationDiscuss))
+	mux.HandleFunc("POST /api/v1/notifications/{id}/requeue", s.auth(s.handleNotificationRequeue))
+	mux.HandleFunc("DELETE /api/v1/notifications", s.auth(s.handleNotificationDelete))
 
 	// Plugin registry & management (optional — registered only if plugin store is configured)
 	if s.cfg.Plugins != nil {
@@ -1141,10 +1157,11 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	var req struct {
-		Title       string     `json:"title,omitempty"`
-		Instruction string     `json:"instruction"`
-		ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
-		WorkDir     string     `json:"work_dir,omitempty"`
+		Title       string           `json:"title,omitempty"`
+		Instruction string           `json:"instruction"`
+		ScheduledAt *time.Time       `json:"scheduled_at,omitempty"`
+		WorkDir     string           `json:"work_dir,omitempty"`
+		Schedule    *scheduleRequest `json:"schedule,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1154,6 +1171,28 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "instruction must not be empty")
 		return
 	}
+
+	// If the dispatcher supports DispatchWithSchedule, use it.
+	if sd, ok := s.cfg.Dispatcher.(ScheduledTaskDispatcher); ok {
+		sched, err := parseScheduleRequest(req.Schedule)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// When no schedule object is provided, fall back to legacy scheduled_at behaviour.
+		if req.Schedule == nil && req.ScheduledAt != nil {
+			sched = domain.Schedule{Mode: domain.ScheduleModeFuture, RunAt: req.ScheduledAt}
+		}
+		task, err := sd.DispatchWithSchedule(r.Context(), name, req.Instruction, sched, domain.DirectTaskSourceOperator, "", req.WorkDir, req.Title)
+		if err != nil {
+			writeInternalError(w, "bot task create", err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, task)
+		return
+	}
+
+	// Legacy path: dispatcher does not support DispatchWithSchedule.
 	task, err := s.cfg.Dispatcher.Dispatch(r.Context(), name, req.Instruction, req.ScheduledAt, domain.DirectTaskSourceOperator, "", req.WorkDir)
 	if err != nil {
 		writeInternalError(w, "bot task create", err)
@@ -2075,6 +2114,36 @@ const kanbanHTML = `<!DOCTYPE html>
     .task-filter-btn.active{background:#1e3a5f;border-color:#2d5a8e;color:#93c5fd;box-shadow:inset 0 1px 3px rgba(0,0,0,.5)}
     .task-filter-btn:hover:not(.active){border-color:#2d3e5a;color:#94a3b8}
 
+    /* ── Badge ── */
+    .badge{display:inline-flex;align-items:center;justify-content:center;min-width:1.1rem;height:1.1rem;padding:0 .3rem;background:#ef4444;color:#fff;border-radius:9999px;font-size:.62rem;font-weight:700;vertical-align:middle;margin-left:.3rem}
+
+    /* ── Recurrence builder ── */
+    .at-mode-row{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.1rem}
+    .at-mode-label{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer}
+    .recur-days{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.35rem}
+    .recur-day{display:inline-flex;align-items:center;gap:.25rem;font-size:.75rem;cursor:pointer}
+    .recur-day input{cursor:pointer}
+
+    /* ── Notification list ── */
+    .notif-row{display:flex;align-items:center;gap:.6rem;padding:.45rem .65rem;border-bottom:1px solid #0f1829;cursor:pointer;transition:background .12s}
+    .notif-row:hover{background:#0d1424}
+    .notif-row.unread{border-left:3px solid #3b82f6}
+    .notif-check{flex-shrink:0}
+    .notif-bot{font-size:.72rem;font-weight:600;color:#60a5fa;flex-shrink:0;min-width:6rem}
+    .notif-preview{flex:1;font-size:.75rem;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .notif-status{flex-shrink:0}
+    .notif-time{font-size:.65rem;color:#475569;flex-shrink:0;white-space:nowrap}
+
+    /* ── Notification detail ── */
+    .notif-detail-hdr{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem}
+    .notif-detail-meta{font-size:.72rem;color:#64748b}
+    .notif-detail-msg{font-size:.82rem;color:#cbd5e1;line-height:1.55;white-space:pre-wrap;word-break:break-word;padding:.5rem;background:#080e1a;border:1px solid #1a2744;border-radius:.35rem;margin-bottom:.75rem}
+    .notif-discuss{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
+    .notif-discuss-item{padding:.4rem .55rem;border-radius:.35rem;font-size:.78rem;background:#0f1e35;border:1px solid #1a2744}
+    .notif-discuss-author{font-size:.65rem;color:#60a5fa;margin-bottom:.2rem}
+    .notif-discuss-send{display:flex;gap:.4rem;margin-top:.4rem}
+    .notif-discuss-send input{flex:1;padding:.35rem .6rem;background:#0a1020;border:1px solid #1a2744;border-radius:.35rem;color:#e2e8f0;font-size:.78rem}
+
     /* ── Board card badge ── */
     .card-working{font-size:.65rem;color:#fbbf24;margin-top:.2rem;animation:blink 1.5s infinite}
 
@@ -2169,6 +2238,7 @@ const kanbanHTML = `<!DOCTYPE html>
     <div class="tabbar">
       <button class="tab on" onclick="tab('board')">Board</button>
       <button class="tab" onclick="tab('tasks')" id="t-tasks">Tasks</button>
+      <button class="tab" onclick="tab('notif')" id="t-notif">Notifications <span id="notif-badge" class="badge" style="display:none">0</span></button>
       <button class="tab" onclick="tab('chat')" id="t-chat">Chat</button>
       <div style="flex:1"></div>
       <button class="tab" onclick="tab('plugins')" id="t-plugins">Plugins &amp; Skills</button>
@@ -2364,6 +2434,46 @@ const kanbanHTML = `<!DOCTYPE html>
 
     </div>
 
+    <!-- Notifications -->
+    <div class="pane" id="pane-notif" style="overflow:hidden">
+      <div id="notif-list-view" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+        <div class="sec-hdr">
+          <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-sm task-filter-btn active" id="nf-all"       onclick="setNotifFilter('all')">All</button>
+            <button class="btn btn-sm task-filter-btn"        id="nf-single"    onclick="setNotifFilter('single')">Single</button>
+            <button class="btn btn-sm task-filter-btn"        id="nf-recurring" onclick="setNotifFilter('recurring')">Recurring</button>
+            <div style="width:1px;background:#1a2744;height:1.25rem;margin:0 .2rem"></div>
+            <select id="nf-bot" onchange="loadNotifications()" style="background:#0f1829;border:1px solid #1a2744;color:#94a3b8;font-size:.72rem;padding:.25rem .5rem;border-radius:4px">
+              <option value="">All bots</option>
+            </select>
+            <input id="nf-text" type="text" placeholder="Search&#x2026;" oninput="loadNotifications()" style="background:#0f1829;border:1px solid #1a2744;color:#e2e8f0;font-size:.72rem;padding:.25rem .5rem;border-radius:4px;width:10rem"/>
+          </div>
+          <div class="sec-acts">
+            <button id="notif-del-btn" class="btn btn-danger btn-sm" disabled onclick="deleteSelectedNotifications()" style="opacity:.35;cursor:not-allowed">Delete Selected</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadNotifications()">Refresh</button>
+          </div>
+        </div>
+        <div id="notif-list" style="flex:1;overflow:auto;min-width:0"><div class="empty-state">Loading&#x2026;</div></div>
+      </div>
+      <div id="notif-detail-view" style="display:none;flex:1;overflow:auto;padding:.75rem 1rem">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
+          <button class="btn btn-secondary btn-sm" onclick="closeNotifDetail()">&#x2190; Back</button>
+          <span class="notif-detail-meta" id="notif-detail-meta"></span>
+          <span style="flex:1"></span>
+          <button id="notif-requeue-btn" class="btn btn-warn btn-sm" style="display:none" onclick="requeueNotification(notifDetailId)">Re-queue</button>
+        </div>
+        <div id="notif-detail-body"></div>
+        <div style="margin-top:.75rem;border-top:1px solid #1a2744;padding-top:.75rem">
+          <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#475569;margin-bottom:.5rem">Discuss</div>
+          <div class="notif-discuss" id="notif-discuss-list"></div>
+          <div class="notif-discuss-send">
+            <input id="notif-discuss-input" placeholder="Add a note&#x2026;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDiscuss(notifDetailId)}"/>
+            <button class="btn btn-primary btn-sm" onclick="sendDiscuss(notifDetailId)">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- DLQ -->
     <div class="pane" id="pane-dlq">
       <div class="sec-hdr"><div class="sec-title">Dead Letter Queue</div><div class="sec-acts"><button class="btn btn-secondary btn-sm" onclick="loadDLQ()">Refresh</button></div></div>
@@ -2429,11 +2539,53 @@ const kanbanHTML = `<!DOCTYPE html>
   <div class="fg"><label class="fl">Title</label><input class="fi" id="at-title" type="text" placeholder="Brief label (optional)"/></div>
   <div class="fg"><label class="fl">Instruction</label><textarea class="fi" id="at-instr" placeholder="Describe the task…" required></textarea></div>
   <div class="fg">
-    <label class="fl">Timing</label>
-    <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem;margin-right:.75rem"><input type="radio" name="at-timing" id="at-now" checked onchange="ge('at-sched-wrap').style.display='none'"> Now</label>
-    <label style="font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem"><input type="radio" name="at-timing" id="at-later" onchange="ge('at-sched-wrap').style.display='block'"> Schedule</label>
+    <label class="fl">Scheduling Mode</label>
+    <div class="at-mode-row">
+      <label class="at-mode-label"><input type="radio" name="at-mode" id="at-mode-asap" value="asap" checked onchange="onAtMode()"> ASAP</label>
+      <label class="at-mode-label"><input type="radio" name="at-mode" id="at-mode-future" value="future" onchange="onAtMode()"> Future</label>
+      <label class="at-mode-label"><input type="radio" name="at-mode" id="at-mode-recurring" value="recurring" onchange="onAtMode()"> Recurring</label>
+    </div>
   </div>
-  <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Schedule At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
+  <div class="fg" id="at-sched-wrap" style="display:none"><label class="fl">Run At</label><input class="fi" id="at-sched" type="datetime-local"/></div>
+  <div id="at-recur-wrap" style="display:none">
+    <div id="at-recur-visual">
+      <div class="fg">
+        <label class="fl">Frequency</label>
+        <select class="fi" id="at-recur-freq" onchange="onAtRecurFreq()">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="fg" id="at-recur-days-wrap" style="display:none">
+        <label class="fl">Days of week</label>
+        <div class="recur-days">
+          <label class="recur-day"><input type="checkbox" id="at-d-sun" value="sun"> Sun</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-mon" value="mon"> Mon</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-tue" value="tue"> Tue</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-wed" value="wed"> Wed</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-thu" value="thu"> Thu</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-fri" value="fri"> Fri</label>
+          <label class="recur-day"><input type="checkbox" id="at-d-sat" value="sat"> Sat</label>
+        </div>
+      </div>
+      <div class="fg" id="at-recur-monthday-wrap" style="display:none">
+        <label class="fl">Day of month</label>
+        <input class="fi" id="at-recur-monthday" type="number" min="1" max="31" placeholder="e.g. 15"/>
+      </div>
+      <div class="fg">
+        <label class="fl">Time (24h)</label>
+        <input class="fi" id="at-recur-time" type="time" value="09:00"/>
+      </div>
+    </div>
+    <div class="fg">
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer"><input type="checkbox" id="at-recur-nl-toggle" onchange="onAtRecurNlToggle()"> Use text instead of visual builder</label>
+    </div>
+    <div class="fg" id="at-recur-nl-wrap" style="display:none">
+      <label class="fl">Natural language</label>
+      <input class="fi" id="at-recur-nl" type="text" placeholder="e.g. every Monday at 9am"/>
+    </div>
+  </div>
   <div class="fg"><label class="fl">Working directory (optional)</label><select class="fi" id="at-workdir-sel" onchange="ge('at-workdir-txt').style.display=this.value?'block':'none'"><option value="">None</option></select><input class="fi" id="at-workdir-txt" type="text" placeholder="sub/path/within/root (optional)" style="margin-top:.35rem;display:none"/></div>
   <div class="errmsg" id="at-err" style="display:none"></div>
   <div class="da"><button class="btn btn-secondary" onclick="cls('at-dlg')">Cancel</button><button class="btn btn-secondary" onclick="doDispatchTask(true)">Create and add another</button><button class="btn btn-primary" onclick="doDispatchTask()">Create</button></div>
@@ -2518,6 +2670,7 @@ const kanbanHTML = `<!DOCTYPE html>
   var qcfgPendingItemId=null, qcfgPendingStatus=null, capPendingItemId=null;
   var currentTaskFilter='all', taskBotFilter='', taskTextFilter='';
   var allTasksList=[];
+  var currentNotifFilter='all', allNotifList=[], notifDetailId=null, notifPollTimer=null;
 
   function renderBoardAskMsgs(msgs){
     var body=ge('board-ctx-body');
@@ -2659,6 +2812,7 @@ const kanbanHTML = `<!DOCTYPE html>
     closeBoardCtx();
     closeTaskCtx();
     if(name==='tasks')loadTasks();
+    if(name==='notif')loadNotifications();
     if(name==='chat'){loadThreads();loadChat()}
     if(name==='plugins'){loadPlugins();loadRegistries();}
     if(name==='dlq')loadDLQ();
@@ -3670,13 +3824,47 @@ const kanbanHTML = `<!DOCTYPE html>
       .catch(function(e){alert('Run failed: '+e.message);loadTasks()});
   }
 
-  function openAssignTask(botName){
-    ge('at-bot').textContent=botName;
-    ge('at-instr').value='';
-    ge('at-now').checked=true;
+  function onAtMode(){
+    var mode=document.querySelector('input[name="at-mode"]:checked').value;
+    ge('at-sched-wrap').style.display=mode==='future'?'block':'none';
+    ge('at-recur-wrap').style.display=mode==='recurring'?'block':'none';
+  }
+
+  function onAtRecurFreq(){
+    var freq=ge('at-recur-freq').value;
+    ge('at-recur-days-wrap').style.display=freq==='weekly'?'block':'none';
+    ge('at-recur-monthday-wrap').style.display=freq==='monthly'?'block':'none';
+  }
+
+  function onAtRecurNlToggle(){
+    var useNl=ge('at-recur-nl-toggle').checked;
+    ge('at-recur-visual').style.display=useNl?'none':'block';
+    ge('at-recur-nl-wrap').style.display=useNl?'block':'none';
+  }
+
+  function resetAtDialog(){
+    ge('at-mode-asap').checked=true;
     ge('at-sched-wrap').style.display='none';
     ge('at-sched').value='';
+    ge('at-recur-wrap').style.display='none';
+    ge('at-recur-freq').value='daily';
+    ge('at-recur-days-wrap').style.display='none';
+    ge('at-recur-monthday-wrap').style.display='none';
+    ge('at-recur-time').value='09:00';
+    ge('at-recur-monthday').value='';
+    ge('at-recur-nl-toggle').checked=false;
+    ge('at-recur-visual').style.display='block';
+    ge('at-recur-nl-wrap').style.display='none';
+    ge('at-recur-nl').value='';
+    ['sun','mon','tue','wed','thu','fri','sat'].forEach(function(d){ge('at-d-'+d).checked=false});
+  }
+
+  function openAssignTask(botName){
+    ge('at-bot').textContent=botName;
+    ge('at-title').value='';
+    ge('at-instr').value='';
     ge('at-err').style.display='none';
+    resetAtDialog();
     var sel=ge('at-workdir-sel');
     sel.innerHTML='<option value="">None</option>';
     (allWorkDirs||[]).forEach(function(d){
@@ -3689,12 +3877,29 @@ const kanbanHTML = `<!DOCTYPE html>
     dlg('at-dlg');
   }
 
+  function buildSchedulePayload(){
+    var mode=document.querySelector('input[name="at-mode"]:checked').value;
+    if(mode==='asap')return{mode:'asap'};
+    if(mode==='future'){
+      var rv=ge('at-sched').value;
+      return{mode:'future',run_at:rv?new Date(rv).toISOString():''};
+    }
+    // recurring
+    var useNl=ge('at-recur-nl-toggle').checked;
+    if(useNl){return{mode:'recurring',nl_text:ge('at-recur-nl').value.trim()};}
+    var freq=ge('at-recur-freq').value;
+    var days=[];
+    ['sun','mon','tue','wed','thu','fri','sat'].forEach(function(d){if(ge('at-d-'+d).checked)days.push(d)});
+    var rec={frequency:freq,time:ge('at-recur-time').value};
+    if(freq==='weekly')rec.days=days;
+    if(freq==='monthly'){var md=parseInt(ge('at-recur-monthday').value,10);if(md)rec.month_day=md;}
+    return{mode:'recurring',recurrence:rec};
+  }
+
   function doDispatchTask(addAnother){
     var botName=ge('at-bot').textContent;
     var title=ge('at-title').value.trim();
     var instruction=ge('at-instr').value.trim();
-    var isNow=ge('at-now').checked;
-    var schedVal=ge('at-sched').value;
     var e=ge('at-err');
     e.style.display='none';
     if(!instruction){e.textContent='Instruction is required';e.style.display='block';return}
@@ -3702,12 +3907,15 @@ const kanbanHTML = `<!DOCTYPE html>
     var workDir=root?(sub?root+'/'+sub:root):'';
     var body={instruction:instruction};
     if(title){body.title=title}
-    if(!isNow&&schedVal){body.scheduled_at=new Date(schedVal).toISOString()}
+    body.schedule=buildSchedulePayload();
     if(workDir){body.work_dir=workDir}
     api('POST','/api/v1/bots/'+botName+'/tasks',body)
       .then(function(){
-        ge('at-title').value='';ge('at-instr').value='';ge('at-now').checked=true;ge('at-sched-wrap').style.display='none';ge('at-sched').value='';ge('at-workdir-sel').value='';ge('at-workdir-txt').value='';ge('at-workdir-txt').style.display='none';
-        setTaskFilter('immediate');loadTasks();
+        ge('at-title').value='';ge('at-instr').value='';
+        resetAtDialog();
+        ge('at-workdir-sel').value='';ge('at-workdir-txt').value='';ge('at-workdir-txt').style.display='none';
+        var filt=body.schedule&&body.schedule.mode==='asap'?'immediate':'scheduled';
+        setTaskFilter(filt);loadTasks();
         if(addAnother){ge('at-instr').focus()}else{cls('at-dlg');tab('tasks')}
       })
       .catch(function(err){e.textContent=err.message||'Failed';e.style.display='block'});
@@ -4705,13 +4913,29 @@ const kanbanHTML = `<!DOCTYPE html>
 
     // ── Details tab ──────────────────────────────────────────────────────────
     var statusClass=t.status==='succeeded'?'ok':t.status==='running'?'run':t.status==='failed'?'fail':'';
+    // Determine schedule mode label and next-run display.
+    var schedMode='ASAP';
+    var schedExtra='';
+    if(t.schedule){
+      var sm=t.schedule.mode||'asap';
+      if(sm==='future'){schedMode='Future';}
+      else if(sm==='recurring'){schedMode='Recurring';}
+    } else if(t.scheduled_at){
+      schedMode='Future';
+    }
+    var nextRunAt=t.next_run_at||t.scheduled_at||'';
+    if(nextRunAt&&schedMode!=='ASAP'){
+      schedExtra='<span class="tctx-time">· Next run: '+new Date(nextRunAt).toLocaleString()+'</span>';
+    }
     var meta='<div class="tctx-meta">'
       +'<span class="tctx-pill">'+esc(t.bot_name)+'</span>'
       +'<span class="tctx-pill '+statusClass+'">'+esc(t.status)+'</span>'
       +(t.source?'<span class="tctx-pill">'+esc(t.source)+'</span>':'')
+      +'<span class="tctx-pill" title="Schedule mode">'+esc(schedMode)+'</span>'
       +'<span class="tctx-time">Created '+ago(t.created_at)+'</span>'
       +(t.dispatched_at?'<span class="tctx-time">· Dispatched '+ago(t.dispatched_at)+'</span>':'')
       +(t.completed_at?'<span class="tctx-time">· Completed '+ago(t.completed_at)+'</span>':'')
+      +schedExtra
       +'</div>';
     // Derive a human-readable title and body from the stored fields.
     // For board-dispatched tasks the Title field is empty; extract it from the instruction.

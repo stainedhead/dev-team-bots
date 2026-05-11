@@ -3,11 +3,13 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
+
+// Compile-time assertion: *LocalTaskDispatcher must satisfy domain.ScheduledTaskDispatcher.
+var _ domain.ScheduledTaskDispatcher = (*LocalTaskDispatcher)(nil)
 
 // LocalTaskDispatcher sends task messages to bots via the in-process queue router.
 type LocalTaskDispatcher struct {
@@ -63,13 +65,12 @@ func (d *LocalTaskDispatcher) Dispatch(ctx context.Context, botName, instruction
 		return domain.DirectTask{}, err
 	}
 
-	// Determine whether to dispatch immediately or schedule.
+	// Determine whether to dispatch immediately or defer to the scheduler loop.
 	if scheduledAt == nil || !scheduledAt.After(time.Now()) {
 		return d.dispatchNow(ctx, created)
 	}
 
-	// Schedule for future dispatch.
-	go d.dispatchAt(created, *scheduledAt)
+	// Future task: return pending — the SchedulerService loop will dispatch it when due.
 	return created, nil
 }
 
@@ -159,18 +160,6 @@ func (d *LocalTaskDispatcher) RunNow(ctx context.Context, id string) (domain.Dir
 		return task, nil
 	}
 	return d.dispatchNow(ctx, task)
-}
-
-// dispatchAt waits until scheduledAt, then dispatches the task.
-func (d *LocalTaskDispatcher) dispatchAt(task domain.DirectTask, scheduledAt time.Time) {
-	delay := time.Until(scheduledAt)
-	if delay > 0 {
-		time.Sleep(delay)
-	}
-	ctx := context.Background()
-	if _, err := d.dispatchNow(ctx, task); err != nil {
-		slog.Error("scheduled task dispatch failed", "task_id", task.ID, "bot", task.BotName, "err", err)
-	}
 }
 
 // sendMessage encodes the TaskPayload and sends it to the bot's queue.

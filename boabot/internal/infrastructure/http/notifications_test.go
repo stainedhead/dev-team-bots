@@ -663,6 +663,79 @@ func (f *fakeScheduledDispatcher) DispatchWithSchedule(ctx context.Context, botN
 	}, nil
 }
 
+// FR-004: HH:MM range validation.
+// These tests exercise parseRecurrenceRequest (via the HTTP handler) to verify
+// that invalid hour/minute values are rejected with 400.
+
+func TestBotTaskCreate_WithScheduleRecurring_InvalidHour_Returns400(t *testing.T) {
+	dispatcher := &fakeScheduledDispatcher{}
+	s := httpserver.New(httpserver.Config{
+		Auth:       &fakeAuth{},
+		Board:      &fakeBoardStore{},
+		Team:       &fakeControlPlane{},
+		Users:      &fakeUserStore{},
+		Skills:     &fakeSkillRegistry{},
+		DLQ:        &fakeDLQStore{},
+		Tasks:      &fakeDirectTaskStore{},
+		Dispatcher: dispatcher,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body := `{"instruction":"bad hour","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"25:00"}}}`
+	resp := doJSON(t, srv, http.MethodPost, "bots/dev-1/tasks", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid hour 25, got %d", resp.StatusCode)
+	}
+}
+
+func TestBotTaskCreate_WithScheduleRecurring_InvalidMinute_Returns400(t *testing.T) {
+	dispatcher := &fakeScheduledDispatcher{}
+	s := httpserver.New(httpserver.Config{
+		Auth:       &fakeAuth{},
+		Board:      &fakeBoardStore{},
+		Team:       &fakeControlPlane{},
+		Users:      &fakeUserStore{},
+		Skills:     &fakeSkillRegistry{},
+		DLQ:        &fakeDLQStore{},
+		Tasks:      &fakeDirectTaskStore{},
+		Dispatcher: dispatcher,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body := `{"instruction":"bad minute","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"9:99"}}}`
+	resp := doJSON(t, srv, http.MethodPost, "bots/dev-1/tasks", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid minute 99, got %d", resp.StatusCode)
+	}
+}
+
+func TestBotTaskCreate_WithScheduleRecurring_ValidTime2359_Returns201(t *testing.T) {
+	dispatcher := &fakeScheduledDispatcher{}
+	s := httpserver.New(httpserver.Config{
+		Auth:       &fakeAuth{},
+		Board:      &fakeBoardStore{},
+		Team:       &fakeControlPlane{},
+		Users:      &fakeUserStore{},
+		Skills:     &fakeSkillRegistry{},
+		DLQ:        &fakeDLQStore{},
+		Tasks:      &fakeDirectTaskStore{},
+		Dispatcher: dispatcher,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body := `{"instruction":"valid time","schedule":{"mode":"recurring","recurrence":{"frequency":"daily","time":"23:59"}}}`
+	resp := doJSON(t, srv, http.MethodPost, "bots/dev-1/tasks", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for valid time 23:59, got %d", resp.StatusCode)
+	}
+}
+
 func TestNotificationList_StoreError_Returns500(t *testing.T) {
 	store := &fakeNotificationStore{
 		listFn: func(_ context.Context, _ domain.AgentNotificationFilter) ([]domain.AgentNotification, error) {

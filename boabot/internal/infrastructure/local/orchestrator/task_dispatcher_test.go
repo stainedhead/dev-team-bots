@@ -120,6 +120,9 @@ func TestLocalTaskDispatcher_Dispatch_ImmediateForPastScheduledAt(t *testing.T) 
 	}
 }
 
+// TestLocalTaskDispatcher_Dispatch_Scheduled verifies that a future-scheduled
+// task via Dispatch stays pending and is stored with NextRunAt set for the
+// scheduler loop to pick up. No goroutine is spawned (FR-007).
 func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 	t.Parallel()
 	store := orchestrator.NewInMemoryDirectTaskStore("")
@@ -133,35 +136,26 @@ func TestLocalTaskDispatcher_Dispatch_Scheduled(t *testing.T) {
 		t.Fatalf("Dispatch: %v", err)
 	}
 
-	// Immediately after dispatch, status should be pending.
+	// Immediately after dispatch, status should be pending (scheduler loop handles it).
 	if task.Status != domain.DirectTaskStatusPending {
 		t.Errorf("expected status=pending for future task, got %q", task.Status)
 	}
+	if task.NextRunAt == nil {
+		t.Fatal("expected NextRunAt to be set for future task")
+	}
+	if !task.NextRunAt.Equal(future) {
+		t.Errorf("NextRunAt: got %v, want %v", task.NextRunAt, future)
+	}
+
+	// No messages sent immediately — and also none after waiting (scheduler handles it).
 	if len(q.getSent()) != 0 {
 		t.Errorf("expected 0 messages sent immediately, got %d", len(q.getSent()))
 	}
 
-	// Wait for the goroutine to fire after 100ms.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-		if len(q.getSent()) > 0 {
-			break
-		}
-	}
-
-	sent := q.getSent()
-	if len(sent) != 1 {
-		t.Fatalf("expected 1 message sent after scheduled time, got %d", len(sent))
-	}
-	if sent[0].queueURL != "dev-1" {
-		t.Errorf("expected message to dev-1, got %q", sent[0].queueURL)
-	}
-
-	// Store should now show dispatched.
-	stored, _ := store.Get(ctx, task.ID)
-	if stored.Status != domain.DirectTaskStatusRunning {
-		t.Errorf("stored status after dispatch: got %q, want dispatched", stored.Status)
+	// Wait past the scheduled time to confirm no goroutine fires.
+	time.Sleep(200 * time.Millisecond)
+	if len(q.getSent()) != 0 {
+		t.Errorf("expected 0 messages after scheduled time (no goroutine), got %d", len(q.getSent()))
 	}
 }
 

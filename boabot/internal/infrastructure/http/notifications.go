@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,21 @@ import (
 	appnotifications "github.com/stainedhead/dev-team-bots/boabot/internal/application/notifications"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
+
+// notificationService is the subset of the notification use case required by
+// the notification HTTP handlers. Using a local interface decouples the server
+// from the concrete *appnotifications.NotificationService type.
+type notificationService interface {
+	List(ctx context.Context, filter domain.AgentNotificationFilter) ([]domain.AgentNotification, error)
+	UnreadCount(ctx context.Context) (int, error)
+	AppendDiscuss(ctx context.Context, id, author, message string) error
+	ActionNotification(ctx context.Context, id string) error
+	RequeueTask(ctx context.Context, notificationID string) error
+	Delete(ctx context.Context, ids []string) error
+}
+
+// Compile-time assertion: *appnotifications.NotificationService must satisfy notificationService.
+var _ notificationService = (*appnotifications.NotificationService)(nil)
 
 // ── Notification handlers ─────────────────────────────────────────────────────
 
@@ -191,12 +207,28 @@ func parseRecurrenceRequest(req *recurrenceRequest) (domain.RecurrenceRule, erro
 
 	// Parse TimeOfDay from "HH:MM".
 	if req.Time != "" {
-		var h, m int
-		if _, err := fmt.Sscanf(req.Time, "%d:%d", &h, &m); err != nil {
-			return domain.RecurrenceRule{}, fmt.Errorf("schedule: invalid time format %q (want HH:MM)", req.Time)
+		tod, err := parseHHMM(req.Time)
+		if err != nil {
+			return domain.RecurrenceRule{}, err
 		}
-		rule.TimeOfDay = time.Duration(h)*time.Hour + time.Duration(m)*time.Minute
+		rule.TimeOfDay = tod
 	}
 
 	return rule, nil
+}
+
+// parseHHMM parses a "HH:MM" string and validates that hours are 0–23 and
+// minutes are 0–59.
+func parseHHMM(s string) (time.Duration, error) {
+	var h, m int
+	if _, err := fmt.Sscanf(s, "%d:%d", &h, &m); err != nil {
+		return 0, fmt.Errorf("schedule: invalid time format %q (want HH:MM)", s)
+	}
+	if h < 0 || h > 23 {
+		return 0, fmt.Errorf("schedule: hour %d out of range (want 0–23)", h)
+	}
+	if m < 0 || m > 59 {
+		return 0, fmt.Errorf("schedule: minute %d out of range (want 0–59)", m)
+	}
+	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute, nil
 }

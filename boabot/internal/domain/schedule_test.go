@@ -316,6 +316,63 @@ func TestSchedule_Validate_RecurringWithValidRule_NoError(t *testing.T) {
 	}
 }
 
+// FR-003: RecurrenceRule.Validate frequency check.
+
+func TestRecurrenceRule_Validate_EmptyFrequency_ReturnsError(t *testing.T) {
+	t.Parallel()
+	rule := domain.RecurrenceRule{
+		Frequency: "",
+	}
+	if err := rule.Validate(); err == nil {
+		t.Error("expected error for empty frequency, got nil")
+	}
+}
+
+func TestRecurrenceRule_Validate_UnknownFrequency_ReturnsError(t *testing.T) {
+	t.Parallel()
+	rule := domain.RecurrenceRule{
+		Frequency: "hourly",
+	}
+	if err := rule.Validate(); err == nil {
+		t.Error("expected error for unknown frequency 'hourly', got nil")
+	}
+}
+
+// FR-014: MonthDay range validation.
+
+func TestRecurrenceRule_Validate_MonthDay32_ReturnsError(t *testing.T) {
+	t.Parallel()
+	rule := domain.RecurrenceRule{
+		Frequency: domain.RecurrenceFrequencyMonthly,
+		MonthDay:  32,
+	}
+	if err := rule.Validate(); err == nil {
+		t.Error("expected error for MonthDay=32, got nil")
+	}
+}
+
+func TestRecurrenceRule_Validate_MonthDayNegative_ReturnsError(t *testing.T) {
+	t.Parallel()
+	rule := domain.RecurrenceRule{
+		Frequency: domain.RecurrenceFrequencyMonthly,
+		MonthDay:  -1,
+	}
+	if err := rule.Validate(); err == nil {
+		t.Error("expected error for MonthDay=-1, got nil")
+	}
+}
+
+func TestRecurrenceRule_Validate_MonthDay31_NoError(t *testing.T) {
+	t.Parallel()
+	rule := domain.RecurrenceRule{
+		Frequency: domain.RecurrenceFrequencyMonthly,
+		MonthDay:  31,
+	}
+	if err := rule.Validate(); err != nil {
+		t.Errorf("unexpected error for MonthDay=31: %v", err)
+	}
+}
+
 // ---- Schedule.NextRunAt ----
 
 func TestSchedule_NextRunAt_ASAP_ReturnsNil(t *testing.T) {

@@ -3,6 +3,7 @@ package notifications_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -482,6 +483,39 @@ func TestDelete_DelegatesToStore(t *testing.T) {
 	all, _ := store.List(ctx, domain.AgentNotificationFilter{})
 	if len(all) != 0 {
 		t.Errorf("after Delete: got %d notifications, want 0", len(all))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent AppendDiscuss test (FR-008)
+// ---------------------------------------------------------------------------
+
+// TestAppendDiscuss_ConcurrentCalls_NoEntriesLost calls AppendDiscuss 50 times
+// concurrently for the same notification and asserts no entries are lost.
+func TestAppendDiscuss_ConcurrentCalls_NoEntriesLost(t *testing.T) {
+	svc, store, _ := newSvc(t)
+	ctx := context.Background()
+
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+
+	const count = 50
+	var wg sync.WaitGroup
+	wg.Add(count)
+	for i := range count {
+		i := i
+		go func() {
+			defer wg.Done()
+			_ = svc.AppendDiscuss(ctx, n.ID, "user", fmt.Sprintf("entry-%d", i))
+		}()
+	}
+	wg.Wait()
+
+	updated, err := store.Get(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if len(updated.DiscussThread) != count {
+		t.Errorf("expected %d discuss entries, got %d (entries lost under concurrency)", count, len(updated.DiscussThread))
 	}
 }
 

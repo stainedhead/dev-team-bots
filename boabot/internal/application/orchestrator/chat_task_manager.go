@@ -12,13 +12,6 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
-// ScheduledTaskDispatcher dispatches a task with an explicit schedule.
-// Defined here in the application layer to avoid importing the http package
-// (which would create a circular dependency).
-type ScheduledTaskDispatcher interface {
-	DispatchWithSchedule(ctx context.Context, botName, instruction string, schedule domain.Schedule, source domain.DirectTaskSource, threadID, workDir, title string) (domain.DirectTask, error)
-}
-
 // ChatTaskIntent holds the parsed intent from a task-management chat message.
 type ChatTaskIntent struct {
 	BotName     string
@@ -30,12 +23,12 @@ type ChatTaskIntent struct {
 // ChatTaskManager detects task-management intent in chat messages and drives
 // the confirmation flow.  It is safe for concurrent use.
 type ChatTaskManager struct {
-	dispatcher ScheduledTaskDispatcher
+	dispatcher domain.ScheduledTaskDispatcher
 	pendingMap sync.Map // threadID (string) -> *ChatTaskIntent
 }
 
 // NewChatTaskManager constructs a ChatTaskManager.
-func NewChatTaskManager(dispatcher ScheduledTaskDispatcher) *ChatTaskManager {
+func NewChatTaskManager(dispatcher domain.ScheduledTaskDispatcher) *ChatTaskManager {
 	return &ChatTaskManager{dispatcher: dispatcher}
 }
 

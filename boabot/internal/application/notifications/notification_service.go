@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -20,8 +21,9 @@ const discussCap = 100
 
 // NotificationService manages in-app agent notifications.
 type NotificationService struct {
-	store     domain.AgentNotificationStore
-	taskStore domain.DirectTaskStore
+	store         domain.AgentNotificationStore
+	taskStore     domain.DirectTaskStore
+	appendDiscMu  sync.Mutex // serialises concurrent AppendDiscuss calls
 }
 
 // NewNotificationService constructs a NotificationService.
@@ -79,8 +81,11 @@ func (s *NotificationService) UnreadCount(ctx context.Context) (int, error) {
 // AppendDiscuss adds a DiscussEntry to a notification's discuss thread.
 // Enforces the 100-entry cap: if the thread already has 100 entries, the oldest
 // is removed before appending. Also transitions Status from unread → read if it
-// was unread.
+// was unread. Safe for concurrent use.
 func (s *NotificationService) AppendDiscuss(ctx context.Context, id, author, message string) error {
+	s.appendDiscMu.Lock()
+	defer s.appendDiscMu.Unlock()
+
 	n, err := s.store.Get(ctx, id)
 	if err != nil {
 		return fmt.Errorf("notifications: get for append discuss: %w", err)

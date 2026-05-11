@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	appnotifications "github.com/stainedhead/dev-team-bots/boabot/internal/application/notifications"
 	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	domainauth "github.com/stainedhead/dev-team-bots/boabot/internal/domain/auth"
@@ -61,13 +60,6 @@ type PluginRegistryUseCase interface {
 	FetchIndex(ctx context.Context, name string, force bool) (domain.RegistryIndex, error)
 }
 
-// ScheduledTaskDispatcher is the optional extension of TaskDispatcher that supports
-// schedule-aware dispatch. The HTTP handler uses a type assertion to detect whether
-// the configured dispatcher supports this interface.
-type ScheduledTaskDispatcher interface {
-	DispatchWithSchedule(ctx context.Context, botName, instruction string, schedule domain.Schedule, source domain.DirectTaskSource, threadID, workDir, title string) (domain.DirectTask, error)
-}
-
 // Config holds all stores and providers required by the orchestrator server.
 type Config struct {
 	Auth             AuthProvider
@@ -88,7 +80,7 @@ type Config struct {
 	FaviconIconPNG   []byte                                // blue/white-filter variant served at /imgs/boabot-favicon.png
 	BoardDispatcher  domain.BoardItemDispatcher            // use-case for dispatching board items to bots
 	MaxConcurrent    int                                   // max items in-progress simultaneously (0 = unlimited)
-	Notifications    *appnotifications.NotificationService // optional; notification endpoints return 501 when nil
+	Notifications    notificationService // optional; notification endpoints return 501 when nil
 	// ChatTaskManager handles intent detection and confirmation flow for task
 	// management requests sent via the chat interface.  Optional; nil means the
 	// feature is disabled and the message is forwarded to the bot as usual.
@@ -1177,7 +1169,7 @@ func (s *Server) handleBotTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If the dispatcher supports DispatchWithSchedule, use it.
-	if sd, ok := s.cfg.Dispatcher.(ScheduledTaskDispatcher); ok {
+	if sd, ok := s.cfg.Dispatcher.(domain.ScheduledTaskDispatcher); ok {
 		sched, err := parseScheduleRequest(req.Schedule)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

@@ -98,14 +98,18 @@ func (r RecurrenceRule) nextAfterMonthly(t time.Time) time.Time {
 // Validate returns an error if the rule cannot produce any future runs.
 func (r RecurrenceRule) Validate() error {
 	switch r.Frequency {
+	case RecurrenceFrequencyDaily:
+		// daily rules are always valid
 	case RecurrenceFrequencyWeekly:
 		if r.DaysMask == 0 {
 			return errors.New("schedule: weekly rule must have at least one day set in DaysMask")
 		}
 	case RecurrenceFrequencyMonthly:
-		if r.MonthDay == 0 {
-			return errors.New("schedule: monthly rule must have MonthDay set (1–31)")
+		if r.MonthDay < 1 || r.MonthDay > 31 {
+			return errors.New("schedule: monthly rule must have MonthDay in range 1–31")
 		}
+	default:
+		return errors.New("schedule: unknown frequency (want daily, weekly, or monthly)")
 	}
 	return nil
 }

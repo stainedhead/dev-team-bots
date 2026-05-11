@@ -84,6 +84,12 @@ type TaskDispatcher interface {
 	RunNow(ctx context.Context, id string) (DirectTask, error)
 }
 
+// ScheduledTaskDispatcher is the optional extension of TaskDispatcher that supports
+// schedule-aware dispatch. It is satisfied by LocalTaskDispatcher.
+type ScheduledTaskDispatcher interface {
+	DispatchWithSchedule(ctx context.Context, botName, instruction string, schedule Schedule, source DirectTaskSource, threadID, workDir, title string) (DirectTask, error)
+}
+
 // ChatThread represents a named conversation session.
 type ChatThread struct {
 	ID           string    `json:"id"`

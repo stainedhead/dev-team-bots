@@ -38,7 +38,8 @@ func (s *Server) handleNotificationList(w http.ResponseWriter, r *http.Request) 
 	filter := domain.AgentNotificationFilter{
 		BotName: r.URL.Query().Get("bot"),
 		Status:  domain.AgentNotificationStatus(r.URL.Query().Get("status")),
-		Search:  r.URL.Query().Get("search"),
+		Search:  r.URL.Query().Get("q"),
+		WorkDir: r.URL.Query().Get("dir"),
 	}
 	notifs, err := s.cfg.Notifications.List(r.Context(), filter)
 	if err != nil {

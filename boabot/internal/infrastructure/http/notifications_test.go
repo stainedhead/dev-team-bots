@@ -177,7 +177,7 @@ func TestNotificationList_AppliesBotFilter(t *testing.T) {
 	srv := newNotifTestServer(svc)
 	defer srv.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notifications?bot=dev-1&status=unread&search=blocked", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notifications?bot=dev-1&status=unread&q=blocked", nil)
 	req.Header.Set("Authorization", authHeader())
 	resp, _ := http.DefaultClient.Do(req)
 	defer func() { _ = resp.Body.Close() }()
@@ -193,6 +193,31 @@ func TestNotificationList_AppliesBotFilter(t *testing.T) {
 	}
 	if capturedFilter.Search != "blocked" {
 		t.Errorf("expected Search=blocked, got %q", capturedFilter.Search)
+	}
+}
+
+func TestNotificationList_AppliesDirFilter(t *testing.T) {
+	var capturedFilter domain.AgentNotificationFilter
+	store := &fakeNotificationStore{
+		listFn: func(_ context.Context, filter domain.AgentNotificationFilter) ([]domain.AgentNotification, error) {
+			capturedFilter = filter
+			return []domain.AgentNotification{}, nil
+		},
+	}
+	svc := newNotifSvc(store, &fakeNotifTaskStore{})
+	srv := newNotifTestServer(svc)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/notifications?dir=myrepo", nil)
+	req.Header.Set("Authorization", authHeader())
+	resp, _ := http.DefaultClient.Do(req)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if capturedFilter.WorkDir != "myrepo" {
+		t.Errorf("expected WorkDir=myrepo, got %q", capturedFilter.WorkDir)
 	}
 }
 

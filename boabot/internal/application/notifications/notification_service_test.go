@@ -109,7 +109,7 @@ func TestRaiseNotification_PersistsWithCorrectFields(t *testing.T) {
 	ctx := context.Background()
 
 	before := time.Now().UTC()
-	n, err := svc.RaiseNotification(ctx, "bot-a", "task-1", "work-1", "hello", "ctx-sum")
+	n, err := svc.RaiseNotification(ctx, "bot-a", "task-1", "work-1", "/projects/alpha", "hello", "ctx-sum")
 	after := time.Now().UTC()
 
 	if err != nil {
@@ -126,6 +126,9 @@ func TestRaiseNotification_PersistsWithCorrectFields(t *testing.T) {
 	}
 	if n.WorkItemID != "work-1" {
 		t.Errorf("WorkItemID: got %q, want %q", n.WorkItemID, "work-1")
+	}
+	if n.WorkDir != "/projects/alpha" {
+		t.Errorf("WorkDir: got %q, want %q", n.WorkDir, "/projects/alpha")
 	}
 	if n.Message != "hello" {
 		t.Errorf("Message: got %q, want %q", n.Message, "hello")
@@ -154,7 +157,7 @@ func TestRaiseNotification_EmptyOptionalFields(t *testing.T) {
 	svc, _, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, err := svc.RaiseNotification(ctx, "bot-b", "", "", "msg", "")
+	n, err := svc.RaiseNotification(ctx, "bot-b", "", "", "", "msg", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,6 +166,27 @@ func TestRaiseNotification_EmptyOptionalFields(t *testing.T) {
 	}
 	if n.WorkItemID != "" {
 		t.Errorf("expected empty WorkItemID, got %q", n.WorkItemID)
+	}
+}
+
+func TestRaiseNotification_WorkDir_Propagated(t *testing.T) {
+	svc, store, _ := newSvc(t)
+	ctx := context.Background()
+
+	n, err := svc.RaiseNotification(ctx, "bot-a", "", "", "/home/user/projects/myrepo", "msg", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n.WorkDir != "/home/user/projects/myrepo" {
+		t.Errorf("WorkDir on returned notification: got %q, want /home/user/projects/myrepo", n.WorkDir)
+	}
+
+	saved, err := store.Get(ctx, n.ID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if saved.WorkDir != "/home/user/projects/myrepo" {
+		t.Errorf("WorkDir persisted: got %q, want /home/user/projects/myrepo", saved.WorkDir)
 	}
 }
 
@@ -175,8 +199,8 @@ func TestList_DelegatesToStoreWithFilter(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed two notifications.
-	n1, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "first", "")
-	n2, _ := svc.RaiseNotification(ctx, "bot-b", "", "", "second", "")
+	n1, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "first", "")
+	n2, _ := svc.RaiseNotification(ctx, "bot-b", "", "", "", "second", "")
 	_ = n1
 	_ = n2
 
@@ -213,8 +237,8 @@ func TestUnreadCount_DelegatesToStore(t *testing.T) {
 	ctx := context.Background()
 
 	// Raise two notifications (both unread).
-	_, _ = svc.RaiseNotification(ctx, "bot-a", "", "", "one", "")
-	_, _ = svc.RaiseNotification(ctx, "bot-a", "", "", "two", "")
+	_, _ = svc.RaiseNotification(ctx, "bot-a", "", "", "", "one", "")
+	_, _ = svc.RaiseNotification(ctx, "bot-a", "", "", "", "two", "")
 
 	count, err := svc.UnreadCount(ctx)
 	if err != nil {
@@ -233,7 +257,7 @@ func TestAppendDiscuss_EntryAppended(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 
 	err := svc.AppendDiscuss(ctx, n.ID, "operator", "reply here")
 	if err != nil {
@@ -259,7 +283,7 @@ func TestAppendDiscuss_StatusTransitionsUnreadToRead(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 	if n.Status != domain.AgentNotificationStatusUnread {
 		t.Fatalf("precondition: status=%q, want unread", n.Status)
 	}
@@ -276,7 +300,7 @@ func TestAppendDiscuss_NoStatusTransitionIfAlreadyRead(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 	// First AppendDiscuss — transitions to read.
 	_ = svc.AppendDiscuss(ctx, n.ID, "operator", "first")
 	// Second AppendDiscuss — must stay read, not revert.
@@ -295,7 +319,7 @@ func TestAppendDiscuss_HundredEntryCap(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 
 	// Append 100 entries.
 	for i := range 100 {
@@ -347,7 +371,7 @@ func TestActionNotification_SetsStatusActioned(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 
 	err := svc.ActionNotification(ctx, n.ID)
 	if err != nil {
@@ -376,7 +400,7 @@ func TestRequeueTask_PrependContextAndSetsPending(t *testing.T) {
 	}
 	ts.addTask(task)
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "task-abc", "", "blocked", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "task-abc", "", "", "blocked", "")
 	_ = svc.AppendDiscuss(ctx, n.ID, "operator", "please retry with X")
 	_ = svc.AppendDiscuss(ctx, n.ID, "bot-a", "understood")
 
@@ -423,7 +447,7 @@ func TestRequeueTask_NoTaskID_ReturnsError(t *testing.T) {
 	ctx := context.Background()
 
 	// Notification with no TaskID.
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "blocked", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "blocked", "")
 
 	err := svc.RequeueTask(ctx, n.ID)
 	if err == nil {
@@ -436,7 +460,7 @@ func TestRequeueTask_TaskNotFound_ReturnsError(t *testing.T) {
 	ctx := context.Background()
 
 	// Notification references a task that doesn't exist in the store.
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "nonexistent-task", "", "blocked", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "nonexistent-task", "", "", "blocked", "")
 
 	err := svc.RequeueTask(ctx, n.ID)
 	if err == nil {
@@ -456,7 +480,7 @@ func TestRequeueTask_TaskRunning_ReturnsRequeueConflictErr(t *testing.T) {
 	}
 	ts.addTask(task)
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "task-running", "", "blocked", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "task-running", "", "", "blocked", "")
 
 	err := svc.RequeueTask(ctx, n.ID)
 	if !errors.Is(err, notifications.ErrRequeueConflict) {
@@ -472,8 +496,8 @@ func TestDelete_DelegatesToStore(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n1, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "one", "")
-	n2, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "two", "")
+	n1, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "one", "")
+	n2, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "two", "")
 
 	err := svc.Delete(ctx, []string{n1.ID, n2.ID})
 	if err != nil {
@@ -496,7 +520,7 @@ func TestAppendDiscuss_ConcurrentCalls_NoEntriesLost(t *testing.T) {
 	svc, store, _ := newSvc(t)
 	ctx := context.Background()
 
-	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "msg", "")
+	n, _ := svc.RaiseNotification(ctx, "bot-a", "", "", "", "msg", "")
 
 	const count = 50
 	var wg sync.WaitGroup
@@ -549,7 +573,7 @@ func (e *errStore) Delete(_ context.Context, _ []string) error     { return e.de
 func TestRaiseNotification_StoreSaveError_ReturnsError(t *testing.T) {
 	saveErr := errors.New("store: save failed")
 	svc := notifications.NewNotificationService(&errStore{saveErr: saveErr}, newFakeDirectTaskStore())
-	_, err := svc.RaiseNotification(context.Background(), "bot", "", "", "msg", "")
+	_, err := svc.RaiseNotification(context.Background(), "bot", "", "", "", "msg", "")
 	if err == nil {
 		t.Fatal("expected error when store.Save fails")
 	}
@@ -606,7 +630,7 @@ func TestRequeueTask_UpdateError_ReturnsError(t *testing.T) {
 	failingTS.tasks[task.ID] = task
 
 	svc2 := notifications.NewNotificationService(notifStore, failingTS)
-	n, _ := svc2.RaiseNotification(ctx, "bot", "task-upd-err", "", "blocked", "")
+	n, _ := svc2.RaiseNotification(ctx, "bot", "task-upd-err", "", "", "blocked", "")
 
 	err := svc2.RequeueTask(ctx, n.ID)
 	if err == nil {

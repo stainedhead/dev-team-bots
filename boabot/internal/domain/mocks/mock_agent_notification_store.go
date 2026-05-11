@@ -3,6 +3,7 @@ package mocks
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +68,9 @@ func (s *InMemoryAgentNotificationStore) List(_ context.Context, filter domain.A
 			continue
 		}
 		if filter.Search != "" && !strings.Contains(n.Message, filter.Search) {
+			continue
+		}
+		if filter.WorkDir != "" && filepath.Base(n.WorkDir) != filter.WorkDir {
 			continue
 		}
 		result = append(result, n)

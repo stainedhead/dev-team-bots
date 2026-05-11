@@ -27,6 +27,7 @@ type AgentNotification struct {
 	BotName        string                  `json:"bot_name"`
 	TaskID         string                  `json:"task_id,omitempty"`
 	WorkItemID     string                  `json:"work_item_id,omitempty"`
+	WorkDir        string                  `json:"work_dir,omitempty"`
 	Message        string                  `json:"message"`
 	ContextSummary string                  `json:"context_summary,omitempty"`
 	Status         AgentNotificationStatus `json:"status"`
@@ -41,6 +42,9 @@ type AgentNotificationFilter struct {
 	BotName string
 	Status  AgentNotificationStatus
 	Search  string
+	// WorkDir filters by the leaf directory component of AgentNotification.WorkDir.
+	// An exact match against path.Base(n.WorkDir) is performed.
+	WorkDir string
 }
 
 // AgentNotificationStore persists and retrieves agent notifications.

@@ -202,3 +202,21 @@ func TestAgentNotificationStore_Delete_NotFound_NoError(t *testing.T) {
 		t.Errorf("Delete of nonexistent IDs should not error, got: %v", err)
 	}
 }
+
+func TestAgentNotificationStore_List_FilterByWorkDir(t *testing.T) {
+	t.Parallel()
+	store := mocks.NewInMemoryAgentNotificationStore()
+	ctx := context.Background()
+
+	_ = store.Save(ctx, domain.AgentNotification{ID: "1", BotName: "dev-1", WorkDir: "/home/user/projects/alpha", Status: domain.AgentNotificationStatusUnread})
+	_ = store.Save(ctx, domain.AgentNotification{ID: "2", BotName: "dev-1", WorkDir: "/home/user/projects/beta", Status: domain.AgentNotificationStatusUnread})
+	_ = store.Save(ctx, domain.AgentNotification{ID: "3", BotName: "dev-1", WorkDir: "", Status: domain.AgentNotificationStatusUnread})
+
+	results, err := store.List(ctx, domain.AgentNotificationFilter{WorkDir: "alpha"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != "1" {
+		t.Errorf("expected 1 result for dir=alpha, got %v", results)
+	}
+}

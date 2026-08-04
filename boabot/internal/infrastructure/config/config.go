@@ -1,10 +1,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
 type Config struct {
@@ -24,6 +28,53 @@ type SlackConfig struct {
 	BotToken string `yaml:"bot_token"` // xoxb-...
 	AppToken string `yaml:"app_token"` // xapp-... (Socket Mode)
 	BotName  string `yaml:"bot_name"`  // which bot handles Slack messages
+}
+
+// ResolveSecrets fills in BotToken/AppToken from store when the
+// corresponding inline config.yaml field is empty (FR-047), namespaced by
+// BotName per the domain.SecretStore convention (SecretRef.Bot). The logical
+// secret names are "slack_bot_token" and "slack_app_token".
+//
+// When an inline field is already set, it is used as configured and a
+// deprecation warning naming the preferred alternative (a
+// ~/.boabot/credentials entry or an OS keystore secret) is logged — this is
+// FR-048's warn-only clause (the post-deprecation-period hard rejection is
+// out of scope for this run; see tasks.md's Deferred Items).
+//
+// When BotName is empty, Slack can never activate (see cmd/boabot/main.go's
+// activation gate, which requires BotToken, AppToken, and BotName all
+// non-empty), so ResolveSecrets skips the store entirely rather than paying
+// for a keystore/systemd round trip that can never matter.
+func (s *SlackConfig) ResolveSecrets(ctx context.Context, store domain.SecretStore, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if s.BotName == "" {
+		return
+	}
+	s.BotToken = resolveSlackToken(ctx, store, logger, s.BotName, "bot_token", "slack_bot_token", s.BotToken)
+	s.AppToken = resolveSlackToken(ctx, store, logger, s.BotName, "app_token", "slack_app_token", s.AppToken)
+}
+
+// resolveSlackToken implements the single-field resolution rule documented
+// on SlackConfig.ResolveSecrets.
+func resolveSlackToken(ctx context.Context, store domain.SecretStore, logger *slog.Logger, botName, fieldName, secretName, inline string) string {
+	if inline != "" {
+		logger.Warn(
+			"deprecated: inline Slack token in config.yaml; prefer a ~/.boabot/credentials entry or an OS keystore secret instead",
+			"field", "slack."+fieldName,
+			"secret_name", secretName,
+		)
+		return inline
+	}
+	if store == nil {
+		return ""
+	}
+	v, err := store.Get(ctx, domain.SecretRef{Name: secretName, Bot: botName})
+	if err != nil {
+		return ""
+	}
+	return v
 }
 
 // TeamFileConfig holds paths used by TeamManager to locate team.yaml and the

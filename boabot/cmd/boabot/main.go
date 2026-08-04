@@ -12,11 +12,17 @@ import (
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/credentials"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret"
+	secretenv "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret/env"
+	secretfile "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret/file"
+	secretkeystore "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret/keystore"
+	secretsystemd "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret/systemd"
 	slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
 )
 
@@ -24,12 +30,21 @@ var version = "dev"
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to config file")
+	diagSecrets := flag.Bool("diag-secrets", false, "report which provider resolves each configured secret (name only, never the value), then exit")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		slog.Error("failed to load config", "path", *configPath, "err", err)
 		os.Exit(1)
+	}
+
+	if *diagSecrets {
+		if err := runDiagSecrets(cfg, os.Stdout); err != nil {
+			slog.Error("secret diagnostics failed", "err", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	slog.Info("starting boabot", "name", cfg.Bot.Name, "type", cfg.Bot.BotType, "version", version)
@@ -53,20 +68,20 @@ func defaultConfigPath() string {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
-	// Load credentials file and apply to environment.
-	credsPath, err := credentials.DefaultPath()
+	providers, err := buildSecretProviders()
 	if err != nil {
-		slog.Warn("could not determine credentials file path", "err", err)
-	} else {
-		creds, err := credentials.Load(credsPath)
-		if err != nil {
-			return fmt.Errorf("credentials: %w", err) // world-readable file → fatal
-		}
-		// Override ANTHROPIC_API_KEY and BOABOT_BACKUP_TOKEN from credentials file
-		// only if the env var is not already set.
-		applyCredential(creds, "anthropic_api_key", "ANTHROPIC_API_KEY")
-		applyCredential(creds, "boabot_backup_token", "BOABOT_BACKUP_TOKEN")
+		return err
 	}
+	store := secret.New(providers)
+
+	// Resolve ANTHROPIC_API_KEY and BOABOT_BACKUP_TOKEN through the
+	// SecretStore chain rather than the credentials file directly (FR-046).
+	resolveEnvCredentials(ctx, store)
+
+	// Resolve Slack bot_token/app_token from the store when not inlined in
+	// config.yaml (FR-047); inline fields still work but log a deprecation
+	// warning (FR-048, warn-only).
+	cfg.Slack.ResolveSecrets(ctx, store, slog.Default())
 
 	router := queue.NewRouter()
 	b := bus.New()
@@ -120,12 +135,49 @@ func run(ctx context.Context, cfg config.Config) error {
 	return mgr.Run(ctx)
 }
 
-// applyCredential sets envKey from the credentials map if the env var is not
-// already set.
-func applyCredential(creds map[string]string, credKey, envKey string) {
-	if os.Getenv(envKey) == "" {
-		if v := credentials.Get(creds, credKey, ""); v != "" {
-			os.Setenv(envKey, v) //nolint:errcheck
-		}
+// buildSecretProviders assembles the default four-provider chain (FR-040:
+// env → systemd → keystore → file). The world-readable-credentials-file
+// check (FR-043) is preserved exactly as it was before the SecretStore
+// migration: it runs unconditionally (independent of which individual
+// secrets end up being needed) and is fatal on failure, matching the
+// pre-migration behaviour of the credentials.Load call that used to sit at
+// the top of run(). If the credentials path itself cannot be determined,
+// the file provider is simply omitted (matching the old code's behaviour of
+// skipping the whole credentials-file block in that case) — env vars still
+// resolve normally either way.
+func buildSecretProviders() ([]domain.SecretProvider, error) {
+	providers := []domain.SecretProvider{secretenv.New(), secretsystemd.New(), secretkeystore.New()}
+
+	credsPath, err := credentials.DefaultPath()
+	if err != nil {
+		slog.Warn("could not determine credentials file path", "err", err)
+		return providers, nil
 	}
+	if _, err := credentials.Load(credsPath); err != nil {
+		return nil, fmt.Errorf("credentials: %w", err) // world-readable file → fatal
+	}
+	return append(providers, secretfile.New(credsPath)), nil
+}
+
+// resolveEnvCredentials applies ANTHROPIC_API_KEY and BOABOT_BACKUP_TOKEN
+// from store into the process environment (FR-046), migrated from the
+// former two applyCredential calls against the credentials file directly.
+func resolveEnvCredentials(ctx context.Context, store domain.SecretStore) {
+	applyCredentialFromStore(ctx, store, "anthropic_api_key", "ANTHROPIC_API_KEY")
+	applyCredentialFromStore(ctx, store, "boabot_backup_token", "BOABOT_BACKUP_TOKEN")
+}
+
+// applyCredentialFromStore sets envKey from store's resolution of the named
+// secret. Precedence (an explicitly-set env var always wins) is enforced by
+// the SecretStore chain itself — its first provider is always "env" — so on
+// a hit this is a no-op when envKey was already set to the same value it
+// already held, and only actually changes anything when envKey was unset.
+// A miss (no provider resolved the secret) is not an error: envKey is left
+// exactly as it was, matching the pre-migration behaviour.
+func applyCredentialFromStore(ctx context.Context, store domain.SecretStore, secretName, envKey string) {
+	v, err := store.Get(ctx, domain.SecretRef{Name: secretName})
+	if err != nil {
+		return
+	}
+	os.Setenv(envKey, v) //nolint:errcheck
 }

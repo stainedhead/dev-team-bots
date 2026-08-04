@@ -243,16 +243,28 @@ func TestTeamManager_Monitors_EmptyByDefault(t *testing.T) {
 	}
 }
 
-func TestTeamManager_WithSlackMonitor_AppendsToMonitors(t *testing.T) {
+func TestTeamManager_WithChannelMonitor_AppendsToMonitors(t *testing.T) {
 	tm := &TeamManager{}
 	m1 := &fakeChannelMonitor{}
-	tm.monitors = append(tm.monitors, m1)
+	tm.WithChannelMonitor(m1)
 
 	if len(tm.monitors) != 1 {
 		t.Fatalf("expected 1 monitor, got %d", len(tm.monitors))
 	}
 	if tm.monitors[0] != domain.ChannelMonitor(m1) {
 		t.Error("expected the registered monitor to be present in tm.monitors")
+	}
+}
+
+func TestTeamManager_WithChannelMonitor_MultipleCallsAppendEachMonitor(t *testing.T) {
+	tm := &TeamManager{}
+	m1 := &fakeChannelMonitor{}
+	m2 := &fakeChannelMonitor{}
+	tm.WithChannelMonitor(m1)
+	tm.WithChannelMonitor(m2)
+
+	if len(tm.monitors) != 2 {
+		t.Fatalf("expected 2 monitors after two calls (e.g. Slack + Buzz), got %d", len(tm.monitors))
 	}
 }
 

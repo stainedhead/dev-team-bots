@@ -39,7 +39,6 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
-	slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
 )
 
 // TeamConfig is the parsed team.yaml structure.
@@ -131,8 +130,7 @@ type TeamManager struct {
 
 	// monitors holds every registered domain.ChannelMonitor (Slack today;
 	// Buzz and any future channel adapters attach here too). Registered via
-	// WithSlackMonitor (and future With*Monitor setters); empty means no
-	// channel integrations are enabled.
+	// WithChannelMonitor; empty means no channel integrations are enabled.
 	monitors []domain.ChannelMonitor
 
 	// askRouter routes mid-task user questions to running bots.
@@ -200,11 +198,14 @@ func (tm *TeamManager) AskRouter() domain.AskRouter { return tm.askRouter }
 // Registry returns the BotRegistry so callers can inspect running bots.
 func (tm *TeamManager) Registry() *BotRegistry { return tm.registry }
 
-// WithSlackMonitor attaches an optional Slack Socket Mode monitor that
-// receives DMs and @mentions and posts results back to Slack. It appends to
-// tm.monitors rather than occupying a dedicated field, so other channel
-// adapters (e.g. Buzz) can register alongside it with no TeamManager changes.
-func (tm *TeamManager) WithSlackMonitor(m *slackinfra.Monitor) {
+// WithChannelMonitor registers a channel adapter (Slack, Buzz, or any future
+// domain.ChannelMonitor implementation) that receives inbound messages and
+// posts task results back to its channel. It appends to tm.monitors rather
+// than occupying a dedicated field, so any number of channel adapters can
+// register with no TeamManager changes. Accepting the domain interface
+// rather than a concrete infrastructure type keeps internal/application/team
+// free of infrastructure imports (FR-034).
+func (tm *TeamManager) WithChannelMonitor(m domain.ChannelMonitor) {
 	tm.monitors = append(tm.monitors, m)
 }
 
@@ -879,7 +880,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	sharedChat := tm.sharedChatStore
 	sharedTasks := tm.sharedTaskStore
 	// Snapshot the monitor slice at closure-construction time. Monitors are
-	// registered once via WithSlackMonitor before Run() starts any goroutine,
+	// registered once via WithChannelMonitor before Run() starts any goroutine,
 	// so this avoids a data race between concurrent startBot invocations and
 	// any future mutation of tm.monitors.
 	monitors := tm.monitors

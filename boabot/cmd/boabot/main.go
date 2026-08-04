@@ -113,7 +113,7 @@ func run(ctx context.Context, cfg config.Config) error {
 			AppToken: cfg.Slack.AppToken,
 			BotName:  cfg.Slack.BotName,
 		}, router.QueueFor(cfg.Slack.BotName))
-		mgr.WithSlackMonitor(slackMon)
+		mgr.WithChannelMonitor(slackMon)
 		slog.Info("slack socket mode monitor configured", "bot", cfg.Slack.BotName)
 	}
 

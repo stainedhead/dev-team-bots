@@ -280,7 +280,9 @@ type RelayClient interface {
 
 **FR-002:** The agent secret key (nsec) MUST be resolved at startup from the `BUZZ_PRIVATE_KEY` environment variable, falling back to a `buzz_private_key` entry in `~/.boabot/credentials` promoted via the existing `credentials.Load` → `applyCredential` path in `cmd/boabot/main.go`. The existing world-readable-file check (mode `& 0o004`, fatal) MUST apply — it is the custody control for this key. The nsec MUST NOT appear in `config.yaml`, in `team.yaml`, in any committed file, or in any log line at any level.
 
-> **Note:** this module is a local single-binary runtime — `boabot/AGENTS.md` states "No AWS services are required to run," and the only AWS SDK dependency is `bedrockruntime` for the model provider. There is no Secrets Manager integration and this PRD does not introduce one. If the runtime later moves to ECS per `PRODUCT.md`, secret resolution becomes a new credential provider behind the same call site, with no change to any requirement here.
+> **Note:** this module is a local single-binary runtime — `boabot/AGENTS.md` states "No AWS services are required to run," and the only AWS SDK dependency is `bedrockruntime` for the model provider. There is no Secrets Manager integration and this PRD does not introduce one.
+>
+> Storing the nsec in the OS-native keystore (macOS Keychain, Windows Credential Manager, Linux Secret Service) is tracked separately in **`boabot-secret-storage-PRD.md`**, which adds a keystore provider to this same resolution chain behind this same call site. **This PRD does not depend on that work** — env var → credentials file is shippable today, and no requirement here changes when the keystore provider lands. The same applies if the runtime later moves to ECS per `PRODUCT.md`: that is one more provider, not a change to FR-002.
 
 **FR-003:** BaoBot MUST fail closed on identity: if the private key is missing, malformed, or fails to derive the expected pubkey, the Buzz monitor MUST NOT start, and the failure MUST be logged as an error. A bot with Buzz misconfigured MUST still start with all other channels functioning.
 

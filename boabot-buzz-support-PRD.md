@@ -21,6 +21,24 @@ That leaves three gaps:
 
 This PRD defines what BaoBot must implement to join a Buzz workspace as a native, first-class agent member.
 
+### Secret storage
+
+Joining Buzz means BaoBot holds a new category of secret — the agent's Nostr private key, which *is* its identity — on top of secrets it already holds: `ANTHROPIC_API_KEY`, `BOABOT_BACKUP_TOKEN`, and Slack's `bot_token`/`app_token`. Today they land in two places:
+
+| Secret | Where it lives today |
+|---|---|
+| `ANTHROPIC_API_KEY` | env var, or `~/.boabot/credentials` (INI, mode-checked) |
+| `BOABOT_BACKUP_TOKEN` | env var, or `~/.boabot/credentials` |
+| Slack `bot_token`, `app_token` | **`config.yaml`, in plaintext** (`SlackConfig`, `internal/infrastructure/config/config.go:23-27`) — no env or credentials-file path exists |
+| Buzz nsec (this PRD) | env var, or `~/.boabot/credentials` |
+
+Two problems follow.
+
+1. **`config.yaml` holds plaintext secrets.** Slack tokens have no resolution path other than the config file. That file sits next to the binary, is not mode-checked, and is the file most likely to be copied, shared, or committed by accident.
+2. **A dotfile is the strongest control we offer.** `credentials.Load` refuses to start on a world-readable file (`mode & 0o004`), which is a real control — but it is still plaintext at rest, readable by any process running as that user, and captured by any backup or sync tool pointed at `$HOME`.
+
+Every desktop OS ships an encrypted-at-rest credential store. We should use it. The complication — and the reason this needs a design rather than a library call — is that **BaoBot must also run unattended as a service**, and that is precisely the mode where OS keystores stop behaving uniformly. This PRD specifies both: joining Buzz, and the secret-storage upgrade that Buzz's own identity secret motivates.
+
 ---
 
 ## Background — Protocol and Ecosystem Review
@@ -154,6 +172,41 @@ Concretely: `nip29` exposes `Group`, `GroupAddress`, `NewGroup`, `NewGroupFromMe
 
 ---
 
+## Background — Secret Storage: What Each OS Actually Supports
+
+The interactive case is easy and uniform. The service case is not, and it differs *per OS*, not just in configuration.
+
+### The matrix
+
+| OS | Interactive (desktop / CLI / logged-in user) | Unattended service / daemon |
+|---|---|---|
+| **macOS** | ✅ **login keychain** via `security` / Security framework. Unlocked at login. | ⚠️ **System keychain** (`/Library/Keychains/System.keychain`), reachable by a root LaunchDaemon. The **login keychain is unreachable** — a daemon gets `errSecInteractionNotAllowed` (-25308) because there is no GUI session to prompt in, and the data-protection keychain is not available to third-party daemons at all. A daemon's keychain search list is normally just the System keychain. **Needs validation** — see FR-041. |
+| **Windows** | ✅ **Credential Manager** via `CredRead`/`CredWrite`. | ⚠️ Per `CredWriteW`, a credential is written "in the user's credential set" and "associated with the logon session of the current token"; network logon sessions have no credential set at all. So a service **cannot read a credential an interactive administrator wrote** — the credential must be written under the service's own account identity. Whether that is workable under `LocalSystem` specifically is **unverified** — see OQ-7. |
+| **Linux** | ✅ **Secret Service** (gnome-keyring, KWallet) over session D-Bus. | ❌ **Does not work.** Secret Service needs a session bus and an unlocked keyring; a headless systemd unit has neither, and `gnome-keyring-daemon --login` exits if it does not reach a session bus within minutes. The correct mechanism is **systemd credentials**: `LoadCredentialEncrypted=` / `SetCredentialEncrypted=`, materialised at `$CREDENTIALS_DIRECTORY` on tmpfs, auto-removed when the unit stops, optionally sealed to the TPM2 via `systemd-creds encrypt --with-key=tpm2`. |
+
+**The headline:** an OS-keystore abstraction cleanly covers all three *interactive* cells and at most one *service* cell. Linux-as-a-service needs a different mechanism entirely, and Windows-as-a-service needs a provisioning step. Any design that claims "one keyring library, works everywhere" is wrong about half the matrix.
+
+### What a keystore does and does not buy
+
+Worth stating plainly so the change is not oversold:
+
+- It **does** remove plaintext secrets from `config.yaml` and from a dotfile in `$HOME`, and it puts them behind an OS-managed, encrypted-at-rest store with per-application access control.
+- It **does not** stop the secret from being plaintext in the process's memory once loaded. Nothing here changes that.
+- On Linux-service it **does not** avoid disk entirely either: `LoadCredentialEncrypted=` decrypts to `$CREDENTIALS_DIRECTORY`, which is tmpfs (not persistent storage) and readable by the service user. That is a genuine improvement over a dotfile — encrypted at rest, scoped to the unit, wiped on stop — but it is not a TPM-sealed-at-use story.
+
+### Library evaluation
+
+| Library | Stars | Latest release | Last push | Verdict |
+|---|---|---|---|---|
+| [`zalando/go-keyring`](https://github.com/zalando/go-keyring) | 1,307 | **v0.2.8, Mar 2026** | **Jul 2026** | ✅ **Recommended.** Actively maintained. Backends: macOS `security`, Windows Credential Manager (via `danieljoos/wincred`), Secret Service over D-Bus — exactly the three cells where a keystore is the right answer. MIT. |
+| [`99designs/keyring`](https://github.com/99designs/keyring) | 655 | v1.2.2, **Dec 2022** | **May 2024** | ❌ Rejected. More backends (encrypted file, Pass, KeyCtl, KWallet), but effectively dormant — no release in over three years. Its extra fallback backends are the only reason to prefer it, and our provider chain supplies fallbacks itself. MIT. |
+
+The fallback logic belongs in our chain, not in the library. That makes the maintained three-backend library the better fit, and keeps `keyring` confined to one provider implementation.
+
+**Verified caveat:** `zalando/go-keyring`'s darwin backend shells out to `/usr/bin/security find-generic-password -s <service> -wa <username>` with **no `-k` keychain argument** (`keyring_darwin.go:43-49`). It therefore relies on the process's implicit keychain search list rather than naming a keychain. For a root daemon that list is normally just the System keychain, so it may work unmodified — but this is an assumption, not a documented guarantee, and it is the cell most likely to be wrongly marked as working. FR-041 requires validating it on a real LaunchDaemon.
+
+---
+
 ## Code Analysis — Current State of BaoBot
 
 ### The channel seam
@@ -205,11 +258,32 @@ This is a **Clean Architecture violation already present in the codebase**: the 
 | GitHub PR flow | NIP-34 patches + NIP-GS signing + NIP-MP projects | Substantially different trust model — see Risks. |
 | Calibrated autonomy gates (Advisory/Validating/Blocking/Escalating) | — | No Buzz equivalent; ours must remain authoritative. |
 
+### Secret storage — the single call site today
+
+`cmd/boabot/main.go:56-69` is the whole of today's secret resolution:
+
+```go
+credsPath, err := credentials.DefaultPath()          // ~/.boabot/credentials
+creds, err := credentials.Load(credsPath)            // world-readable → fatal
+applyCredential(creds, "anthropic_api_key", "ANTHROPIC_API_KEY")
+applyCredential(creds, "boabot_backup_token", "BOABOT_BACKUP_TOKEN")
+```
+
+`credentials.Load` (`internal/infrastructure/credentials/credentials.go`) is an INI parser: it selects a profile from `BOABOT_PROFILE` (default `"default"`), returns an empty map and `nil` when the file is absent, and returns an error when the file's mode has the world-readable bit set. `applyCredential` promotes a value to an env var **only when that env var is unset** — so an explicit env var already wins over the file.
+
+This is a good foundation. It is already an ordered chain with two links (env var → file), it already fails closed on a permissions mistake, and it is already funnelled through one call site. **This PRD extends that chain rather than replacing it.**
+
+**Gaps:**
+
+1. **Slack tokens bypass it entirely.** `SlackConfig` reads `bot_token` and `app_token` straight from `config.yaml`. There is no env var or credentials-file path for them, so the only way to run Slack today is plaintext in the config file.
+2. **The chain is hardcoded, not a port.** `applyCredential` is a package-level function in `main`, called twice with literal key names. There is no interface, so no provider can be added without editing `main` and no provider can be unit-tested through a seam.
+3. **Nothing is namespaced per bot.** All bots in the process share one credentials file and one env space. A per-bot Buzz nsec (per OQ-4 below) has no key convention to slot into.
+
 ---
 
 ## Architecture Decision
 
-Three integration paths were evaluated. **We recommend Option A.**
+Three integration paths for Buzz connectivity were evaluated. **We recommend Option A.**
 
 ### Option A — Native Go Nostr client as a `ChannelMonitor` adapter ✅ **Recommended**
 
@@ -250,6 +324,40 @@ type RelayClient interface {
 
 — keeps `fiatjaf.com/nostr` imports confined to `internal/infrastructure/buzz/`, makes the adapter mockable, and keeps the 90% domain/application coverage target reachable.
 
+### Secret storage — a `SecretStore` port with an ordered provider chain
+
+```go
+// internal/domain/secret.go (illustrative)
+type SecretRef struct {
+    Name string // logical name, e.g. "buzz_private_key"
+    Bot  string // optional per-bot namespace; "" = global
+}
+
+type SecretProvider interface {
+    Name() string                                          // for logs: "env", "keystore", ...
+    Lookup(ctx context.Context, ref SecretRef) (string, bool, error)
+}
+
+type SecretStore interface {
+    Get(ctx context.Context, ref SecretRef) (string, error)
+}
+```
+
+`SecretStore` holds `[]SecretProvider` and returns the **first hit**. A provider that is unavailable on this platform, or has no entry, returns `(false, nil)` — not an error. Only a provider that is present and *malfunctioning* returns an error.
+
+**Default chain order:**
+
+| # | Provider | Rationale |
+|---|---|---|
+| 1 | **Explicit environment variable** | Highest precedence. Containers, CI, and `docker run -e` must always win, and this preserves today's behaviour exactly. |
+| 2 | **systemd credentials** (`$CREDENTIALS_DIRECTORY`) | Linux-service only; the directory is present only when systemd set it. Correct answer for the Linux-service cell. |
+| 3 | **OS keystore** (`zalando/go-keyring`) | The new capability. Covers all three interactive cells and, pending FR-041, macOS-service. |
+| 4 | **Credentials file** (`~/.boabot/credentials`) | Today's mechanism, retained unchanged as the floor. Keeps every existing deployment working with no migration. |
+
+Ordering 2 above 3 matters: on a Linux service both may nominally be "available," and the systemd credential is the one that actually works.
+
+**Why not replace the credentials file:** because it works, it is already mode-checked, and it is the only mechanism that functions identically in every cell of the matrix — including containers, which have no keystore and no systemd. It becomes the fallback, not the recommendation.
+
 ---
 
 ## Goals
@@ -258,6 +366,11 @@ type RelayClient interface {
 - **G2** — Buzz is added as a peer channel to Slack behind the existing `ChannelMonitor` seam, with no change to the worker harness, budget, memory, or autonomy subsystems.
 - **G3** — Agent identity is owner-attested (NIP-OA/NIP-AA) so BaoBot's provenance is cryptographically verifiable by any Buzz client, and revoking the owner's membership revokes the agent's access.
 - **G4** — The channel seam is corrected to depend on a domain interface rather than a concrete Slack type, so Buzz (and any future channel) attaches without further application-layer surgery.
+- **G5** — Secrets can be stored in the OS-native encrypted credential store on macOS, Windows, and Linux, for interactive use.
+- **G6** — BaoBot resolves secrets correctly when started unattended as a service on all three platforms, using the mechanism appropriate to that platform rather than assuming a keystore is reachable.
+- **G7** — No secret is required to live in `config.yaml`, including the Slack tokens that have no alternative today.
+- **G8** — Secret resolution moves behind a domain port with an ordered, testable provider chain, replacing the hardcoded two-link chain in `main`.
+- **G9** — Existing deployments keep working with no configuration change: env vars and `~/.boabot/credentials` continue to resolve exactly as they do now.
 
 ## Non-Goals
 
@@ -269,6 +382,12 @@ type RelayClient interface {
 - **NG6** — Canvases, voice huddles (NIP-53/LiveKit), Blossom media upload, and `kind:40002`/`40003` rich content and edits.
 - **NG7** — Multi-workspace / multi-relay federation. One bot binds to one Buzz community per deployment.
 - **NG8** — Removing or deprecating the Slack channel.
+- **NG9** — Remote secret managers (AWS Secrets Manager, Vault, 1Password). The `SecretStore` port makes them additive later; none is built here.
+- **NG10** — Encrypting the secret in process memory, or defending against a local attacker who can read our process memory or attach a debugger.
+- **NG11** — TPM/Secure-Enclave sealed-at-use key operations. `systemd-creds --with-key=tpm2` is supported as a *storage* option because systemd provides it for free; we do not build TPM support ourselves.
+- **NG12** — Secret rotation, expiry, or lease renewal. Storage and retrieval only.
+- **NG13** — A GUI or TUI for secret entry. Provisioning is CLI and OS-native tooling.
+- **NG14** — Changing what secrets exist or how they are used by the subsystems that consume them.
 
 ---
 
@@ -282,7 +401,7 @@ type RelayClient interface {
 
 > **Note:** this module is a local single-binary runtime — `boabot/AGENTS.md` states "No AWS services are required to run," and the only AWS SDK dependency is `bedrockruntime` for the model provider. There is no Secrets Manager integration and this PRD does not introduce one.
 >
-> Storing the nsec in the OS-native keystore (macOS Keychain, Windows Credential Manager, Linux Secret Service) is tracked separately in **`boabot-secret-storage-PRD.md`**, which adds a keystore provider to this same resolution chain behind this same call site. **This PRD does not depend on that work** — env var → credentials file is shippable today, and no requirement here changes when the keystore provider lands. The same applies if the runtime later moves to ECS per `PRODUCT.md`: that is one more provider, not a change to FR-002.
+> Storing the nsec in the OS-native keystore (macOS Keychain, Windows Credential Manager, Linux Secret Service) is specified below as part of the same `SecretStore` chain (FR-038–FR-054, phased into P1 of the Secret Storage workstream — see Phasing). **This requirement does not depend on that work** — env var → credentials file is shippable today, and no requirement here changes when the keystore provider lands. The same applies if the runtime later moves to ECS per `PRODUCT.md`: that is one more provider, not a change to this requirement.
 
 **FR-003:** BaoBot MUST fail closed on identity: if the private key is missing, malformed, or fails to derive the expected pubkey, the Buzz monitor MUST NOT start, and the failure MUST be logged as an error. A bot with Buzz misconfigured MUST still start with all other channels functioning.
 
@@ -360,21 +479,65 @@ type RelayClient interface {
 
 **FR-037:** `boabot/AGENTS.md` and the root `AGENTS.md` MUST be corrected to remove the non-existent Microsoft Teams adapter and to document the Buzz adapter in its place.
 
+### Secret storage — the port and the chain
+
+**FR-038:** A `SecretStore` port and a `SecretProvider` interface MUST be defined in `internal/domain/`. Neither may import any keystore, D-Bus, or OS-specific package.
+
+**FR-039:** `SecretStore.Get` MUST consult providers in configured order and return the first hit. A provider that is unavailable on the current platform, or that holds no entry for the reference, MUST return "not found" rather than an error, and MUST NOT halt the chain.
+
+**FR-040:** The default provider order MUST be: explicit environment variable → systemd credentials directory → OS keystore → credentials file. The order MUST be configurable, and any provider MUST be omissible.
+
+**FR-041:** An OS keystore provider MUST be implemented over `zalando/go-keyring`, confined to `internal/infrastructure/secret/keystore/`. Its behaviour **MUST be validated on a real service on each platform** before the platform is documented as supported — specifically including whether the library's `security` invocation reaches the **System** keychain from a root LaunchDaemon, given it passes no `-k` argument. If it does not, the provider MUST either name the keychain explicitly or the macOS-service cell MUST be documented as requiring a provisioning step (`security add-generic-password -A -k /Library/Keychains/System.keychain …`).
+
+**FR-042:** A systemd credentials provider MUST be implemented that reads `$CREDENTIALS_DIRECTORY/<name>`. It MUST be inert when that variable is unset, so it costs nothing on non-Linux platforms and on Linux outside systemd.
+
+**FR-043:** The existing credentials-file loader MUST be wrapped as a provider with its behaviour unchanged, **including the world-readable check remaining fatal**. That check is the floor control for the file provider and MUST NOT be downgraded to a warning.
+
+**FR-044:** The environment-variable provider MUST preserve today's precedence exactly: an explicitly-set env var wins over every other provider.
+
+**FR-045:** Secret lookups MUST be namespaced per bot where a per-bot secret is meaningful, via `SecretRef.Bot`. The keystore key convention MUST be documented and stable, since it becomes the on-disk contract in users' keychains. (This is the namespace the per-bot Buzz nsec, per OQ-4, will use.)
+
+### Secret storage — callers and configuration
+
+**FR-046:** `cmd/boabot/main.go` MUST resolve `ANTHROPIC_API_KEY` and `BOABOT_BACKUP_TOKEN` through `SecretStore` rather than the current two `applyCredential` calls, with no change in observable behaviour for existing deployments.
+
+**FR-047:** `SlackConfig` MUST gain a secret-resolution path so `bot_token` and `app_token` can be supplied without appearing in `config.yaml`. The existing inline fields MUST continue to work for one release, and MUST log a deprecation warning naming the file when used.
+
+**FR-048:** Config loading MUST reject any `config.yaml` that inlines a secret for which a resolution path now exists, once the deprecation period in FR-047 ends. Until then it MUST warn.
+
+**FR-049:** `boabotctl` MUST gain subcommands to write, read-presence-of (never the value), and delete secrets in the OS keystore, so operators are not required to learn `security`, `cmdkey`, and `secret-tool` separately.
+
+**FR-050:** A diagnostic command MUST report, for each configured secret, **which provider resolved it** — never the value, and never a prefix or suffix of the value. Without this, a four-link chain is undebuggable in the field.
+
+### Secret storage — safety
+
+**FR-051:** No secret value may be logged at any level, by any provider, on any code path, including error paths. Provider errors MUST be reported by provider name and reference name only.
+
+**FR-052:** A secret value MUST NOT be passed to a subprocess as a command-line argument by any provider, since process arguments are world-readable on all three platforms.
+
+**FR-053:** When no provider resolves a required secret, the error MUST name the reference and enumerate the providers consulted, so the operator knows where the value was looked for.
+
+**FR-054:** Documentation MUST state the residual exposure explicitly: secrets are plaintext in process memory once loaded, and on Linux-service the systemd credential is plaintext at `$CREDENTIALS_DIRECTORY` (tmpfs, unit-scoped, wiped on stop). The keystore MUST NOT be presented as meaning "the secret never touches disk."
+
 ---
 
 ## Non-Functional Requirements
 
-- **Performance:** Time from relay delivery of a qualifying mention to task enqueue MUST be under 500 ms at p95, excluding model inference. Reply publication after `HandleResult` MUST be under 1 s at p95.
-- **Reliability:** The monitor MUST survive relay restarts and network partitions without operator intervention, reconnecting with bounded backoff and jitter. A Buzz outage MUST NOT degrade Slack, SQS, or scheduled-task processing. Reconnect MUST NOT lose the pending task-ID correlation map.
-- **Security:** Private keys resolve only via the FR-002 credential path (env var, or a mode-0600 `~/.boabot/credentials` entry) — never logged, never in config, never on a command line. Inbound content is untrusted (FR-028). Author gating enforced before dispatch (FR-029). NIP-GS git signing, if ever enabled, sits behind an **Escalating** autonomy gate — an agent key that can sign commits is a materially larger blast radius than one that can post messages. **An issued NIP-OA `auth` tag must be treated as a full relay read/write capability, not a scoped one**: `kind=` clauses do not constrain relay admission, and the tag is valid at any NIP-AA relay. Attestations MUST therefore carry a bounded `created_at<` window, and issuance MUST be treated as granting workspace-wide access.
-- **Observability:** Structured logs for connect, authenticate, subscribe, dispatch, publish, and reconnect. Metrics for connection state, auth failures split by `invalid`/`restricted` class, events received/published by kind, dispatch latency, and reconnect count. Presence staleness MUST be observable so I3 violations are detectable.
-- **Maintainability:** `fiatjaf.com/nostr` imports confined to `internal/infrastructure/buzz/`. Domain and application layers MUST have zero Nostr imports. Buzz draft NIPs are moving targets — the version of `block/buzz` validated against MUST be recorded in `docs/architectural-decision-record.md`.
-- **Testing:** TDD throughout, per `AGENTS.md`. 90%+ coverage on domain and application layers. Adapter integration tests tagged `//go:build integration` run against a real relay started from Buzz's own `docker-compose.yml`. NIP-OA implementation MUST assert against the published test vectors.
+- **Performance:** Time from relay delivery of a qualifying mention to task enqueue MUST be under 500 ms at p95, excluding model inference. Reply publication after `HandleResult` MUST be under 1 s at p95. Secret resolution happens at startup only: the full provider chain MUST complete within 2 s per secret, and an unreachable D-Bus or keychain MUST time out rather than hang startup indefinitely.
+- **Reliability:** The Buzz monitor MUST survive relay restarts and network partitions without operator intervention, reconnecting with bounded backoff and jitter. A Buzz outage MUST NOT degrade Slack, SQS, or scheduled-task processing. Reconnect MUST NOT lose the pending task-ID correlation map. Separately, an unavailable secret provider MUST degrade to the next provider, never to a crash; a locked or absent keystore MUST NOT prevent startup when a later provider can supply the value.
+- **Security:** Private keys resolve only via the FR-002 credential path (env var, or a mode-0600 `~/.boabot/credentials` entry, or — once FR-038–FR-045 land — the OS keystore or systemd credentials) — never logged, never in config, never on a command line. Inbound content is untrusted (FR-028). Author gating enforced before dispatch (FR-029). NIP-GS git signing, if ever enabled, sits behind an **Escalating** autonomy gate — an agent key that can sign commits is a materially larger blast radius than one that can post messages. **An issued NIP-OA `auth` tag must be treated as a full relay read/write capability, not a scoped one**: `kind=` clauses do not constrain relay admission, and the tag is valid at any NIP-AA relay. Attestations MUST therefore carry a bounded `created_at<` window, and issuance MUST be treated as granting workspace-wide access. No secret value may appear in `config.yaml`, on a command line, or in a log at any level (FR-051, FR-052).
+- **Observability:** Structured logs for connect, authenticate, subscribe, dispatch, publish, and reconnect. Metrics for connection state, auth failures split by `invalid`/`restricted` class, events received/published by kind, dispatch latency, and reconnect count. Presence staleness MUST be observable so I3 violations are detectable. Startup MUST additionally log, per secret, which provider resolved it — by name only (FR-050).
+- **Maintainability:** `fiatjaf.com/nostr` imports confined to `internal/infrastructure/buzz/`. `zalando/go-keyring` and `godbus/dbus` imports confined to `internal/infrastructure/secret/`. Domain and application layers MUST have zero Nostr or keystore imports. Buzz draft NIPs are moving targets — the version of `block/buzz` validated against MUST be recorded in `docs/architectural-decision-record.md`.
+- **Testing:** TDD throughout, per `AGENTS.md`. 90%+ coverage on domain and application layers. Adapter integration tests tagged `//go:build integration` run against a real relay started from Buzz's own `docker-compose.yml`. NIP-OA implementation MUST assert against the published test vectors. The secret provider chain MUST be unit-testable with fake providers and no OS keystore; real-keystore tests MUST also be tagged `//go:build integration`.
 - **Deployment:** No Rust toolchain, no Node runtime, no sidecar container. Single Go binary, unchanged image build.
+- **Portability:** The secret-storage work MUST build and pass tests on macOS, Windows, and Linux. Platform-specific code MUST be behind build tags with a working no-op or fallback on every other platform. CI MUST run the test suite on all three.
+- **Compatibility:** An existing deployment using env vars or `~/.boabot/credentials` MUST work unchanged with no config edit. This is a strict requirement, not a best effort.
 
 ---
 
 ## Acceptance Criteria
+
+### Buzz support
 
 - [ ] A BaoBot instance connects to a locally-run `buzz-relay` (Buzz's `docker-compose.yml`), authenticates via NIP-42, and appears as an online member in the Buzz desktop client.
 - [ ] The bot's `kind:0` profile renders its name and description in the Buzz client, not a bare pubkey.
@@ -407,12 +570,38 @@ type RelayClient interface {
 - [ ] `docs/technical-details.md`, `docs/product-details.md`, and `docs/architectural-decision-record.md` are updated; the ADR entry records the Option A/B/C decision and the `block/buzz` commit validated against.
 - [ ] `boabot/AGENTS.md` and root `AGENTS.md` no longer claim a Microsoft Teams adapter.
 
+### Secret storage
+
+- [ ] A secret written to the macOS login keychain is resolved by an interactively-run boabot, with nothing in `config.yaml` or `~/.boabot/credentials`.
+- [ ] The same, on Windows via Credential Manager.
+- [ ] The same, on Linux via Secret Service in a desktop session.
+- [ ] **macOS service:** a LaunchDaemon-started boabot resolves a secret from the System keychain — or, if the library cannot reach it, the documented `-k /Library/Keychains/System.keychain` provisioning step is verified to work and the limitation is recorded. Either outcome is acceptable; silently claiming support is not.
+- [ ] **Linux service:** a systemd unit using `LoadCredentialEncrypted=` starts with no session D-Bus and no unlocked keyring, and resolves the secret from `$CREDENTIALS_DIRECTORY`.
+- [ ] **Linux service, negative:** the same unit with only a Secret Service entry and no systemd credential fails with an error naming every provider consulted — not a hang, and not a generic failure.
+- [ ] **Windows service:** a boabot Windows service resolves a credential written under its own service account identity; the OQ-7 finding on `LocalSystem` is recorded either way.
+- [ ] Provider precedence: with the same logical secret present in all four providers, the env var wins; unset it and the systemd credential wins; unset that and the keystore wins; remove that and the file wins. Asserted as a single ordered test.
+- [ ] A provider that errors (e.g. D-Bus refuses the connection) does not halt the chain — the next provider is consulted and resolution succeeds.
+- [ ] A world-readable `~/.boabot/credentials` remains fatal at startup, with the existing error message.
+- [ ] Slack `bot_token` and `app_token` resolve from the keystore with neither present in `config.yaml`, and the bot connects to Slack.
+- [ ] A `config.yaml` with inline Slack tokens still works and emits a deprecation warning naming the alternative.
+- [ ] `boabotctl` writes, checks presence of, and deletes a keystore secret on each of the three platforms.
+- [ ] The diagnostic command reports the resolving provider for every configured secret and no secret value, verified by asserting against captured output.
+- [ ] No secret value appears in log output at any level, including on every provider error path, verified by test against a captured log buffer with a sentinel value.
+- [ ] No provider passes a secret as a subprocess argument, verified by inspecting the constructed command in test.
+- [ ] An existing deployment using only env vars, and one using only `~/.boabot/credentials`, both start with a byte-identical config to before this change.
+- [ ] `go build`, `go vet`, `golangci-lint run`, and `go test -race ./...` pass on macOS, Windows, and Linux in CI; domain and application coverage ≥90% and not regressed.
+- [ ] `grep -r "go-keyring\|godbus" internal/domain internal/application` returns no matches.
+- [ ] `docs/technical-details.md`, `docs/product-details.md`, and `docs/architectural-decision-record.md` updated; the ADR records the per-OS matrix and the `zalando` over `99designs` decision with the maintenance evidence.
+- [ ] `user-docs/` gains a secret-provisioning guide with the per-OS × per-mode matrix and the residual-exposure statement from FR-054.
+
 ---
 
 ## Phasing
 
+### Buzz support
+
 **P0 — Presence in the workspace** (FR-001 → FR-024, FR-028 → FR-037)
-Keypair identity, NIP-OA attestation, NIP-42/NIP-AA auth, `kind:9` read/write with `#h` scoping, thread replies, mention gate, presence, graceful shutdown, the `ChannelMonitor` seam fix, config, and docs. **This is the shippable unit** — after P0, BaoBot is a working Buzz teammate.
+Keypair identity, NIP-OA attestation, NIP-42/NIP-AA auth, `kind:9` read/write with `#h` scoping, thread replies, mention gate, presence, graceful shutdown, the `ChannelMonitor` seam fix, config, and docs. **This is the shippable unit** — after P0, BaoBot is a working Buzz teammate. It ships independent of the Secret Storage phases below — FR-002 already works on env var → credentials file.
 
 **P1 — Conversational polish**
 Typing indicators (FR-025), gated `!shutdown` handling (FR-026), reaction publishing and subscription (FR-027), NIP-50 search over channel history, NIP-CW channel-window paging for bounded backfill, and **NIP-17 gift-wrapped DMs — including DM-triggered tasks, which FR-019 excludes from P0**.
@@ -422,6 +611,19 @@ NIP-AP persona publication (`kind:30175`) projected from `SOUL.md` + `AgentCard`
 
 **Deferred, not scheduled**
 NIP-GS git signing, NIP-34 patches, NIP-MP projects, NIP-AO observability, Blossom media, canvases, voice, `kind:40002`/`40003` rich content. Git-on-Nostr in particular is a trust-model change, not a feature increment — it warrants its own PRD.
+
+### Secret storage
+
+**P0 — The chain, with no new backends** (FR-038, FR-039, FR-040, FR-043, FR-044, FR-046, FR-050–FR-054)
+Introduce `SecretStore`, wrap the existing env-var and credentials-file behaviour as providers, move `main` onto it, add the diagnostic. **Ships with zero behaviour change** and is independently valuable: it converts a hardcoded chain into a tested port.
+
+**P1 — Keystore and systemd providers** (FR-041, FR-042, FR-045, FR-049)
+The actual capability, plus `boabotctl` provisioning. Gated on the FR-041 per-platform service validation.
+
+**P2 — Get secrets out of `config.yaml`** (FR-047, FR-048)
+Slack tokens, the deprecation warning, then the hard rejection one release later.
+
+**Deferred** — remote secret managers (AWS Secrets Manager, Vault, 1Password), rotation, TPM sealed-at-use.
 
 ---
 
@@ -444,6 +646,15 @@ NIP-GS git signing, NIP-34 patches, NIP-MP projects, NIP-AO observability, Bloss
 | No Go SDK from Block | Risk | Every Buzz crate is Rust; we track the wire protocol, not a vendored SDK. Mitigation: this is inherent to Option A and priced in — the wire protocol is the documented, tested-against-third-party-clients surface. |
 | Relay operational dependency | Dependency | A relay must exist. Self-hosted (`docker-compose.yml`, Railway one-click) or Block's managed service. Deployment topology and whether the relay is in-VPC is unresolved — see OQ-3. |
 | Prompt injection via public workspace | Risk | Buzz channels may include actors outside our organisation. Every message is model input. Mitigation: FR-028 sanitisation plus FR-029 author gating, and no relaxation of autonomy gates for Buzz-origin tasks. |
+| `zalando/go-keyring` | Dependency | MIT, v0.2.8 (Mar 2026), pushed Jul 2026, 1.3k stars — actively maintained. Pulls in `godbus/dbus/v5` and `danieljoos/wincred`. |
+| macOS System keychain reachability | Risk | The library passes no `-k` argument and relies on the implicit search list. If a root LaunchDaemon's search list is not what we assume, the macOS-service cell needs explicit keychain naming or a provisioning step. **FR-041 makes validation mandatory before claiming support.** |
+| Windows service account identity | Risk | `CredWriteW` associates a credential with "the logon session of the current token", so a service cannot read what an interactive admin wrote. Provisioning must happen under the service's own identity. Behaviour under `LocalSystem` specifically is unverified — see OQ-7. |
+| Linux Secret Service is a trap | Risk | It is *present* on desktop Linux and *absent* on servers, so a naive implementation works on the developer's laptop and fails in production. Mitigated by ordering systemd credentials ahead of the keystore and by the negative-path acceptance criterion. |
+| `security` CLI dependency on macOS | Risk | The library shells out to `/usr/bin/security` rather than linking the Security framework. Fine on stock macOS, but it is a subprocess on the startup path and its output is parsed as text. Note FR-052 — the library uses `-i` stdin mode for writes, which keeps values off the command line; this MUST be re-verified on any library upgrade. |
+| Cross-platform CI | Dependency | Requires macOS, Windows, and Linux runners. GitHub Actions provides all three, but the workflows in `.github/workflows/` are Linux-only today and will need matrix builds. |
+| Testing keystores in CI | Risk | Headless CI has no unlocked keychain. Real-keystore tests must be `//go:build integration` and either skipped in CI or run against a keychain created and unlocked in the job. Do not let this pressure the unit tests into depending on a real keystore. |
+| Deprecating inline Slack tokens | Risk | FR-048's eventual hard rejection breaks any deployment that ignored the warning. Mitigation: warn for a full release, name the exact replacement in the message, and call it out in release notes. |
+| Buzz P0 vs. Secret Storage P0 sequencing | Dependency | Buzz's nsec resolution (FR-002) is independent of the Secret Storage `SecretStore` work (FR-038–FR-054): env var → credentials file is sufficient to ship Buzz P0. The two workstreams can proceed in either order or in parallel; only the *keystore provider* for the nsec (part of Secret Storage P1) depends on Buzz's config shape (FR-035) existing first. |
 
 ---
 
@@ -455,17 +666,30 @@ NIP-GS git signing, NIP-34 patches, NIP-MP projects, NIP-AO observability, Bloss
 - **OQ-4:** Which bots get Buzz identities — every bot in `team.yaml`, or only the orchestrator acting as the team's single front door? Per-bot identities are more faithful to Buzz's model and give better audit granularity; a single front door is far less key material to custody. Note the new constraint surfaced from NIP-AA: relays SHOULD aggregate quotas by **owner** pubkey across virtual members, so a fleet of per-bot identities attested by one owner key may throttle each other. If we go per-bot, we may need per-bot owner keys too — which multiplies the OQ-2 custody problem.
 - **OQ-5:** Do we need `boabotctl` subcommands for Buzz key generation, attestation issuance, and channel join, so operators are not required to build Rust `buzz-admin` locally? Likely yes for adoption, but it is additional scope not currently costed in P0.
 - **OQ-6:** Should NIP-AE engrams replace, mirror, or merely export our memory subsystem? Deferred to P2, but the answer affects whether P0's memory writes need any Buzz-shaped metadata from the start.
+- **OQ-7:** Can a Windows service running as `LocalSystem` write and read its *own* Credential Manager entry? `CredWriteW` documents credentials as bound to the current token's logon session, and `LocalSystem` does have a profile — but this was not verified, and one widely-cited source conflated the wincred API with the Biometric Framework credential manager, which has a documented restriction on non-interactive accounts. **This must be tested on a real Windows service**, not researched. If the answer is no, Windows-service deployments need either a dedicated service *user* account or a DPAPI machine-scope blob provider, and the latter is additional scope.
+- **OQ-8:** Do we run BaoBot as a service on all three platforms today, or is Windows-as-a-service hypothetical? If nobody runs it, OQ-7 drops from blocking to informational and Secret Storage P1 can ship covering macOS and Linux service modes only.
+- **OQ-9:** Should the per-bot namespace (FR-045) key on bot *name* or bot *type*? Names are unique but change when a bot is renamed — which would orphan keychain entries with no migration path. Types are stable but collide across multiple bots of one type.
+- **OQ-10:** Is `~/.boabot/credentials` the right home when running as a service, given the service account's `$HOME` may be `/var/lib/...`, `C:\Windows\System32\config\systemprofile`, or unset? A service-mode path override may be needed independently of the keystore work.
+- **OQ-11:** Should `boabotctl secret set` (FR-049) be able to write to a *remote* bot's keystore, or only the local machine's? Local-only is far simpler and probably right, but the team runs bots on shared hosts.
 
 ---
 
 ## Appendix — Sources
 
-Protocol and ecosystem facts in this PRD were taken from primary sources on 2026-08-04:
+Protocol, ecosystem, and secret-storage facts in this PRD were taken from primary sources on 2026-08-04:
 
 - [github.com/block/buzz](https://github.com/block/buzz) — `README.md`, `NOSTR.md`, `VISION_REMOTE_AGENTS.md`, `docs/remote-agents.md`, `docs/nips/NIP-OA.md`, `docs/nips/NIP-AA.md`, `docs/nips/` index, `crates/` listing, `crates/buzz-acp/README.md`
 - [fiatjaf.com/nostr](https://pkg.go.dev/fiatjaf.com/nostr) — package layout inspected directly in the Go module cache at `v0.0.0-20260731140316-a8080728893f`
 - [nbd-wtf/go-nostr](https://github.com/nbd-wtf/go-nostr) — archive notice and successor pointer
 - [The New Stack](https://thenewstack.io/block-buzz-agent-workspace/), [Decrypt](https://decrypt.co/374026/jack-dorseys-block-launches-buzz-a-nostr-based-slack-and-github-rival-for-ai-agents), [Crypto Briefing](https://cryptobriefing.com/block-launches-buzz-nostr-workspace/) — launch context
 - [Agent Client Protocol](https://agentclientprotocol.com/) — the stdio protocol `buzz-acp` speaks
+- [`CredWriteW` (wincred.h)](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) — "creates a new credential … in the user's credential set"; "associated with the logon session of the current token"; `ERROR_NO_SUCH_LOGON_SESSION` — "Network logon sessions do not have an associated credential set."
+- [systemd — System and Service Credentials](https://systemd.io/CREDENTIALS/) and [`systemd-creds(1)`](https://manpages.debian.org/testing/systemd/systemd-creds.1.en.html) — `LoadCredentialEncrypted=`, `SetCredentialEncrypted=`, `$CREDENTIALS_DIRECTORY`, TPM2 sealing.
+- [Apple Developer Forums — daemon keychain access](https://developer.apple.com/forums/thread/656000) — `errSecInteractionNotAllowed` (-25308); daemon search list is the System keychain; data-protection keychain unavailable to third-party daemons.
+- [ArchWiki — GNOME/Keyring](https://wiki.archlinux.org/title/GNOME/Keyring) and [Fedora — ModularGnomeKeyring](https://fedoraproject.org/wiki/Changes/ModularGnomeKeyring) — Secret Service requires session D-Bus; `gnome-keyring-daemon --login` exits without one.
+- [`zalando/go-keyring`](https://github.com/zalando/go-keyring) — source inspected at v0.2.8 in the module cache; `keyring_darwin.go:43-49` confirms no `-k` keychain argument.
+- [`99designs/keyring`](https://github.com/99designs/keyring) — release and push dates from the GitHub API.
 
-Codebase facts were taken from this repository at commit `32bc921`.
+**Not a source:** [Managing Credentials (ee207400)](https://learn.microsoft.com/en-us/previous-versions/ee207400(v=vs.85)) states "Credentials cannot be stored, queried, or deleted for … non-interactive accounts such as LocalSystem, LocalService, or NetworkService" — but that page documents the **Windows Biometric Framework** credential manager, *not* the `wincred.h` Credential Manager API this PRD uses. It is recorded here because it surfaces in searches and is easily mistaken for authority on `CredRead`/`CredWrite`. It is the reason OQ-7 is an open question rather than a settled answer.
+
+Codebase facts were taken from this repository at commit `ea41be3`.

@@ -55,6 +55,9 @@ type Monitor struct {
 	pending map[string]replyTarget // taskID → {channelID, threadTS}
 }
 
+// var assertion: Monitor must satisfy domain.ChannelMonitor at compile time.
+var _ domain.ChannelMonitor = (*Monitor)(nil)
+
 // socketmodeWrapper wraps *socketmode.Client to implement socketClient.
 type socketmodeWrapper struct{ *socketmode.Client }
 

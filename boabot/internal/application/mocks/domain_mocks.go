@@ -81,10 +81,12 @@ func (m *Broadcaster) Broadcast(ctx context.Context, msg domain.Message) error {
 // --- ChannelMonitor ---
 
 type ChannelMonitor struct {
-	StartFn    func(ctx context.Context) error
-	StopFn     func(ctx context.Context) error
-	StartCalls int
-	StopCalls  int
+	StartFn         func(ctx context.Context) error
+	StopFn          func(ctx context.Context) error
+	HandleResultFn  func(ctx context.Context, p domain.TaskResultPayload)
+	StartCalls      int
+	StopCalls       int
+	HandleResultLog []domain.TaskResultPayload
 }
 
 func (m *ChannelMonitor) Start(ctx context.Context) error {
@@ -101,6 +103,13 @@ func (m *ChannelMonitor) Stop(ctx context.Context) error {
 		return m.StopFn(ctx)
 	}
 	return nil
+}
+
+func (m *ChannelMonitor) HandleResult(ctx context.Context, p domain.TaskResultPayload) {
+	m.HandleResultLog = append(m.HandleResultLog, p)
+	if m.HandleResultFn != nil {
+		m.HandleResultFn(ctx, p)
+	}
 }
 
 // --- Worker ---

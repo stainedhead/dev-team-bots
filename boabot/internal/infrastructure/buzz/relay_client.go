@@ -25,6 +25,10 @@ const (
 	defaultAuthRetryInterval = 200 * time.Millisecond
 	defaultAuthTimeout       = 10 * time.Second
 	subscribeChannelBuffer   = 64
+
+	// authFreshnessWindow is the relay's NIP-42/NIP-AA freshness tolerance
+	// for an AUTH event's created_at (FR-008: "±120s RECOMMENDED").
+	authFreshnessWindow = 120 * time.Second
 )
 
 // errAuthTokenRequired is returned by Connect when the relay is configured
@@ -49,6 +53,76 @@ var errClosed = errors.New("buzz: relay client is closed")
 // condition authenticateOn is built to retry on.
 var errNoChallenge = errors.New("no challenge, can't AUTH")
 
+// ErrAuthClockSkew is returned (wrapped) when the AUTH event's created_at,
+// stamped from RelayClient's own clock (FR-008: "current wall-clock UTC"),
+// would fall outside the relay's ±120s freshness window relative to the
+// library's own independently-observed current time. This is a
+// distinguishable local failure caught before the event is even signed or
+// sent, rather than surfacing as a generic auth failure once the relay
+// rejects it. See WithClock for how tests inject a skewed clock.
+var ErrAuthClockSkew = errors.New("buzz: authenticate: local clock is skewed beyond the relay's ±120s freshness window")
+
+// AuthFailureClass distinguishes NIP-AA's two relay AUTH-rejection
+// buckets (FR-009): step-1 failures ("invalid: ...": malformed AUTH event,
+// bad signature, wrong relay, stale timestamp) versus credential/membership
+// failures ("restricted: ...": missing/invalid credential, non-member
+// owner). These have different operator remedies and must never be
+// collapsed into one generic class.
+type AuthFailureClass int
+
+const (
+	// AuthFailureUnclassified is used when the relay's rejection reason
+	// does not match either recognized NIP-AA prefix (e.g. a transport
+	// error, or a local failure such as ErrAuthClockSkew that never
+	// reached the relay at all).
+	AuthFailureUnclassified AuthFailureClass = iota
+	// AuthFailureInvalid corresponds to the relay's "invalid: ..." class.
+	AuthFailureInvalid
+	// AuthFailureRestricted corresponds to the relay's "restricted: ..."
+	// class.
+	AuthFailureRestricted
+)
+
+// String returns the class name used in log/metric attributes.
+func (c AuthFailureClass) String() string {
+	switch c {
+	case AuthFailureInvalid:
+		return "invalid"
+	case AuthFailureRestricted:
+		return "restricted"
+	default:
+		return "unclassified"
+	}
+}
+
+// ErrAuthInvalid and ErrAuthRestricted are the FR-009 sentinels a caller
+// can test for with errors.Is against the error Authenticate returns, so
+// "invalid:" and "restricted:" relay rejections are never collapsed into
+// one generic auth-failure check.
+var (
+	ErrAuthInvalid    = errors.New(`buzz: authenticate: relay rejected AUTH as "invalid:" (malformed AUTH event, bad signature, wrong relay, or stale timestamp)`)
+	ErrAuthRestricted = errors.New(`buzz: authenticate: relay rejected AUTH as "restricted:" (missing/invalid credential, or non-member owner)`)
+)
+
+// classifyAuthFailure inspects a relay AUTH-rejection error's text for the
+// NIP-01/NIP-AA "invalid:"/"restricted:" reason prefixes. It never
+// reorders or prioritizes beyond checking both substrings -- a real relay
+// sends exactly one of the two prefixes per rejection.
+func classifyAuthFailure(err error) AuthFailureClass {
+	if err == nil {
+		return AuthFailureUnclassified
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "restricted:"):
+		return AuthFailureRestricted
+	case strings.Contains(msg, "invalid:"):
+		return AuthFailureInvalid
+	default:
+		return AuthFailureUnclassified
+	}
+}
+
 // RelayClient implements domain.RelayClient over fiatjaf.com/nostr. See
 // package doc (translate.go) for the layering rationale.
 type RelayClient struct {
@@ -65,6 +139,7 @@ type RelayClient struct {
 	backoff           BackoffConfig
 	sleep             func(time.Duration)
 	jitter            func() float64
+	clock             func() time.Time
 	logger            *slog.Logger
 	profile           *Profile
 
@@ -142,6 +217,13 @@ func WithSleep(fn func(time.Duration)) Option { return func(rc *RelayClient) { r
 // reconnect backoff delays. Tests inject a deterministic source.
 func WithJitter(fn func() float64) Option { return func(rc *RelayClient) { rc.jitter = fn } }
 
+// WithClock overrides the clock used to stamp AUTH events' created_at
+// (FR-008) and to detect clock skew beyond the relay's ±120s freshness
+// window (ErrAuthClockSkew). Tests inject a skewed clock to prove the
+// skew case is caught locally rather than surfacing as a generic auth
+// failure once the relay rejects it.
+func WithClock(fn func() time.Time) Option { return func(rc *RelayClient) { rc.clock = fn } }
+
 // NewRelayClient returns a RelayClient for url, authenticating as sk.
 func NewRelayClient(url string, sk nostr.SecretKey, opts ...Option) *RelayClient {
 	rc := &RelayClient{
@@ -154,6 +236,7 @@ func NewRelayClient(url string, sk nostr.SecretKey, opts ...Option) *RelayClient
 		backoff:           DefaultBackoffConfig,
 		sleep:             time.Sleep,
 		jitter:            defaultJitter,
+		clock:             time.Now,
 		logger:            slog.Default(),
 		closedCh:          make(chan struct{}),
 		subs:              make(map[int]*subEntry),
@@ -250,7 +333,7 @@ func (rc *RelayClient) authenticateOn(ctx context.Context, conn relayConn) error
 			return nil
 		}
 		if !isNoChallengeErr(err) {
-			return fmt.Errorf("buzz: authenticate: %w", err)
+			return rc.wrapAuthFailure(err)
 		}
 		select {
 		case <-ctx.Done():
@@ -264,8 +347,44 @@ func isNoChallengeErr(err error) bool {
 	return errors.Is(err, errNoChallenge) || strings.Contains(err.Error(), "no challenge")
 }
 
+// wrapAuthFailure classifies a terminal (non-retriable) relay AUTH
+// rejection per FR-009, logs the classification (never the private key --
+// FR-002/FR-051, only the class name and the relay's own reason text), and
+// wraps err with the matching ErrAuthInvalid/ErrAuthRestricted sentinel so
+// callers can distinguish the two classes with errors.Is rather than
+// string-matching.
+func (rc *RelayClient) wrapAuthFailure(err error) error {
+	class := classifyAuthFailure(err)
+	rc.logger.Warn("buzz: authenticate: relay rejected AUTH", "class", class.String(), "err", err)
+	switch class {
+	case AuthFailureInvalid:
+		return fmt.Errorf("%w: %w", ErrAuthInvalid, err)
+	case AuthFailureRestricted:
+		return fmt.Errorf("%w: %w", ErrAuthRestricted, err)
+	default:
+		return fmt.Errorf("buzz: authenticate: %w", err)
+	}
+}
+
+// buildSignFn returns the callback passed to the library's (*Relay).Auth
+// (see authenticateOn). Before signing, it (E4) stamps evt.CreatedAt from
+// RelayClient's own clock -- current wall-clock UTC per FR-008 -- after
+// confirming that clock agrees with the library's own independently
+// observed current time (already on evt.CreatedAt when this callback runs)
+// to within the relay's ±120s freshness window; a wider disagreement is
+// caught here as ErrAuthClockSkew rather than being silently sent and
+// rejected by the relay as a generic auth failure. It then (E3) applies
+// D5's NIP-OA extension point, AuthTagFunc, before signing with the agent
+// key.
 func (rc *RelayClient) buildSignFn() func(context.Context, *nostr.Event) error {
 	return func(ctx context.Context, evt *nostr.Event) error {
+		reference := time.Unix(int64(evt.CreatedAt), 0).UTC()
+		stamped := rc.clock().UTC()
+		if skew := stamped.Sub(reference); skew > authFreshnessWindow || skew < -authFreshnessWindow {
+			return fmt.Errorf("%w: local clock reads %s, reference %s (skew %s)", ErrAuthClockSkew, stamped, reference, skew)
+		}
+		evt.CreatedAt = nostr.Timestamp(stamped.Unix())
+
 		if rc.authTagFn != nil {
 			tag, err := rc.authTagFn(ctx)
 			if err != nil {

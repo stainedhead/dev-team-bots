@@ -88,6 +88,13 @@ func (rc *RelayClient) watchLoop() {
 			return
 		}
 
+		// F14 prerequisite: the connection is lost -- signal disconnected
+		// before the (possibly lengthy, backed-off) reconnect loop starts,
+		// so a presence loop hooked in via SetConnStateFunc suspends
+		// immediately rather than continuing to try to publish on a dead
+		// connection.
+		rc.notifyConnState(false)
+
 		if rc.reconnect() == nil {
 			return
 		}
@@ -146,6 +153,12 @@ func (rc *RelayClient) reconnect() relayConn {
 
 		rc.resubscribeAll(conn)
 		rc.logger.Info("buzz: reconnected", "url", rc.url, "attempts", attempt+1)
+		// F14 prerequisite: the "reconnected" signal itself already fired
+		// inside authenticateOn (above), right when auth succeeded -- not
+		// here -- so it fires uniformly for both this reconnect path and the
+		// initial Connect->Authenticate sequence. See authenticateOn's doc
+		// comment for why authentication, not just re-dialing, is the right
+		// trigger.
 		return conn
 	}
 }

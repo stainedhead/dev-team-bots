@@ -148,6 +148,7 @@ type RelayClient struct {
 	closed           bool
 	watchStarted     bool
 	profilePublished bool
+	connStateFn      func(connected bool)
 
 	closedCh chan struct{}
 	pumpWG   sync.WaitGroup
@@ -250,6 +251,33 @@ func NewRelayClient(url string, sk nostr.SecretKey, opts ...Option) *RelayClient
 // PubKey returns the client's own public key, hex-encoded.
 func (rc *RelayClient) PubKey() nostr.PubKey { return rc.pk }
 
+// SetConnStateFunc registers fn to be called with true whenever the
+// connection transitions to established (initial Connect, and every
+// successful reconnect) and false whenever it is lost (watchLoop detecting
+// a disconnect, before the reconnect loop starts retrying). It exists so a
+// later phase's presence loop (F14) can suspend while disconnected and
+// resume on reconnect without polling RelayClient's internal state or
+// duplicating reconnect.go's logic. Safe to call before or after Connect;
+// safe to leave unset (nil is a no-op).
+func (rc *RelayClient) SetConnStateFunc(fn func(connected bool)) {
+	rc.mu.Lock()
+	rc.connStateFn = fn
+	rc.mu.Unlock()
+}
+
+// notifyConnState invokes the registered ConnStateFunc, if any, with the
+// lock released -- so a caller's hook (e.g. Monitor's presence loop, which
+// itself spawns goroutines and never publishes synchronously from inside
+// this callback) can never deadlock against RelayClient's own mu.
+func (rc *RelayClient) notifyConnState(connected bool) {
+	rc.mu.Lock()
+	fn := rc.connStateFn
+	rc.mu.Unlock()
+	if fn != nil {
+		fn(connected)
+	}
+}
+
 var _ domain.RelayClient = (*RelayClient)(nil)
 
 // Connect establishes the WebSocket connection and starts the background
@@ -274,6 +302,13 @@ func (rc *RelayClient) Connect(ctx context.Context) error {
 	if startWatch {
 		go rc.watchLoop()
 	}
+
+	// NOTE: the F14 connection-state signal is NOT fired here. A dialed-but-
+	// not-yet-authenticated connection cannot legally publish anything on a
+	// real Buzz relay (an unauthenticated kind:20001 presence publish would
+	// be rejected "restricted:") -- see authenticateOn, where notifyConnState
+	// actually fires, exactly once auth succeeds, covering both this initial
+	// Connect->Authenticate sequence and every reconnect uniformly.
 
 	if rc.profile != nil {
 		rc.mu.Lock()
@@ -316,7 +351,15 @@ func (rc *RelayClient) Authenticate(ctx context.Context) error {
 // authenticateOn drives the NIP-42 handshake on a specific connection. It
 // is used both by the public Authenticate (explicit, caller-driven) and by
 // the reconnect loop (automatic, per FR-012's "re-authenticate ... after
-// every reconnect").
+// every reconnect"). It is also, deliberately, the ONE place the F14
+// connection-state signal fires "connected" (see notifyConnState call
+// below): a dialed-but-unauthenticated connection cannot legally publish
+// anything on a real Buzz relay, so firing the signal any earlier (e.g.
+// from Connect, right after a bare dial) would let a presence loop attempt
+// a publish the relay is guaranteed to reject "restricted:". Routing both
+// the initial Connect->Authenticate sequence and every reconnect through
+// this single success path keeps that guarantee uniform without either
+// caller needing to remember it.
 //
 // It retries while the relay's AUTH challenge has not yet arrived
 // (errNoChallenge) rather than failing immediately: unlike the library's
@@ -330,6 +373,7 @@ func (rc *RelayClient) authenticateOn(ctx context.Context, conn relayConn) error
 	for {
 		err := conn.Auth(ctx, sign)
 		if err == nil {
+			rc.notifyConnState(true)
 			return nil
 		}
 		if !isNoChallengeErr(err) {
@@ -432,6 +476,14 @@ func (rc *RelayClient) Publish(ctx context.Context, evt domain.Event) error {
 // (see reconnect.go) and is only closed when ctx is canceled or the
 // RelayClient itself is closed.
 func (rc *RelayClient) Subscribe(ctx context.Context, f domain.Filter) (<-chan domain.Event, error) {
+	// F4/F18: reject a filter that would trip either of the PRD's "Two
+	// protocol traps" before it is ever translated and sent to the relay.
+	// This lives here (the last hop before conn.Subscribe), not only in an
+	// upstream caller, so it cannot be bypassed by a future call site.
+	if err := validateSubscriptionFilter(f, rc.pk.Hex()); err != nil {
+		return nil, err
+	}
+
 	nf, err := ToLibraryFilter(f)
 	if err != nil {
 		return nil, fmt.Errorf("buzz: subscribe: %w", err)

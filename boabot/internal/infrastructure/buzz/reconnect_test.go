@@ -3,6 +3,7 @@ package buzz
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,5 +337,97 @@ func TestAttachSub_EntryNoLongerRegistered(t *testing.T) {
 	}
 	if err := rc.attachSub(context.Background(), conn, entry); err == nil {
 		t.Fatal("expected attachSub to refuse an entry that is not registered")
+	}
+}
+
+// --- F14 prerequisite: connection-state signal ------------------------------
+//
+// F14's presence loop must suspend while disconnected and resume on
+// reconnect (architecture.md "Presence ticker during disconnect"). Rather
+// than have Monitor poll RelayClient's internal state, RelayClient exposes
+// a small push-based hook (SetConnStateFunc) that authenticateOn/watchLoop
+// already fire at exactly the right transitions -- Monitor (F14) subscribes
+// to it instead of duplicating reconnect logic.
+//
+// The signal deliberately fires on successful AUTHENTICATION, not on a bare
+// dial: a connection that is dialed but not yet authenticated cannot
+// legally publish anything (e.g. kind:20001 presence) on a real Buzz relay,
+// which would reject it "restricted:". A Connect-only signal would let a
+// presence loop attempt exactly that publish.
+
+func TestConnStateFunc_FiresTrueOnConnectAndReconnect_FalseOnDisconnect(t *testing.T) {
+	conn1 := newFakeConn()
+	conn2 := newFakeConn()
+	d := &fakeDialer{conns: []*fakeConn{conn1, conn2}}
+	sk := nostr.Generate()
+
+	rc := NewRelayClient("wss://buzz.example/relay", sk,
+		WithDial(d.dial),
+		WithAuthRetryInterval(time.Millisecond),
+		WithSleep(func(time.Duration) {}),
+		WithBackoff(BackoffConfig{Base: time.Millisecond, Max: 5 * time.Millisecond}),
+	)
+
+	var mu sync.Mutex
+	var events []bool
+	rc.SetConnStateFunc(func(connected bool) {
+		mu.Lock()
+		events = append(events, connected)
+		mu.Unlock()
+	})
+
+	snapshot := func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]bool, len(events))
+		copy(out, events)
+		return out
+	}
+
+	ctx := context.Background()
+	if err := rc.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if got := snapshot(); len(got) != 0 {
+		t.Fatalf("expected no signal yet after a bare Connect (pre-auth), got %v", got)
+	}
+
+	if err := rc.Authenticate(ctx); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if got := snapshot(); len(got) != 1 || got[0] != true {
+		t.Fatalf("expected [true] after Authenticate succeeds, got %v", got)
+	}
+
+	conn1.disconnect()
+
+	deadline := time.After(2 * time.Second)
+	for len(snapshot()) < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for disconnect+reconnect signals, got %v", snapshot())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	got := snapshot()
+	if got[1] != false {
+		t.Fatalf("expected disconnect to signal false, got %v", got)
+	}
+	if got[2] != true {
+		t.Fatalf("expected reconnect to signal true, got %v", got)
+	}
+
+	if err := rc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestConnStateFunc_NilIsSafe(t *testing.T) {
+	conn := newFakeConn()
+	rc, _ := newTestClient(t, conn)
+	// No SetConnStateFunc call at all -- Connect must not panic.
+	if err := rc.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
 	}
 }

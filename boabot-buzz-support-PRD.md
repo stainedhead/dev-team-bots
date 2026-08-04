@@ -129,7 +129,7 @@ Key operational facts: each agent needs its **own** keypair (`buzz-admin generat
 
 ### The remote-agent contract
 
-`docs/remote-agents.md` defines how a Buzz agent runs on remote substrate. The provider contract (`buzz-backend-<id>` binaries, `info`/`deploy` ops) is Buzz-desktop-specific and not something BaoBot implements — but its **invariants apply to any long-running Buzz agent** and directly constrain our ECS deployment:
+`docs/remote-agents.md` defines how a Buzz agent runs on remote substrate. The provider contract (`buzz-backend-<id>` binaries, `info`/`deploy` ops) is Buzz-desktop-specific and not something BaoBot implements — but its **invariants apply to any long-running Buzz agent**, including a locally-run single binary, and so constrain us regardless of where boabot runs:
 
 - **I1 Identity fail-closed** — never launch without a valid private key.
 - **I2 No secrets in configuration** — credentials flow in the deploy payload, never persisted config. Reserved keys (`BUZZ_PRIVATE_KEY`, `NOSTR_PRIVATE_KEY`, `BUZZ_AUTH_TAG`, `BUZZ_RELAY_URL`) are stripped from user env before merge.
@@ -150,7 +150,7 @@ The Go Nostr situation was verified empirically, not from search results:
 
 Concretely: `nip29` exposes `Group`, `GroupAddress`, `NewGroup`, `NewGroupFromMetadataEvent`, `ToMetadataEvent`/`ToAdminsEvent`/`ToMembersEvent`, `MergeIn*Event`, and moderation actions. `nip42` exposes `CreateUnsignedAuthEvent(challenge, pubkey, relayURL)` and `ValidateAuthEvent`. Its dependency tree already includes BIP-340 Schnorr, which is exactly what NIP-OA attestation verification needs.
 
-**Every P0 primitive we need exists in maintained Go today.** The only piece with no upstream Go implementation is NIP-OA/NIP-AA attestation — roughly 150 lines of preimage construction plus Schnarr sign/verify, with published test vectors.
+**Every P0 primitive we need exists in maintained Go today.** The only piece with no upstream Go implementation is NIP-OA/NIP-AA attestation — roughly 150 lines of preimage construction plus Schnorr sign/verify, with published test vectors.
 
 ---
 
@@ -216,7 +216,7 @@ Three integration paths were evaluated. **We recommend Option A.**
 A new `internal/infrastructure/buzz/` package implements `domain.ChannelMonitor` over `fiatjaf.com/nostr`, connecting directly to `buzz-relay` by WebSocket, authenticating with NIP-42 + NIP-OA, and publishing/subscribing `kind:9` scoped by `#h`.
 
 - BaoBot keeps its own turn loop, worker harness, budget caps, tool gating, memory, and autonomy gates.
-- Single binary; no Rust toolchain, no Node, no sidecar in the ECS task.
+- Single binary; no Rust toolchain, no Node, no sidecar process — preserving the module's local single-binary runtime.
 - Buzz becomes one more channel alongside Slack, not a new runtime.
 - Verified: every P0 NIP has a maintained Go implementation.
 - Cost: we implement NIP-OA attestation ourselves (~150 LOC + test vectors) and own protocol-drift risk against a fast-moving draft spec.
@@ -225,7 +225,7 @@ A new `internal/infrastructure/buzz/` package implements `domain.ChannelMonitor`
 
 BaoBot would expose an ACP stdio interface and be spawned as a subprocess of `buzz-acp`.
 
-Rejected because **it inverts control.** `buzz-acp` owns channel discovery, mention filtering, the turn loop, idle and wall-clock turn timeouts, and reply dispatch. BaoBot's `TeamManager`, worker supervision, `BudgetTracker`, Tool Attention gating, and calibrated-autonomy gates would all sit *below* a harness that does not know about them — and turn cancellation would happen outside our budget accounting. It also mandates a Rust binary plus `buzz-cli` in every ECS task purely to relay messages. We would be adopting Buzz's agent runtime, not adding Buzz support to ours.
+Rejected because **it inverts control.** `buzz-acp` owns channel discovery, mention filtering, the turn loop, idle and wall-clock turn timeouts, and reply dispatch. BaoBot's `TeamManager`, worker supervision, `BudgetTracker`, Tool Attention gating, and calibrated-autonomy gates would all sit *below* a harness that does not know about them — and turn cancellation would happen outside our budget accounting. It also mandates shipping a Rust binary plus `buzz-cli` alongside boabot purely to relay messages, breaking the single-binary deployment. We would be adopting Buzz's agent runtime, not adding Buzz support to ours.
 
 *(Worth noting for a different purpose: `buzz-acp` is the right tool if we ever want to expose a BaoBot **persona** to a Buzz workspace without our cluster — but that is a distribution question, not this integration.)*
 
@@ -278,7 +278,9 @@ type RelayClient interface {
 
 **FR-001:** Each BaoBot instance MUST hold its own secp256k1 keypair. Keys are generated out-of-band (`buzz-admin generate-key` or an equivalent Go key generator) and are never shared between bots.
 
-**FR-002:** The agent secret key (nsec) MUST be resolved at startup from AWS Secrets Manager via the bot's IAM role, using the existing `internal/infrastructure/credentials` loader. It MUST NOT appear in `config.yaml`, in `team.yaml`, in any committed file, in container image layers, or in any log line at any level.
+**FR-002:** The agent secret key (nsec) MUST be resolved at startup from the `BUZZ_PRIVATE_KEY` environment variable, falling back to a `buzz_private_key` entry in `~/.boabot/credentials` promoted via the existing `credentials.Load` → `applyCredential` path in `cmd/boabot/main.go`. The existing world-readable-file check (mode `& 0o004`, fatal) MUST apply — it is the custody control for this key. The nsec MUST NOT appear in `config.yaml`, in `team.yaml`, in any committed file, or in any log line at any level.
+
+> **Note:** this module is a local single-binary runtime — `boabot/AGENTS.md` states "No AWS services are required to run," and the only AWS SDK dependency is `bedrockruntime` for the model provider. There is no Secrets Manager integration and this PRD does not introduce one. If the runtime later moves to ECS per `PRODUCT.md`, secret resolution becomes a new credential provider behind the same call site, with no change to any requirement here.
 
 **FR-003:** BaoBot MUST fail closed on identity: if the private key is missing, malformed, or fails to derive the expected pubkey, the Buzz monitor MUST NOT start, and the failure MUST be logged as an error. A bot with Buzz misconfigured MUST still start with all other channels functioning.
 
@@ -294,7 +296,7 @@ type RelayClient interface {
 
 **FR-009:** BaoBot MUST distinguish relay auth failure classes in logs and metrics: `"invalid: …"` (malformed AUTH event, bad signature, wrong relay, stale timestamp) versus `"restricted: …"` (missing/invalid credential, non-member owner). These have different operator remedies and MUST NOT be collapsed.
 
-**FR-010:** BaoBot MUST support optional `BUZZ_API_TOKEN`-style token authentication for relays configured with `BUZZ_REQUIRE_AUTH_TOKEN=true`, resolved from Secrets Manager on the same path as FR-002.
+**FR-010:** BaoBot MUST support optional `BUZZ_API_TOKEN` token authentication for relays configured with `BUZZ_REQUIRE_AUTH_TOKEN=true`, resolved on the same credential path as FR-002 (env var, falling back to a `buzz_api_token` credentials-file entry).
 
 **FR-011:** BaoBot MUST publish a `kind:0` profile metadata event on first successful connection, populated from the bot's existing identity (name, bot type, and the description from its `AGENTS.md`), so humans in the workspace see a named agent rather than a bare pubkey. This is a community-global write and is permitted for NIP-AA virtual members per "Virtual Member Privileges"; it MUST NOT be made conditional on explicit relay enrollment.
 
@@ -308,13 +310,13 @@ type RelayClient interface {
 
 **FR-015:** BaoBot MUST auto-subscribe to newly joined channels by subscribing to `kind:44100` membership-added events filtered by `#p` matching its own authenticated pubkey, and MUST unsubscribe on `kind:44101`.
 
-**FR-016:** Every subscription for a p-gated kind (`44100`, `44101`, `1059`) MUST include a `#p` filter whose values all equal the authenticated pubkey. A subscription that would violate this MUST be rejected in our own code before being sent to the relay, with a clear error.
+**FR-016:** Every subscription for a p-gated kind (`44100`, `44101`, `1059`) MUST include a `#p` filter whose values all equal the authenticated pubkey. A subscription that would violate this MUST be rejected in our own code before being sent to the relay, with a clear error. The guard MUST cover `1059` from the outset even though DM handling itself is P1, so the P1 work cannot introduce the violation.
 
 **FR-017:** BaoBot MUST publish channel messages as `kind:9` events carrying the `#h` tag with the target channel UUID, signed by the agent key.
 
 **FR-018:** BaoBot MUST reply in-thread using NIP-10 reply tags, referencing the root event of the conversation it was mentioned in.
 
-**FR-019:** BaoBot MUST treat an inbound event as a task trigger only when it is an @mention of the agent's own pubkey, or a message in a DM conversation with the agent. All other channel traffic MUST be ignored for dispatch purposes.
+**FR-019:** BaoBot MUST treat an inbound event as a task trigger only when it is an @mention of the agent's own pubkey in a channel it is subscribed to. All other channel traffic MUST be ignored for dispatch purposes. **DM-triggered tasks are explicitly out of P0**: DMs are NIP-17 gift-wrapped `kind:1059` and are scheduled in P1, so the P0 trigger surface is @mentions only. The dispatch path MUST be written so that adding a second trigger source in P1 does not require changing it.
 
 **FR-020:** BaoBot MUST ignore events authored by its own pubkey to prevent self-trigger loops, matching the existing Slack adapter's bot-message filter.
 
@@ -328,7 +330,7 @@ type RelayClient interface {
 
 **FR-025:** BaoBot SHOULD publish `kind:20002` typing indicators while a triggered task is executing, so humans see the agent is working rather than silent.
 
-**FR-026:** BaoBot MUST honour the `!shutdown` relay message as a stop signal from an authorized sender, routing it through the existing graceful shutdown path.
+**FR-026:** BaoBot MUST honour the `!shutdown` relay message as a stop signal, routing it through the existing graceful shutdown path — but **only** when the sending pubkey passes the FR-029 author gate (`respond_to`, or a member of `respond_to_allowlist`, or the configured `owner_pubkey`). A `!shutdown` from any other pubkey MUST be ignored and logged as a rejected control message. An ungated `!shutdown` handler would be a remote-kill primitive available to anyone able to post in a shared channel.
 
 **FR-027:** Any reaction subscription MUST be `{"kinds":[7],"#h":["<channel-uuid>"]}`. A kinds-only reaction subscription MUST NOT be used, because the relay silently delivers nothing.
 
@@ -340,7 +342,7 @@ type RelayClient interface {
 
 **FR-030:** Buzz-triggered tasks MUST be subject to the existing per-bot budget caps (daily tokens, hourly tool calls) with no separate accounting path, and MUST be subject to the existing calibrated-autonomy gates. Buzz message origin MUST NOT downgrade any gate.
 
-**FR-031:** *(⚠️ BLOCKED ON OQ-1 — not implementation-ready; do not score this requirement as complete until OQ-1 is answered.)* BaoBot MUST enforce at-most-one-live-instance per pubkey (invariant I4). The observable requirement is testable regardless of mechanism: **during and after a rolling deployment, a single @mention MUST produce exactly one reply event and exactly one presence identity on the relay.** The mechanism that achieves this — drain-before-start, per-instance keypairs, or task-ID reply deduplication — is the decision deferred to OQ-1.
+**FR-031:** *(⚠️ BLOCKED ON OQ-1 — not implementation-ready; do not score this requirement as complete until OQ-1 is answered.)* BaoBot MUST enforce at-most-one-live-instance per pubkey (invariant I4). The observable requirement is testable regardless of mechanism: **whenever two boabot processes are running against the same nsec, a single @mention MUST produce exactly one reply event and exactly one presence identity on the relay.** Because this module runs all bots as in-process goroutines in a single binary, the realistic violation is two copies of the binary started against one config — during an upgrade, or by operator error — not two orchestrated cluster tasks. The mechanism is deferred to OQ-1.
 
 **FR-032:** The agent pubkey, relay URL, channel UUID, and event ID MUST appear in structured logs for every dispatched task and published reply, so relay-side audit records reconcile with our logs. The private key MUST never appear.
 
@@ -350,7 +352,7 @@ type RelayClient interface {
 
 **FR-034:** Task-result forwarding MUST iterate all registered monitors rather than branching on a single Slack field, in both the orchestrator and non-orchestrator paths. Existing Slack behaviour MUST be preserved exactly.
 
-**FR-035:** Buzz configuration MUST live under a `buzz:` block in `config.yaml` carrying non-secret settings only: `enabled`, `relay_url`, `bot_name`, `owner_pubkey`, `respond_to`, `respond_to_allowlist`, `channels`, `presence_interval`. Secret material (nsec, auth tag, API token) MUST be referenced by Secrets Manager ARN, never inlined.
+**FR-035:** Buzz configuration MUST live under a `buzz:` block in `config.yaml` carrying non-secret settings only: `enabled`, `relay_url`, `bot_name`, `owner_pubkey`, `respond_to`, `respond_to_allowlist`, `channels`, `presence_interval`. This mirrors `SlackConfig` in `internal/infrastructure/config/config.go`. Secret material (nsec, auth tag, API token) MUST NOT appear in this block under any key — it resolves only via the FR-002 credential path.
 
 **FR-036:** The Buzz monitor MUST activate only when `buzz.enabled` is true and all required settings resolve, mirroring the Slack monitor's all-or-nothing activation. With Buzz disabled, no Nostr code path may execute and no relay connection may be attempted.
 
@@ -362,7 +364,7 @@ type RelayClient interface {
 
 - **Performance:** Time from relay delivery of a qualifying mention to task enqueue MUST be under 500 ms at p95, excluding model inference. Reply publication after `HandleResult` MUST be under 1 s at p95.
 - **Reliability:** The monitor MUST survive relay restarts and network partitions without operator intervention, reconnecting with bounded backoff and jitter. A Buzz outage MUST NOT degrade Slack, SQS, or scheduled-task processing. Reconnect MUST NOT lose the pending task-ID correlation map.
-- **Security:** Private keys resolve from Secrets Manager only (FR-002), never logged, never in config, never on a command line. Inbound content is untrusted (FR-028). Author gating enforced before dispatch (FR-029). NIP-GS git signing, if ever enabled, sits behind an **Escalating** autonomy gate — an agent key that can sign commits is a materially larger blast radius than one that can post messages. **An issued NIP-OA `auth` tag must be treated as a full relay read/write capability, not a scoped one**: `kind=` clauses do not constrain relay admission, and the tag is valid at any NIP-AA relay. Attestations MUST therefore carry a bounded `created_at<` window, and issuance MUST be treated as granting workspace-wide access.
+- **Security:** Private keys resolve only via the FR-002 credential path (env var, or a mode-0600 `~/.boabot/credentials` entry) — never logged, never in config, never on a command line. Inbound content is untrusted (FR-028). Author gating enforced before dispatch (FR-029). NIP-GS git signing, if ever enabled, sits behind an **Escalating** autonomy gate — an agent key that can sign commits is a materially larger blast radius than one that can post messages. **An issued NIP-OA `auth` tag must be treated as a full relay read/write capability, not a scoped one**: `kind=` clauses do not constrain relay admission, and the tag is valid at any NIP-AA relay. Attestations MUST therefore carry a bounded `created_at<` window, and issuance MUST be treated as granting workspace-wide access.
 - **Observability:** Structured logs for connect, authenticate, subscribe, dispatch, publish, and reconnect. Metrics for connection state, auth failures split by `invalid`/`restricted` class, events received/published by kind, dispatch latency, and reconnect count. Presence staleness MUST be observable so I3 violations are detectable.
 - **Maintainability:** `fiatjaf.com/nostr` imports confined to `internal/infrastructure/buzz/`. Domain and application layers MUST have zero Nostr imports. Buzz draft NIPs are moving targets — the version of `block/buzz` validated against MUST be recorded in `docs/architectural-decision-record.md`.
 - **Testing:** TDD throughout, per `AGENTS.md`. 90%+ coverage on domain and application layers. Adapter integration tests tagged `//go:build integration` run against a real relay started from Buzz's own `docker-compose.yml`. NIP-OA implementation MUST assert against the published test vectors.
@@ -383,7 +385,14 @@ type RelayClient interface {
 - [ ] Relay restart mid-session: the bot reconnects, re-authenticates, re-subscribes, and answers a mention sent after recovery — with no operator action and no lost pending correlations.
 - [ ] Presence: the bot publishes `kind:20001` at an interval under the 180-second staleness bound; on `SIGTERM` it publishes `offline` and closes cleanly before exit.
 - [ ] A mention from a pubkey outside `respond_to_allowlist` is ignored, and the rejection appears in structured logs.
-- [ ] **(Blocked on OQ-1)** With two instances running against the same pubkey — the transient state of a rolling deployment — a single @mention produces exactly one reply event on the relay, and the workspace shows one presence identity, not two.
+- [ ] **(Blocked on OQ-1)** With two boabot processes started against the same nsec, a single @mention produces exactly one reply event on the relay, and the workspace shows one presence identity, not two.
+- [ ] The nsec is read from `BUZZ_PRIVATE_KEY`, and from a `buzz_private_key` credentials-file entry when the env var is unset; a world-readable `~/.boabot/credentials` is fatal at startup, verified by test.
+- [ ] A `buzz:` config block containing any secret-looking key is rejected at config load with a clear error, verified by test.
+- [ ] Channel discovery works over the WebSocket alone with the REST endpoint unavailable: the bot joins a channel, receives `39000`/`39002`, and answers a mention in it — verified against a relay with REST disabled or the path blocked.
+- [ ] With `BUZZ_REQUIRE_AUTH_TOKEN=true` on the relay, a bot configured with a valid `BUZZ_API_TOKEN` connects, and one without it is rejected — both asserted.
+- [ ] An AUTH event built with a clock offset beyond the relay's ±120s freshness window produces a distinguishable clock-skew error, not a generic auth failure, verified by test with an injected clock.
+- [ ] A `!shutdown` from a pubkey outside the FR-029 author gate is ignored and logged as a rejected control message; one from an allowed pubkey shuts the bot down gracefully.
+- [ ] Dispatch latency from relay delivery to queue enqueue is measured under load and reported at p95 against the 500 ms target; reply publication is measured at p95 against the 1 s target. Measurement harness is committed with the tests.
 - [ ] A NIP-AA-authenticated bot successfully publishes its `kind:0` profile without being explicitly enrolled in `relay_members`, confirming the virtual-member write path.
 - [ ] A NIP-AA-authenticated bot is confirmed **not** to inherit the owner's channel memberships: it cannot read a private channel the owner belongs to and it does not.
 - [ ] A Buzz-triggered task that exceeds the bot's daily token cap is refused by the existing `BudgetTracker` with no Buzz-specific bypass.
@@ -404,7 +413,7 @@ type RelayClient interface {
 Keypair identity, NIP-OA attestation, NIP-42/NIP-AA auth, `kind:9` read/write with `#h` scoping, thread replies, mention gate, presence, graceful shutdown, the `ChannelMonitor` seam fix, config, and docs. **This is the shippable unit** — after P0, BaoBot is a working Buzz teammate.
 
 **P1 — Conversational polish**
-Typing indicators (FR-025), `!shutdown` handling (FR-026), reaction publishing and subscription (FR-027), NIP-50 search over channel history, NIP-CW channel-window paging for bounded backfill, NIP-17 gift-wrapped DMs.
+Typing indicators (FR-025), gated `!shutdown` handling (FR-026), reaction publishing and subscription (FR-027), NIP-50 search over channel history, NIP-CW channel-window paging for bounded backfill, and **NIP-17 gift-wrapped DMs — including DM-triggered tasks, which FR-019 excludes from P0**.
 
 **P2 — Agent-native Buzz features**
 NIP-AP persona publication (`kind:30175`) projected from `SOUL.md` + `AgentCard`; NIP-AM turn metrics (`kind:44200`) projected from `BudgetTracker`; NIP-AE engram publication (`kind:30174`) as an encrypted projection of existing memory. Each is a projection of something BaoBot already computes.
@@ -422,8 +431,8 @@ NIP-GS git signing, NIP-34 patches, NIP-MP projects, NIP-AO observability, Bloss
 | `nbd-wtf/go-nostr` archived 2026-01-24 | Risk | Do **not** use it. The successor is the only maintained path; if it stalls, we own a fork. Mitigation: our surface area is one adapter package behind a domain port. |
 | Buzz NIPs are `draft` | Risk | All 17 Buzz-specific NIPs are marked `draft` `optional`. Breaking changes are likely. Mitigation: pin and record the validated `block/buzz` commit; run Buzz's own conformance suite (`crates/buzz-conformance`) in CI against the pinned relay image. |
 | Relay has no channel-membership API | Dependency | Buzz's own docs call this a "known gap": private channels require explicit membership but there is no REST/event API to manage it. Our bot must be added to private channels out-of-band, or create its own channels. P0 must not depend on programmatic membership management. |
-| Invariant I4 vs. ECS rolling deploys | Risk | Two tasks sharing one nsec means duplicate presence and **duplicate replies to every mention** — user-visible and embarrassing. Blocking design decision; see OQ-1. |
-| nsec custody and rotation | Risk | The secret is printed once by `buzz-admin generate-key` and is unrecoverable. Loss means a new identity and loss of the pubkey's history and reputation, which are community-scoped and non-portable. Mitigation: generate into Secrets Manager directly; document rotation as an identity-replacement procedure, not a key swap. |
+| Invariant I4 vs. multiple running processes | Risk | Two boabot processes sharing one nsec means duplicate presence and **duplicate replies to every mention** — user-visible and embarrassing. In a local single-binary runtime this happens by operator error or during an upgrade, not via cluster scheduling. Blocking design decision; see OQ-1. |
+| nsec custody and rotation | Risk | The secret is printed once by `buzz-admin generate-key` and is unrecoverable. Loss means a new identity and loss of the pubkey's history and reputation, which are community-scoped and non-portable. Mitigation: generate directly into the mode-0600 credentials file or the deploying secret store, never to a terminal that scrolls into shell history; document rotation as an identity-replacement procedure, not a key swap. |
 | `auth` tag is a broader capability than it appears | Risk | Per NIP-AA's credential-scope warning, an `auth` tag grants **connection-level full relay read/write regardless of `kind=` clauses** (unless the relay opts into per-event enforcement), and is not bound to any particular relay. An operator issuing a "narrow" credential may believe they granted less than they did. Mitigation: bounded `created_at<` windows; treat issuance as a workspace-access grant in the OQ-2 workflow. |
 | Owner-scoped quota aggregation | Risk | Relays SHOULD aggregate rate limits by **owner** pubkey across all virtual members derived from that owner. If every bot in `team.yaml` is attested by one owner key, the whole team may contend for a single quota pool and throttle each other. Directly affects the OQ-4 decision. |
 | Virtual members do not inherit channel access | Dependency | NIP-AA grants relay-level access only; channel-level checks evaluate the agent's own pubkey. Combined with the missing channel-membership API, each bot must be added to each private channel out-of-band. |
@@ -438,9 +447,9 @@ NIP-GS git signing, NIP-34 patches, NIP-MP projects, NIP-AO observability, Bloss
 
 ## Open Questions
 
-- **OQ-1 (blocking — decide before implementation):** How is invariant I4 (at-most-one-live-instance per pubkey) satisfied under ECS rolling deployment? Three candidates: (a) drain-before-start deployment so the old task publishes `offline` and closes before the new one authenticates; (b) a distinct keypair per running instance, accepting multiple agent identities per logical bot; (c) relay-side or client-side reply deduplication by task ID. Option (a) is cleanest but requires a deployment-strategy change; (b) fragments identity and reputation, which are community-scoped and non-portable.
+- **OQ-1 (blocking — decide before implementation):** How is invariant I4 (at-most-one-live-instance per pubkey) satisfied for a local single-binary runtime? Candidates: (a) a process-level singleton — a lock file or advertised-lock on the nsec, so a second boabot started against the same key refuses to attach its Buzz monitor and logs why; (b) a startup presence probe — query the relay for a live `kind:20001` from our own pubkey and refuse to start the monitor if one is fresher than the staleness bound; (c) reply deduplication by task ID, tolerating duplicate presence but not duplicate replies; (d) a distinct keypair per running instance, which fragments identity and reputation (both community-scoped and non-portable) and is likely wrong here. (a) is cheapest and matches the existing world-readable-credentials-file precedent of failing fast on a misconfiguration; (b) is more robust across machines but adds a startup round-trip and a race window. Note this is *not* an ECS drain-before-start question — see FR-031.
 - **OQ-2:** Who holds the **owner** key that issues NIP-OA attestations, and what is the issuance workflow? An operator laptop, a `boabotctl` subcommand, or an orchestrator-held key? This determines whether attestation renewal is manual or automatable, and it is the root of the whole trust chain.
-- **OQ-3:** Self-hosted relay or Block's managed service? If self-hosted, does it run inside our VPC, and does that change the security-group and egress posture for ECS tasks?
+- **OQ-3:** Self-hosted relay or Block's managed service? For the local single-binary runtime this is mainly a question of what `relay_url` operators point at and whether outbound WebSocket to a third-party host is acceptable. If boabot later moves to ECS per `PRODUCT.md`, it additionally becomes a VPC, security-group, and egress question.
 - **OQ-4:** Which bots get Buzz identities — every bot in `team.yaml`, or only the orchestrator acting as the team's single front door? Per-bot identities are more faithful to Buzz's model and give better audit granularity; a single front door is far less key material to custody. Note the new constraint surfaced from NIP-AA: relays SHOULD aggregate quotas by **owner** pubkey across virtual members, so a fleet of per-bot identities attested by one owner key may throttle each other. If we go per-bot, we may need per-bot owner keys too — which multiplies the OQ-2 custody problem.
 - **OQ-5:** Do we need `boabotctl` subcommands for Buzz key generation, attestation issuance, and channel join, so operators are not required to build Rust `buzz-admin` locally? Likely yes for adoption, but it is additional scope not currently costed in P0.
 - **OQ-6:** Should NIP-AE engrams replace, mirror, or merely export our memory subsystem? Deferred to P2, but the answer affects whether P0's memory writes need any Buzz-shaped metadata from the start.

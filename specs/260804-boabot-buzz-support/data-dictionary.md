@@ -8,7 +8,7 @@
 
 ## Domain Interfaces (new)
 
-### `RelayClient` (illustrative name — finalized during Architecture phase)
+### `RelayClient` (finalized name and shape)
 
 ```go
 type RelayClient interface {
@@ -44,9 +44,32 @@ Per PRD FR-038. `SecretStore` holds an ordered `[]SecretProvider`, first-hit-win
 
 ## Value Objects
 
-- **`Event`** — Nostr event (id, pubkey, created_at, kind, tags, content, sig). Shape TBD from `fiatjaf.com/nostr`'s own `Event` type — likely reused directly rather than redefined, pending Architecture phase decision on whether the domain layer needs its own Event type or can reference the library type at the infrastructure boundary only.
-- **`Filter`** — Nostr subscription filter (kinds, `#h`, `#p`, `#e`, since/until, limit).
-- **`AuthTag`** — NIP-OA `["auth", owner-pubkey-hex, conditions, sig-hex]`, 4-element tuple. Construction/validation logic per PRD FR-006/FR-007.
+**Resolved (was TBD):** the domain layer defines its own minimal `Event`/`Filter` types rather than referencing `fiatjaf.com/nostr`'s library types. Reusing the library type directly would put a `fiatjaf.com/nostr` import in `internal/domain`, which fails the PRD acceptance criterion `grep -r "fiatjaf.com/nostr" internal/domain internal/application` returns no matches, and violates FR-033/FR-038 and the Maintainability NFR. `internal/infrastructure/buzz/relay_client.go` translates between the two at the `RelayClient` implementation boundary — this translation function is itself a required unit-tested component (see `tasks.md` Phase D).
+
+```go
+// internal/domain/buzz.go
+type Event struct {
+    ID        string
+    PubKey    string
+    CreatedAt int64
+    Kind      int
+    Tags      [][]string
+    Content   string
+    Sig       string
+}
+
+type Filter struct {
+    Kinds []int
+    Tags  map[string][]string // e.g. {"h": [...], "p": [...], "e": [...]}
+    Since *int64
+    Until *int64
+    Limit int
+}
+```
+
+- **`Event`** — Nostr event (id, pubkey, created_at, kind, tags, content, sig), as above. Domain-owned, no `fiatjaf.com/nostr` dependency.
+- **`Filter`** — Nostr subscription filter (kinds, `#h`, `#p`, `#e`, since/until, limit), as above.
+- **`AuthTag`** — NIP-OA `["auth", owner-pubkey-hex, conditions, sig-hex]`, 4-element tuple. Construction/validation logic per PRD FR-006/FR-007. Represented as a typed struct (`OwnerPubkeyHex`, `Conditions`, `SigHex` string fields) in `internal/infrastructure/buzz/nipoa.go`, not as a raw `[]string`, so malformed-length tags are a construction-time error rather than a runtime index-out-of-range.
 
 ## Enumerations
 

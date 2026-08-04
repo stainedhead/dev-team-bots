@@ -63,7 +63,21 @@ main() --> SecretStore.Get(ctx, SecretRef{Name: "buzz_private_key", Bot: cfg.Bot
 
 ## Sequence Diagrams
 
-[TBD — to be added during implementation if a visual is needed for the NIP-42/NIP-AA handshake or the provider-chain resolution; text-form flows above are sufficient for planning.]
+Not needed for planning — the text-form flows above (§Data Flow) are sufficient to derive tasks from. If a visual aid is wanted for the NIP-42/NIP-AA handshake during implementation, add it to `implementation-notes.md`, not here (this file is not revisited after Phase 3).
+
+## Edge Cases and Failure Paths
+
+Resolved during spec review — each maps to a task in `tasks.md`:
+
+- **FR-022 reply-publish failure.** If the `kind:9` reply publish fails (relay rejects, connection drops mid-publish), the monitor MUST log the failure with the task ID and channel, and MUST NOT re-enqueue the task (the worker already ran; re-running would duplicate side effects). The pending-map entry is popped regardless of publish outcome, matching the existing Slack adapter's fire-and-forget reply semantics. A future retry queue is out of scope (not in the PRD).
+- **Secret provider timeout.** Per the NFR ("full provider chain MUST complete within 2s per secret... unreachable D-Bus or keychain MUST time out rather than hang"), `SecretStore.Get` wraps each provider's `Lookup` call with a `context.WithTimeout` (default 2s, one deadline per provider, not one for the whole chain) so one hung provider cannot block the rest of the chain. A timeout is treated as a miss (not found), not an error, and is logged as `provider=<name> timeout` distinct from a genuine not-found.
+- **Pending map across reconnect.** The `pending map[string]replyTarget` (task ID → channel/thread) lives in `buzz.Monitor` and is **not** cleared or rebuilt on reconnect — only the WebSocket connection, auth, and subscriptions are re-established (FR-012). A task dispatched before a disconnect that completes after reconnect still resolves to its original reply target.
+- **Presence ticker during disconnect.** The `kind:20001` presence ticker (FR-023) is suspended while the connection is down (there is no connection to publish on) and resumes immediately on reconnect, publishing an online event as part of re-establishing state. This is a natural consequence of presence being a connection-scoped publish loop, not a free-running timer — documented here so the Phase F task's test asserts it explicitly, since I3 staleness is externally observable.
+- **Empty vs. unset `respond_to_allowlist`.** FR-029 says "when set." Resolved: `respond_to_allowlist` uses Go's nil-vs-empty-slice distinction — `nil` (key absent from `buzz:` config) means no allowlist gate; an explicitly configured empty list (`respond_to_allowlist: []`) means allow-none (gate rejects every sender). This matches the principle that an operator who writes `[]` explicitly intends to lock the gate down, not to leave it open. Asserted by a dedicated test case distinguishing the two.
+
+## Cross-Module Constraint (`boabotctl` secret subcommands)
+
+`boabotctl` is a separate Go module (`boabotctl/go.mod`) and cannot import `boabot`'s `internal/` packages — Go's `internal/` visibility is enforced per-module-root regardless of monorepo co-location. FR-049's `boabotctl` subcommands therefore add `zalando/go-keyring` as a direct dependency of `boabotctl/go.mod` and re-implement only the thin lookup/write/delete calls, following the existing `boabotctl/internal/commands/*.go` pattern (see `auth/store.go` for the module's existing local-credential-file precedent). The two modules do not share code for this; they share only the FR-045 key-naming *convention*, which is why FR-045 requires that convention to be documented and stable.
 
 ## Integration Points
 

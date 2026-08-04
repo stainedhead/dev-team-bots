@@ -57,7 +57,7 @@ Carried from the PRD's NFR section: Performance (500ms p95 dispatch, 1s p95 repl
 
 **Affected layers:**
 
-- `internal/domain/` — new `ChannelMonitor`-compatible port for the relay client (illustrative `RelayClient` interface); new `SecretStore`/`SecretProvider` interfaces.
+- `internal/domain/` — new `ChannelMonitor`-compatible port for the relay client (`RelayClient` interface, `buzz.go`); new `SecretStore`/`SecretProvider` interfaces (`secret.go`).
 - `internal/application/team/` — `TeamManager` refactored to hold a slice of `domain.ChannelMonitor` rather than a concrete `*slackinfra.Monitor` field; result-forwarding loop rewritten to iterate.
 - `internal/infrastructure/buzz/` — new package: Nostr relay client over `fiatjaf.com/nostr`, NIP-OA attestation construction/validation, event kind handling, `ChannelMonitor` implementation.
 - `internal/infrastructure/secret/` — new package tree: `SecretStore` implementation, `env` provider, `keystore` provider (`zalando/go-keyring`), `systemd` provider, `file` provider (wraps existing `credentials` package).
@@ -71,12 +71,20 @@ Carried from the PRD's NFR section: Performance (500ms p95 dispatch, 1s p95 repl
 
 ## Scope of Changes
 
-**New files (indicative — actual layout finalized during Architecture phase):**
-- `internal/domain/buzz.go` (or similar) — `RelayClient`, `Event`, `Filter` port types
+**New files (finalized layout — see `architecture.md` §Component Architecture for the full file-to-FR mapping):**
+- `internal/domain/buzz.go` — `RelayClient`, `Event`, `Filter` port types (domain-owned value objects, not the `fiatjaf.com/nostr` library types — see `data-dictionary.md`)
 - `internal/domain/secret.go` — `SecretStore`, `SecretProvider`, `SecretRef`
-- `internal/infrastructure/buzz/` — monitor, relay client, NIP-OA, event kinds, config
-- `internal/infrastructure/secret/` — store, `env/`, `keystore/`, `systemd/`, `file/`
-- `boabotctl/internal/.../secret*.go` — CLI subcommands
+- `internal/infrastructure/buzz/monitor.go` — `buzz.Monitor` implementing `domain.ChannelMonitor`
+- `internal/infrastructure/buzz/relay_client.go` — `RelayClient` implementation over `fiatjaf.com/nostr`, incl. `domain.Event`/`Filter` ⇄ `nostr.Event`/`Filter` translation
+- `internal/infrastructure/buzz/nipoa.go` — NIP-OA/NIP-AA preimage construction, Schnorr sign/verify
+- `internal/infrastructure/buzz/kinds.go` — event-kind constants and per-kind handling (§Enumerations)
+- `internal/infrastructure/buzz/lock.go` — process-singleton lock (OQ-1 resolution, FR-031)
+- `internal/infrastructure/secret/store.go` — `SecretStore` implementation (ordered provider chain)
+- `internal/infrastructure/secret/env/provider.go`
+- `internal/infrastructure/secret/systemd/provider.go`
+- `internal/infrastructure/secret/keystore/provider.go`
+- `internal/infrastructure/secret/file/provider.go` — wraps existing `internal/infrastructure/credentials`
+- `boabotctl/internal/commands/secret.go` — CLI subcommands (FR-049), following the existing `internal/commands/*.go` pattern; `boabotctl` is a separate Go module and cannot import boabot's `internal/` packages, so it depends on `zalando/go-keyring` directly and replicates only the FR-045 key-naming convention (documented, not shared code)
 
 **Modified files:**
 - `internal/application/team/team_manager.go`
@@ -95,16 +103,19 @@ None to existing external interfaces. `SlackConfig` inline tokens remain support
 
 All 51 acceptance criteria from the PRD apply, split "Buzz support" (30) and "Secret storage" (21) — see `boabot-buzz-support-PRD.md` §Acceptance Criteria. Criteria requiring live infrastructure are satisfied by a `//go:build integration` test existing and compiling, plus a manual-verification note in `implementation-notes.md` — not by a passing automated run in this job.
 
+The single PRD acceptance criterion marked "(Blocked on OQ-1)" is unblocked by this spec's OQ-1 resolution (Phase G process-singleton lock — see `architecture.md` Architectural Decision 3, and `plan.md` Phase G). The lock mechanism itself is implemented and unit-tested as part of FR-031, not deferred; only its two-process, live-relay verification is infrastructure-dependent and lands on the manual-verification list in `implementation-notes.md`.
+
 ## Risks and Mitigation
 
 Carried from the PRD's Dependencies and Risks table (18 rows) — see source PRD. Highest-attention items for implementation: the `TeamManager` refactor blast radius (mitigate: land behind green Slack tests before any Buzz code), the NIP-OA credential-scope warning (mitigate: document prominently, bound `created_at<`), and the macOS keystore `-k` argument gap (mitigate: FR-041's validation requirement, tagged integration test, documented limitation if unresolved).
 
 ## Timeline and Milestones
 
-Phasing carried from the PRD, both workstreams P0 only for this spec (P1/P2/Deferred items are out of scope for this implementation run — see `tasks.md`):
+Phasing carried from the PRD, adjusted per the full-PRD scope decision (`DEV-FLOW-STATUS.md`):
 
-- **Buzz P0:** FR-001→024, FR-028→037
-- **Secret Storage P0+P1 (this run implements P1 too, per scope decision):** FR-038→054
+- **Buzz — in scope this run:** FR-001→037, i.e. all of PRD Buzz P0 **plus** FR-025 (typing), FR-026 (gated `!shutdown`), and FR-027 (reaction pub/sub), pulled forward from PRD P1 because `plan.md` Phase F already implements them as part of the same channel-participation unit. NIP-17 DM-triggered tasks (P1, explicitly excluded from FR-019's P0 scope by the PRD itself), NIP-50 search, and NIP-CW paging are **not** pulled forward and remain out of scope — see `tasks.md` §Deferred Items.
+- **Secret Storage — in scope this run:** FR-038→054, i.e. all of PRD P0+P1+P2, with one narrow exception: FR-048's *hard rejection* of inlined secrets is deferred one release per the PRD's own phasing (see Breaking Changes above) — only its warn-only predecessor, FR-047, ships now.
+- **Deferred entirely (not pulled forward):** PRD "Deferred, not scheduled" items (NIP-GS, NIP-34, NIP-MP, NIP-AO, Blossom, canvases/voice, `kind:40002`/`40003`) and remote secret managers/rotation/TPM sealed-at-use — see `tasks.md` §Deferred Items.
 
 ## References
 

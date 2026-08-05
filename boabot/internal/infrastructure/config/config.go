@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
+
+// presenceStalenessBound is FR-023's 180s presence-staleness limit; a
+// configured buzz.presence_interval MUST stay strictly under it (Monitor's
+// own Config doc comment assigns this validation to config-loading, since
+// Monitor itself never validates operator-supplied durations).
+const presenceStalenessBound = 180 * time.Second
 
 type Config struct {
 	Bot          BotConfig          `yaml:"bot"`
@@ -19,6 +26,69 @@ type Config struct {
 	Memory       MemoryConfig       `yaml:"memory"`
 	Backup       BackupConfig       `yaml:"backup"`
 	Slack        SlackConfig        `yaml:"slack"`
+	Buzz         BuzzConfig         `yaml:"buzz"`
+}
+
+// Duration wraps time.Duration so buzz.presence_interval (and any future
+// duration field) can be written in config.yaml as a Go duration string
+// (e.g. "60s", "3m") rather than raw nanoseconds.
+type Duration time.Duration
+
+// UnmarshalYAML implements yaml.Unmarshaler over a duration string.
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	var s string
+	if err := node.Decode(&s); err != nil {
+		return err
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+// BuzzConfig holds the Buzz (Nostr relay) channel monitor's non-secret
+// connection settings (FR-035). It mirrors SlackConfig's shape: all fields
+// are optional, and cmd/boabot/main.go only activates the Buzz monitor when
+// Enabled is true and the required settings (RelayURL, BotName) resolve —
+// mirroring Slack's all-or-nothing activation pattern (FR-036).
+//
+// Secret material — the agent's private key/nsec, an optional NIP-OA auth
+// tag, and BUZZ_API_TOKEN — MUST NOT appear under this block: it resolves
+// only through the FR-002 domain.SecretStore credential path (env var,
+// systemd credential, OS keystore, or ~/.boabot/credentials — see
+// internal/infrastructure/buzz.PrivateKeySecretName/APITokenSecretName).
+// Load's yaml.Decoder.KnownFields(true) already rejects any key under
+// buzz: that is not one of the fields below, with a clear
+// "field <name> not found in type config.BuzzConfig" error — proof (not an
+// additional guard) is in config_test.go's
+// TestLoad_BuzzSecretLikeKeyRejected* cases.
+//
+// Deliberately NOT present: a static "channels" list. FR-035's field list
+// names one, but internal/infrastructure/buzz's Phase F channel
+// participation (discovery.go) subscribes to every channel the bot is a
+// relay-confirmed member of (kind:39000/39002 discovery + kind:44100/44101
+// membership events) entirely dynamically — no code path in that package
+// reads or would honour a static channel list. Adding the field here would
+// be dead config: an operator who writes buzz.channels: would reasonably
+// believe it scopes which channels the bot joins, and nothing would ever
+// read it. Omitting the field means a buzz.channels: key is instead a hard
+// "field not found" config-load error — the honest outcome — until (if
+// ever) a future phase actually threads static channel scoping through
+// Monitor/discovery.go.
+type BuzzConfig struct {
+	Enabled            bool     `yaml:"enabled"`
+	RelayURL           string   `yaml:"relay_url"`
+	BotName            string   `yaml:"bot_name"`
+	OwnerPubkey        string   `yaml:"owner_pubkey"`
+	RespondTo          string   `yaml:"respond_to"`
+	RespondToAllowlist []string `yaml:"respond_to_allowlist"`
+	// PresenceInterval is FR-023's kind:20001 publish interval. Zero (the
+	// default) leaves internal/infrastructure/buzz.Monitor's own default
+	// (well under the 180s bound) in effect. A non-zero value at or above
+	// presenceStalenessBound is rejected by Load with a clear error.
+	PresenceInterval Duration `yaml:"presence_interval"`
 }
 
 // SlackConfig holds the Slack Socket Mode connection settings.
@@ -189,5 +259,15 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+
+	if d := time.Duration(cfg.Buzz.PresenceInterval); d != 0 {
+		if d < 0 {
+			return Config{}, fmt.Errorf("config: buzz.presence_interval must be positive, got %s", d)
+		}
+		if d >= presenceStalenessBound {
+			return Config{}, fmt.Errorf("config: buzz.presence_interval (%s) must be under the 180s FR-023 staleness bound", d)
+		}
+	}
+
 	return cfg, nil
 }

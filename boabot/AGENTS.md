@@ -5,7 +5,7 @@ This is the BaoBot agent runtime. All bots in the team run this binary, differen
 ## Module Purpose
 
 Local single-binary agent runtime. `TeamManager` runs all enabled bots as in-process goroutines. It provides:
-- Main thread: monitors the local in-process message queue, Slack, and Microsoft Teams for inbound messages.
+- Main thread: monitors the local in-process message queue, Slack, and Buzz (a Nostr-based relay protocol) for inbound messages.
 - Worker threads: agent harness instances that execute tasks using model inference, built-in tools, MCP tools, and skills. Each worker is guarded with `recover()`.
 - Tool Attention: BM25 scoring selects which tool schemas are fully injected (cap: 20); the rest are stubs.
 - Context management: checkpoints durable state and restarts worker threads when context window approaches the threshold.
@@ -36,6 +36,8 @@ internal/
     budget.go       # BudgetTracker
     card.go         # AgentCard, CardRegistry
     orchestrator.go # ControlPlane, BoardStore, UserStore and related types
+    buzz.go         # RelayClient, Event, Filter (Buzz/Nostr port)
+    secret.go       # SecretStore, SecretProvider, SecretRef
     mocks/          # generated/hand-written mocks for all interfaces
   application/
     team/           # TeamManager — starts and supervises all bot goroutines
@@ -57,17 +59,21 @@ internal/
     openai/         # OpenAI-compatible ModelProvider adapter
     mcp/            # MCP client adapter
     slack/          # Slack ChannelMonitor adapter
-    teams/          # Microsoft Teams adapter
+    buzz/           # Buzz (Nostr relay) ChannelMonitor adapter: relay
+                    #   client, NIP-42/NIP-OA auth, channel discovery/
+                    #   participation, presence, process-singleton lock
     http/           # REST API server and web UI handler (orchestrator mode)
     db/             # MariaDB adapters (orchestrator mode)
     config/         # config file loading (YAML)
     credentials/    # credentials file loader
+    secret/         # SecretStore provider chain: env, file, systemd,
+                    #   keystore (zalando/go-keyring) sub-packages
 ```
 
 ## Key Interfaces (domain layer)
 
 - `Agent` — lifecycle: Start, Stop.
-- `ChannelMonitor` — Start, Stop (Slack/Teams monitors).
+- `ChannelMonitor` — Start, Stop, HandleResult (Slack/Buzz monitors).
 - `Worker` — Execute(task) Task — runs a single agentic task.
 - `WorkerFactory` — New() Worker.
 - `MessageQueue` — Send, Receive, Delete (local queue adapter target).
@@ -82,6 +88,8 @@ internal/
 - `ToolGater` — Select(intent, allTools) → full schemas + stubs.
 - `SkillRegistry` — List, Get, Approve, Reject, Revoke.
 - `CardRegistry` — Get, Set, List (local in-memory Agent Card cache).
+- `RelayClient` — Connect, Authenticate, Publish, Subscribe, Close (Buzz/Nostr adapter target).
+- `SecretStore` — Get (ordered provider-chain resolution; env/systemd/keystore/file adapter targets).
 - `ControlPlane`, `BoardStore`, `UserStore` — orchestrator mode only.
 
 ## Development Rules

@@ -8,7 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
+
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret"
 )
 
@@ -195,5 +200,175 @@ func TestEndToEnd_CredentialsFileOnlyDeployment(t *testing.T) {
 	}
 	if got := os.Getenv("BOABOT_BACKUP_TOKEN"); got != "ghp-file" {
 		t.Errorf("BOABOT_BACKUP_TOKEN: got %q, want ghp-file", got)
+	}
+}
+
+// buzzFakeStore is a domain.SecretStore test double for the buildBuzzMonitor
+// tests below: it resolves a fixed set of refs, records every ref it was
+// asked to resolve (so a test can assert exactly zero calls happened), and
+// reports an all-miss lookup as a *secret.NotFoundError so LoadAPIToken's
+// errors.As-based clean-miss distinction is exercised faithfully rather
+// than through a generic error.
+type buzzFakeStore struct {
+	values map[domain.SecretRef]string
+	calls  []domain.SecretRef
+}
+
+func (f *buzzFakeStore) Get(_ context.Context, ref domain.SecretRef) (string, error) {
+	f.calls = append(f.calls, ref)
+	if v, ok := f.values[ref]; ok {
+		return v, nil
+	}
+	return "", &secret.NotFoundError{Ref: ref}
+}
+
+func genTestKeypair(t *testing.T) (nostr.SecretKey, string) {
+	t.Helper()
+	sk := nostr.Generate()
+	return sk, nip19.EncodeNsec(sk)
+}
+
+// TestBuildBuzzMonitor_Disabled verifies FR-036: with buzz.enabled: false,
+// buildBuzzMonitor returns nil and never calls SecretStore.Get at all --
+// the concrete evidence that no Nostr code path executes and no relay
+// connection is attempted.
+func TestBuildBuzzMonitor_Disabled(t *testing.T) {
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{}}
+	cfg := config.Config{Buzz: config.BuzzConfig{Enabled: false, BotName: "buzzbot", RelayURL: "wss://relay.example.com"}}
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+	if mon != nil {
+		t.Fatal("expected nil Monitor when buzz.enabled is false")
+	}
+	if len(store.calls) != 0 {
+		t.Errorf("expected zero SecretStore.Get calls when Buzz is disabled, got %d: %v", len(store.calls), store.calls)
+	}
+}
+
+// TestBuildBuzzMonitor_MissingBotNameOrRelayURL verifies buildBuzzMonitor
+// refuses to activate (and never touches the SecretStore) when Buzz is
+// enabled but bot_name or relay_url is missing.
+func TestBuildBuzzMonitor_MissingBotNameOrRelayURL(t *testing.T) {
+	cases := []config.BuzzConfig{
+		{Enabled: true, RelayURL: "wss://relay.example.com"}, // missing BotName
+		{Enabled: true, BotName: "buzzbot"},                  // missing RelayURL
+	}
+	for _, bc := range cases {
+		store := &buzzFakeStore{values: map[domain.SecretRef]string{}}
+		cfg := config.Config{Buzz: bc}
+
+		mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+		if mon != nil {
+			t.Fatalf("expected nil Monitor for incomplete BuzzConfig %+v", bc)
+		}
+		if len(store.calls) != 0 {
+			t.Errorf("expected zero SecretStore.Get calls for incomplete BuzzConfig %+v, got %d", bc, len(store.calls))
+		}
+	}
+}
+
+// TestBuildBuzzMonitor_KeypairLoadFailure verifies FR-003's fail-closed
+// behaviour: a SecretStore miss on the private key returns a nil Monitor
+// (Buzz declines to start) rather than an error or a panic, so the caller
+// in run() can log it and let every other channel/bot keep starting.
+func TestBuildBuzzMonitor_KeypairLoadFailure(t *testing.T) {
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{}} // no private key configured
+	cfg := config.Config{Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"}}
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+	if mon != nil {
+		t.Fatal("expected nil Monitor when the private key fails to resolve")
+	}
+}
+
+// TestBuildBuzzMonitor_EnabledSuccess verifies the happy path: a valid
+// private key and required settings produce a non-nil Monitor, and the
+// target bot's queue is registered with the router.
+func TestBuildBuzzMonitor_EnabledSuccess(t *testing.T) {
+	_, nsec := genTestKeypair(t)
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: "buzz_private_key", Bot: "buzzbot"}: nsec,
+	}}
+	cfg := config.Config{
+		Bot: config.BotConfig{Name: "buzzbot", BotType: "tech-lead"},
+		Buzz: config.BuzzConfig{
+			Enabled:  true,
+			BotName:  "buzzbot",
+			RelayURL: "wss://relay.example.com",
+		},
+	}
+	router := queue.NewRouter()
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, router, false, t.TempDir(), t.TempDir(), nil)
+
+	if mon == nil {
+		t.Fatal("expected a non-nil Monitor for a valid, enabled BuzzConfig")
+	}
+	// router.QueueFor panics if the bot was never registered -- calling it
+	// here proves buildBuzzMonitor registered the queue.
+	if router.QueueFor("buzzbot") == nil {
+		t.Error("expected buzzbot's queue to be registered")
+	}
+}
+
+// TestBuildBuzzMonitor_QueueAlreadyRegistered_DoesNotDoubleRegister
+// verifies that when Slack already registered the same bot name,
+// buildBuzzMonitor does not call router.Register again -- Router.Register
+// panics on a duplicate name, so a double-registration would crash the
+// whole process rather than just skipping Buzz.
+func TestBuildBuzzMonitor_QueueAlreadyRegistered_DoesNotDoubleRegister(t *testing.T) {
+	_, nsec := genTestKeypair(t)
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: "buzz_private_key", Bot: "sharedbot"}: nsec,
+	}}
+	cfg := config.Config{
+		Buzz: config.BuzzConfig{Enabled: true, BotName: "sharedbot", RelayURL: "wss://relay.example.com"},
+	}
+	router := queue.NewRouter()
+	router.Register("sharedbot", 0) // simulate the Slack block having already registered it
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("buildBuzzMonitor must not double-register an already-registered queue, got panic: %v", r)
+		}
+	}()
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, router, true, "", t.TempDir(), nil)
+	if mon == nil {
+		t.Fatal("expected a non-nil Monitor")
+	}
+}
+
+// TestReadBotDescription_ExtractsWhatIDoParagraph verifies FR-011's
+// "description from its AGENTS.md" is read from the "## What I do" section.
+func TestReadBotDescription_ExtractsWhatIDoParagraph(t *testing.T) {
+	dir := t.TempDir()
+	botDir := filepath.Join(dir, "tech-lead")
+	if err := os.MkdirAll(botDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := "# Tech Lead — AGENTS.md\n\n## What I do\n\nI manage development work end-to-end.\n\n## How to reach me\n\nSend me a message.\n"
+	if err := os.WriteFile(filepath.Join(botDir, "AGENTS.md"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	got := readBotDescription(dir, "tech-lead")
+	want := "I manage development work end-to-end."
+	if got != want {
+		t.Errorf("readBotDescription: got %q, want %q", got, want)
+	}
+}
+
+// TestReadBotDescription_MissingFileReturnsEmpty verifies a missing or
+// unreadable AGENTS.md is never fatal -- just an empty description.
+func TestReadBotDescription_MissingFileReturnsEmpty(t *testing.T) {
+	if got := readBotDescription(t.TempDir(), "nonexistent-type"); got != "" {
+		t.Errorf("readBotDescription: got %q, want empty string", got)
+	}
+	if got := readBotDescription("", "tech-lead"); got != "" {
+		t.Errorf("readBotDescription with empty botsDir: got %q, want empty string", got)
 	}
 }

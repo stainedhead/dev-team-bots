@@ -67,6 +67,16 @@ internal/
                         # UserRepo: CRUD against `users` table; Enabled inverts the `disabled` column
     cliagent/           # SubprocessRunner: domain.CLIAgentRunner; SIGTERM→SIGKILL (5s), stdin channel, progress callback
     mcp/                # MCP client adapter
+    slack/              # Slack Socket Mode ChannelMonitor adapter
+    buzz/               # Buzz (Nostr relay) ChannelMonitor adapter over fiatjaf.com/nostr:
+                        #   relay_client.go/reconnect.go (WebSocket, NIP-42 auth, backoff+jitter),
+                        #   nipoa.go (NIP-OA/NIP-AA attestation), keypair.go/token.go (SecretStore-
+                        #   backed nsec/API token resolution), monitor.go/discovery.go/presence.go/
+                        #   trigger.go/guard.go (NIP-29 channel discovery, dispatch, replies,
+                        #   presence, p-gate guards), lock.go (FR-031 process-singleton lock)
+    secret/             # SecretStore provider chain: env/, file/ (wraps credentials/), systemd/
+                        #   ($CREDENTIALS_DIRECTORY), keystore/ (zalando/go-keyring) — ordered,
+                        #   first-hit-wins, per-provider 2s timeout (store.go)
     otel/               # OpenTelemetry provider: OTLP/HTTP trace + metric exporters; noop fallback
     screening/          # RegexScreener: injection-pattern detection + [REDACTED] sanitisation
     workflow/           # ConfigLoader: YAML workflow config with SIGHUP hot-reload
@@ -140,6 +150,16 @@ team:
   file_path: ./team.yaml
   bots_dir: ./bots
 
+buzz:
+  enabled: false             # single early activation guard (FR-036) — everything below is inert
+  relay_url: wss://relay.example.com
+  bot_name: <name>           # must match an enabled bot's name in team.yaml
+  owner_pubkey: <hex>        # consulted only by the !shutdown wider gate; optional
+  respond_to: <hex>          # optional single-pubkey author gate
+  respond_to_allowlist:      # optional; nil (omitted) = no gate, [] = allow-none
+    - <hex>
+  presence_interval: 60s     # must stay under the 180s FR-023 staleness bound
+
 tools:
   allowed_tools:            # built-in tools this bot may use
     - read_file
@@ -171,6 +191,8 @@ context:
 ```
 
 Credentials (API keys) are **never** stored in `config.yaml`. They are read from `~/.boabot/credentials` (INI format) or environment variables at startup. The `BOABOT_PROFILE` environment variable selects a non-default profile.
+
+Note `buzz:` has no `channels:` field. Channel discovery (`internal/infrastructure/buzz/discovery.go`) is entirely dynamic — the bot subscribes to whichever channels the relay confirms it as a member of (`kind:39000`/`kind:39002`) and reacts to `kind:44100`/`44101` membership events at runtime; there is no static list to configure. `config.Load`'s `yaml.Decoder.KnownFields(true)` rejects any key under `buzz:` that is not one of `BuzzConfig`'s literal fields — including a `channels:` key and any secret-looking key (`nsec`, `private_key`, `api_token`, etc.), per FR-035. See [`user-docs/Buzz-Adoption-Config.md`](../user-docs/Buzz-Adoption-Config.md).
 
 ## SubTeamManager
 
@@ -491,6 +513,30 @@ Five notification endpoints are registered in `internal/infrastructure/http/serv
 | `DELETE` | `/api/notifications` | `deleteNotifications` — accepts `{"ids": [...]}` |
 
 `POST /api/bots/:name/tasks` is extended: if the request body includes a `schedule` key, it is decoded into a `domain.Schedule` and attached to the created `DirectTask`.
+
+## Buzz (Nostr) Channel Monitor
+
+**Clean Architecture placement:** `domain.RelayClient`/`Event`/`Filter` (`internal/domain/buzz.go`) have zero infrastructure imports. `internal/infrastructure/buzz/` implements the port over [`fiatjaf.com/nostr`](https://pkg.go.dev/fiatjaf.com/nostr) and provides `Monitor`, a `domain.ChannelMonitor` adapter registered via `TeamManager.WithChannelMonitor` exactly like `slack.Monitor` — `internal/application/team` never imports `infrastructure/slack` or `infrastructure/buzz` directly (FR-034; enforced by `grep -r "infrastructure/slack\|infrastructure/buzz" internal/application`).
+
+**Activation.** `cmd/boabot/main.go`'s `buildBuzzMonitor` is a single early guard: its first statement returns `nil` when `buzz.enabled` is false, so no `SecretStore` lookup, no `RelayClient`, and no relay connection is ever attempted (FR-036). When enabled, it resolves the agent's keypair via `buzzinfra.LoadKeypair` (nsec, `SecretRef.Name = "buzz_private_key"`) and fails closed — logs and returns `nil` — on any resolution failure (FR-003), leaving Slack and every other bot in the process to start normally.
+
+**Identity and auth.** NIP-42 challenge/response AUTH (`kind:22242`) is signed by the agent's own key; an optional NIP-OA `auth` tag (owner-issued, Schnorr-signed) can be attached via `AuthTagFunc` to grant NIP-AA virtual channel membership without explicit enrollment. `AUTH` event `created_at` is stamped from wall-clock UTC and checked against the relay's ±120s freshness window before signing (`ErrAuthClockSkew`). Relay AUTH rejections are classified `invalid:`/`restricted:` and never collapsed into one generic failure (`AuthFailureClass`).
+
+**Channel participation.** Discovery is entirely dynamic over the authenticated WebSocket (`kind:39000`/`39002`, `kind:44100`/`44101` membership events) — no REST call, no static channel list. Inbound `kind:9` messages that `@mention` the agent's own pubkey, pass the FR-029 author gate, and are not self-authored are dispatched onto the existing `domain.MessageQueue` exactly like a Slack task; `RelayClient.Subscribe` itself rejects (before ever reaching the relay) any `44100`/`44101`/`1059` subscription lacking a matching `#p` filter, and any reaction (`kind:7`) subscription lacking `#h` (FR-016/FR-027).
+
+**Reconnection and presence.** Bounded exponential backoff with jitter re-dials, re-authenticates, and re-subscribes everything after a disconnect, with no lost pending task-ID correlations. A `kind:20001` presence loop (default well under the FR-023 180s staleness bound) suspends while disconnected and resumes on reconnect; `kind:20002` typing indicators run for the duration of a dispatched task; `Monitor.Stop` publishes an `offline` presence event before the connection closes.
+
+**Process-singleton lock (FR-031/OQ-1).** `lock.go`'s `AcquireLock`, keyed on the agent's *derived pubkey* (never the raw nsec) and rooted at the shared `team.ManagerConfig.MemoryRoot` (not a per-bot directory — see `buzzinfra.Config.LockDir`'s doc comment), refuses a second concurrent `Monitor.Start` against the same identity, logs why, and leaves every other channel/bot unaffected.
+
+## Secret Storage
+
+**Clean Architecture placement:** `domain.SecretStore`/`SecretProvider`/`SecretRef` (`internal/domain/secret.go`) have zero keystore/D-Bus/OS-specific imports. `internal/infrastructure/secret.Store` implements the ordered-chain resolution; `env/`, `file/`, `systemd/`, `keystore/` are the four provider adapters.
+
+**Resolution order and semantics.** Default chain: `env` → `systemd` → `keystore` → `file` (FR-040, configurable, any provider omissible). `Store.Get` tries each in order with its own `context.WithTimeout` (2s default, one deadline per provider, not per chain) and treats a provider error or timeout as a miss, not a chain-halting failure (FR-039). An all-miss resolution returns `*secret.NotFoundError`, naming the reference and every provider consulted (FR-053).
+
+**Per-bot namespacing (FR-045, OQ-9 resolved as bot *name*, not type):** `env` ignores `SecretRef.Bot` (env vars are process-global; `BUZZ_PRIVATE_KEY` resolves `buzz_private_key` regardless of bot). `file`/`systemd` use the filename/INI-key `"<bot>_<name>"` when `Bot` is set. `keystore` uses service `"boabot"` + account `"<bot>/<name>"`. All three bot-scoped providers are **strict-match with no fallback to the global key** — a per-bot secret absent under its bot-scoped key is a miss, never a silent match against a differently-scoped entry.
+
+**Never logged (FR-051, FR-052).** No provider logs a resolved value at any level; `Store` itself logs only the provider name and reference name. `keystore`'s writes go through `zalando/go-keyring`'s stdin (`-i`) path on macOS, never a subprocess argument — mechanically verified by a call-inspection test.
 
 ## Key Design Decisions
 

@@ -158,15 +158,40 @@ type RelayClient struct {
 	nextSubID int
 }
 
-// subEntry is a registered subscription. Every field is only ever mutated
-// under RelayClient.subMu.
+// subEntry is a registered subscription. id, ctx, filter, and out are set
+// once at creation and never mutated. generation is only ever mutated
+// under RelayClient.subMu. wg tracks every pump ever started for this
+// entry (FR-002/FR-003 fix) -- see attachSub, pumpSub, and removeAndClose.
 type subEntry struct {
-	id       int
-	ctx      context.Context
-	filter   nostr.Filter
-	out      chan domain.Event
-	pumpDone chan struct{} // set by the most recent attachSub; closed by that pump on exit
+	id     int
+	ctx    context.Context
+	filter nostr.Filter
+	out    chan domain.Event
+
+	// generation is bumped by attachSub each time it successfully attaches
+	// a pump for this entry. A pump compares its own generation against
+	// the current value before forwarding each event; a pump running
+	// under a superseded generation (see attachSub's doc comment for how
+	// that can happen) detects this and exits without sending, so at most
+	// one generation's pump is ever actively forwarding onto out.
+	generation int
+
+	// wg has Add(1) called by attachSub for every pump it starts (every
+	// generation, not just the latest) and Done() called by that pump on
+	// exit. removeAndClose waits on wg -- not a single "most recent"
+	// completion signal -- before closing out, so an orphaned earlier
+	// generation's pump can never still be sending when out is closed.
+	wg sync.WaitGroup
 }
+
+// subscribeAfterRegisterHook, when non-nil, is invoked by Subscribe
+// immediately after registering a new entry into rc.subs and releasing
+// subMu, but before Subscribe's own attachSub call. Test-only: it exists
+// to deterministically open the exact race window between Subscribe's own
+// initial attach and a concurrent reconnect's resubscribeAll attaching
+// the same not-yet-attached entry (FR-002). Production code leaves this
+// nil, in which case Subscribe proceeds immediately as before.
+var subscribeAfterRegisterHook func()
 
 // Option configures a RelayClient.
 type Option func(*RelayClient)
@@ -510,6 +535,10 @@ func (rc *RelayClient) Subscribe(ctx context.Context, f domain.Filter) (<-chan d
 	rc.subs[id] = entry
 	rc.subMu.Unlock()
 
+	if subscribeAfterRegisterHook != nil {
+		subscribeAfterRegisterHook()
+	}
+
 	if conn != nil {
 		if err := rc.attachSub(ctx, conn, entry); err != nil {
 			rc.subMu.Lock()
@@ -530,44 +559,98 @@ func (rc *RelayClient) Subscribe(ctx context.Context, f domain.Filter) (<-chan d
 // attachSub opens a fresh library subscription for entry.filter on conn
 // and starts a pump goroutine forwarding translated events onto
 // entry.out. It is called both from Subscribe (initial attach) and from
-// the reconnect loop (re-attach after every reconnect, using the same
-// caller-owned ctx and out channel).
+// the reconnect loop's resubscribeAll (re-attach after every reconnect,
+// using the same caller-owned ctx and out channel).
 //
-// The entry must still be present in rc.subs (checked and mutated
-// atomically under subMu, alongside creating this attach generation's
-// pumpDone channel) so a concurrent removeAndClose can never observe a
-// pumpWG.Add() that races past its own wait -- see removeAndClose.
+// FR-002: Subscribe registers a new entry into rc.subs, then releases
+// subMu, then calls attachSub itself -- a window in which a concurrent
+// reconnect's resubscribeAll can observe that same not-yet-attached entry
+// and call attachSub on it first (subscribeAfterRegisterHook exists so a
+// test can force exactly this interleaving deterministically). Both
+// calls then legitimately pass the "is entry still registered" check
+// below, so attachSub does NOT try to prevent a second, concurrent attach
+// -- that would require distinguishing "a legitimate re-attach after a
+// real reconnect" from "a duplicate attach of the same never-yet-attached
+// entry," which is not knowable locally. Instead it makes a double attach
+// SAFE: every attach bumps entry.generation, and pumpSub (below) checks
+// its own generation before every forward, so at most one generation's
+// pump is ever actively delivering onto entry.out even if two started.
+//
+// FR-003: attachSub must never start a pump that removeAndClose/Close
+// have already stopped waiting for. The entry-registration check and the
+// generation bump + wg.Add happen inside ONE rc.mu-guarded section --
+// the same lock Close uses to set rc.closed = true -- so the two
+// operations are strictly ordered: either Close's transition happens
+// first (attachSub then sees rc.closed and refuses), or attachSub's
+// Add happens first (and is therefore guaranteed visible to Close's
+// later rc.pumpWG.Wait(), which will correctly wait for it). Lock
+// ordering is rc.mu outer, subMu inner, everywhere in this file --
+// never the reverse -- so nesting subMu inside this rc.mu section
+// cannot deadlock against any other rc.mu/subMu use (see
+// implementation-notes.md for the full audit).
 func (rc *RelayClient) attachSub(ctx context.Context, conn relayConn, entry *subEntry) error {
+	// Fast-path check: avoid the network round trip below if the entry
+	// was already removed. Not itself a correctness guard -- the
+	// authoritative check is the second one, after conn.Subscribe,
+	// combined with the rc.closed check under rc.mu.
 	rc.subMu.Lock()
 	if _, ok := rc.subs[entry.id]; !ok {
 		rc.subMu.Unlock()
 		return errClosed
 	}
-	inner, err := conn.Subscribe(ctx, entry.filter)
-	if err != nil {
-		rc.subMu.Unlock()
-		return err
-	}
-	done := make(chan struct{})
-	entry.pumpDone = done
-	rc.pumpWG.Add(1)
 	rc.subMu.Unlock()
 
-	go rc.pumpSub(inner, entry.out, done)
+	inner, err := conn.Subscribe(ctx, entry.filter)
+	if err != nil {
+		return err
+	}
+
+	rc.mu.Lock()
+	if rc.closed {
+		rc.mu.Unlock()
+		return errClosed
+	}
+	rc.subMu.Lock()
+	if _, ok := rc.subs[entry.id]; !ok {
+		rc.subMu.Unlock()
+		rc.mu.Unlock()
+		return errClosed
+	}
+	entry.generation++
+	myGen := entry.generation
+	entry.wg.Add(1)
+	rc.subMu.Unlock()
+	rc.pumpWG.Add(1)
+	rc.mu.Unlock()
+
+	go rc.pumpSub(inner, entry, myGen)
 	return nil
 }
 
-func (rc *RelayClient) pumpSub(inner <-chan nostr.Event, out chan<- domain.Event, done chan<- struct{}) {
+// pumpSub forwards events from inner onto entry.out for as long as this
+// attach's generation (myGen) remains current. If a later attachSub call
+// supersedes it (entry.generation advances past myGen -- see attachSub's
+// doc comment for how this can legitimately happen), this pump detects
+// that on its next event and exits without forwarding, leaving delivery
+// to the newer generation's own pump. This is what makes a double attach
+// safe rather than merely detected: at most one generation ever forwards.
+func (rc *RelayClient) pumpSub(inner <-chan nostr.Event, entry *subEntry, myGen int) {
 	defer rc.pumpWG.Done()
-	defer close(done)
+	defer entry.wg.Done()
 	for {
 		select {
 		case evt, ok := <-inner:
 			if !ok {
 				return
 			}
+			rc.subMu.Lock()
+			stale := entry.generation != myGen
+			rc.subMu.Unlock()
+			if stale {
+				return
+			}
 			select {
-			case out <- FromLibraryEvent(evt):
+			case entry.out <- FromLibraryEvent(evt):
 			case <-rc.closedCh:
 				return
 			}
@@ -578,10 +661,11 @@ func (rc *RelayClient) pumpSub(inner <-chan nostr.Event, out chan<- domain.Event
 }
 
 // removeAndClose unregisters id (so no future reconnect re-attaches it),
-// waits for any in-flight pump for that entry to finish (so it is never
-// still writing to entry.out when this closes it -- see pumpSub), and
-// closes entry.out. It is a no-op if id is no longer registered, which
-// happens when Close() got to it first (Close closes every still-
+// waits for EVERY pump ever started for that entry -- every generation,
+// not just the most recent -- to finish (entry.wg; see attachSub and
+// pumpSub) so none can still be sending when this closes entry.out, and
+// then closes entry.out. It is a no-op if id is no longer registered,
+// which happens when Close() got to it first (Close closes every still-
 // registered entry's channel itself, under the same subMu, after its own
 // global pumpWG.Wait()).
 func (rc *RelayClient) removeAndClose(id int) {
@@ -595,9 +679,7 @@ func (rc *RelayClient) removeAndClose(id int) {
 		return
 	}
 
-	if entry.pumpDone != nil {
-		<-entry.pumpDone
-	}
+	entry.wg.Wait()
 	close(entry.out)
 }
 

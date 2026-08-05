@@ -151,6 +151,10 @@ func (rc *RelayClient) reconnect() relayConn {
 		rc.conn = conn
 		rc.mu.Unlock()
 
+		if reconnectAfterConnSwapHook != nil {
+			reconnectAfterConnSwapHook()
+		}
+
 		rc.resubscribeAll(conn)
 		rc.logger.Info("buzz: reconnected", "url", rc.url, "attempts", attempt+1)
 		// F14 prerequisite: the "reconnected" signal itself already fired
@@ -162,6 +166,14 @@ func (rc *RelayClient) reconnect() relayConn {
 		return conn
 	}
 }
+
+// reconnectAfterConnSwapHook, when non-nil, is invoked by reconnect
+// immediately after publishing the new connection to rc.conn and
+// releasing rc.mu, but before resubscribeAll runs. Test-only: it exists
+// to deterministically open the race window between a reconnect's
+// re-attach (resubscribeAll -> attachSub) and a concurrent Close()
+// (FR-003). Production code leaves this nil.
+var reconnectAfterConnSwapHook func()
 
 // resubscribeAll re-attaches every currently registered subscription to
 // conn, in the caller-owned channel each was originally returned on, so

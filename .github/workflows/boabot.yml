@@ -140,3 +140,86 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: cd cdk && npx cdk deploy --require-approval never
+
+  # release-please maintains an up-to-date "chore(main): release boabot
+  # X.Y.Z" PR on every push to main, parsing conventional-commit messages
+  # (feat:/fix:/BREAKING CHANGE) since the last release to compute the next
+  # semver bump automatically -- no manual version file or tag to remember.
+  # Runs at the repo root (release-please-config.json / manifest live
+  # there, not under boabot/, since it's a manifest-driven tool) even
+  # though this workflow's other jobs default to the boabot/ working
+  # directory.
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs['boabot--release_created'] }}
+      tag_name: ${{ steps.release.outputs['boabot--tag_name'] }}
+      version: ${{ steps.release.outputs['boabot--version'] }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # AGENTS.md: "After opening a PR ... immediately enable automerge.
+      # This applies to every PR opened in this repo, with no exceptions."
+      # release-please's own release PR is no exception -- this makes the
+      # whole pipeline hands-off: land a conventional-commit-tagged change
+      # on main, and (once the release PR itself merges) a tagged release
+      # and its binary follow with no manual click. Found via the
+      # `autorelease: pending` label release-please applies to its own
+      # release PRs by default (a documented, stable convention) rather
+      # than a step output, since this action's outputs are not statically
+      # declared and an unverified output name would fail silently.
+      - name: Enable automerge on the release-please PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list --repo "${{ github.repository }}" \
+            --label "autorelease: pending" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr merge --auto --squash "$PR_NUMBER" --repo "${{ github.repository }}"
+          fi
+
+  # Builds and attaches the macOS (Apple Silicon) binary to the GitHub
+  # Release release-please just created. Only runs on the merge that
+  # actually cuts a release (release_created == 'true'), not on every
+  # ordinary merge to main.
+  release-binary:
+    name: Release Binary (macOS arm64)
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: boabot/go.sum
+
+      - name: Build darwin/arm64 binary
+        run: |
+          mkdir -p dist
+          GOOS=darwin GOARCH=arm64 go build \
+            -ldflags="-X main.version=${{ needs.release-please.outputs.version }}" \
+            -o dist/boabot-darwin-arm64 ./cmd/boabot
+
+      - name: Attach binary to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: boabot/dist/boabot-darwin-arm64

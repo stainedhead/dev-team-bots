@@ -78,11 +78,15 @@ GitHub Actions workflows live exclusively at `.github/workflows/` in the reposit
 
 | Workflow | Triggers on | Pipeline |
 |---|---|---|
-| `boabot.yml` | `boabot/**` | test → lint → build → containerise → CDK deploy (shared stack) |
+| `boabot.yml` | `boabot/**` | test → lint → build → containerise → CDK deploy (shared stack); on merge to `main`, also: release-please → release binary (macOS arm64) |
 | `boabotctl.yml` | `boabotctl/**` | test → lint → build; release on tag `boabotctl/v*` |
 | `boabot-team.yml` | `boabot-team/**` | CDK test → CDK diff (PR) → CDK deploy (per-bot stack) |
 
 Containerise and deploy steps run on merge to `main` only. PRs run test, lint, build, and CDK diff.
+
+### boabot release automation
+
+`boabot.yml` also runs [`release-please`](https://github.com/googleapis/release-please) on every push to `main` (config: `release-please-config.json` / `.release-please-manifest.json` at the repo root). It parses conventional-commit messages (`feat:`, `fix:`, `BREAKING CHANGE:`) affecting `boabot/` since the last release and maintains a `chore(main): release boabot X.Y.Z` PR with an auto-generated changelog — no manual version bump. That PR gets automerge enabled the same as any other PR (see Pull Requests below). When it merges, `release-please` tags the release (`boabot/vX.Y.Z`) and a second job cross-compiles a `darwin/arm64` binary and attaches it to the GitHub Release. Commit messages under `boabot/` should follow [Conventional Commits](https://www.conventionalcommits.org/) for this to version correctly — an unconventional commit message doesn't break anything, it just doesn't get counted toward the next bump.
 
 ## Pull Requests
 

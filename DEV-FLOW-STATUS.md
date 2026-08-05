@@ -3,7 +3,8 @@
 **PRD:** boabot-buzz-support-PRD.md
 **Spec:** specs/260804-boabot-buzz-support
 **Branch:** worktree-buzz-support-prd
-**Review PRD:** boabot-buzz-support-auto-review-PRD.md
+**Review PRD:** specs/260804-boabot-buzz-support-auto-review/boabot-buzz-support-auto-review-PRD.md
+**Review Spec:** specs/260804-boabot-buzz-support-auto-review
 **Process Start:** 2026-08-04T18:00:00Z
 **Process End:** —
 **Total Runtime:** —

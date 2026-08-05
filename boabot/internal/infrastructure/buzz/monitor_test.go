@@ -445,6 +445,37 @@ func TestMonitor_Dispatch_AuthorGateRejects(t *testing.T) {
 	}
 }
 
+// TestMonitor_Dispatch_AuthorGateRejects_LogsRejection closes a PRD AC
+// (line 552) that TestMonitor_Dispatch_AuthorGateRejects above only
+// half-covered: "a mention from a pubkey outside respond_to_allowlist is
+// ignored, AND the rejection appears in structured logs." The sibling test
+// only asserted the queue was never called (discardLogger() throws the log
+// line away); this one captures it and asserts on its structured fields
+// (Phase I audit finding -- see status.md).
+func TestMonitor_Dispatch_AuthorGateRejects_LogsRejection(t *testing.T) {
+	var logBuf bytes.Buffer
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	cfg := testConfig()
+	cfg.RespondToAllowlist = []string{"allowed-pk"}
+	m := NewMonitor(fr, cfg, q, nil, WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	evt := domain.Event{ID: "evt-1", PubKey: "not-allowed", Kind: 9, Tags: [][]string{{"p", "self-pk"}}, Content: "hi"}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+
+	time.Sleep(50 * time.Millisecond)
+	got := logBuf.String()
+	if !strings.Contains(got, "rejected by author gate") {
+		t.Fatalf("expected the rejection to appear in structured logs, got: %q", got)
+	}
+	if !strings.Contains(got, "pubkey=not-allowed") {
+		t.Fatalf("expected the rejected pubkey to appear in structured logs, got: %q", got)
+	}
+	if !strings.Contains(got, "channel=chan-1") {
+		t.Fatalf("expected the channel to appear in structured logs, got: %q", got)
+	}
+}
+
 func TestMonitor_Dispatch_AuthorGateAllows(t *testing.T) {
 	fr := newFakeRelay()
 	q := &mocks.MessageQueue{}

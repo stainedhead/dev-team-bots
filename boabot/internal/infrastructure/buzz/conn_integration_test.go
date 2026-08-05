@@ -33,7 +33,7 @@ func TestDialLibRelay_LiveRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dialLibRelay: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	select {
 	case <-conn.Done():

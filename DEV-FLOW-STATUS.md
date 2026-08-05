@@ -28,8 +28,8 @@
 | 6  | Prepare Review PRD               | ✅ Complete | 2026-08-05T00:35:00Z | 2026-08-05T00:45:00Z | 10 |
 | 7  | Archive Original Spec           | ✅ Complete | 2026-08-05T00:45:00Z | 2026-08-05T00:50:00Z | 5 |
 | 8  | Spec Review Fixes               | ✅ Complete | 2026-08-05T00:50:00Z | 2026-08-05T01:05:00Z | 15 |
-| 9  | Implement Review Fixes          | 🔄 In Progress | 2026-08-05T01:05:00Z | — | — |
-| 10 | Archive Fixes Spec              | ⬜ Pending | — | — | — |
+| 9  | Implement Review Fixes          | ✅ Complete | 2026-08-05T01:05:00Z | 2026-08-05T03:15:00Z | 130 |
+| 10 | Archive Fixes Spec              | 🔄 In Progress | 2026-08-05T03:15:00Z | — | — |
 | 11 | Final Quality Pass              | ⬜ Pending | — | — | — |
 | 12 | Process Analysis Report         | ⬜ Pending | — | — | — |
 | 13 | Archive Spec                    | ⬜ Pending | — | — | — |
@@ -52,3 +52,22 @@ Run as 8 sequential agent rounds (A+B and C+D parallelized where files were disj
 | I | Integration-test stubs, latency harness, final quality audit | `9a3aa96` |
 
 **Result:** 91.0% coverage on domain+application (target ≥90%, not regressed). 51/51 PRD acceptance criteria accounted for: 37 pass via unit test, 12 via `//go:build integration` stub, 2 honestly disclosed gaps (no `block/buzz` relay commit pinned; no live 3-OS CI matrix yet). Phase I's audit also found and fixed a real pre-existing-to-this-PR-but-latent CI bug: `.github/workflows/boabot.yml` was missing the `checkptr=0` workaround for a confirmed upstream `fiatjaf.com/nostr` bug, which would have made `-race` crash nondeterministically on the first post-merge CI run.
+
+## Step 5/9 review-fix cycle
+
+Step 5's independent code review found **2 P0, 1 P1, 5 P2** findings (`boabot-buzz-support-auto-review-PRD.md`). Step 8 broke these into 5 workstreams (WS-A–E, plus a WS-B5 doc-consolidation tail), run largely in parallel (file-disjoint) via Step 9.
+
+| Workstream | Findings | Commit(s) |
+|---|---|---|
+| WS-A | FR-001 (P0, NIP-OA wiring) + FR-007 | `933c5d6`, `c1f8bb5` |
+| WS-B | FR-002 (P0) + FR-003 (P1), `attachSub` concurrency races | `1315bff` |
+| WS-C | FR-004, process-lock TOCTOU | `f3a9615` |
+| WS-D | FR-005, inbound content size bound | `12c9952` |
+| WS-E | FR-006 + FR-008, doc-only | `f180ad5` |
+| WS-B5 | Doc consolidation (ADR/technical-details for A–D) | `4546e5a` |
+
+**WS-B (the P0 concurrency fix) took 3 attempts** — two agent runs stalled 600s/hit a transient API disconnect with zero code written, both apparently while deliberating on deterministic-timing test design before writing anything. The orchestrator took over directly on the third attempt with a concrete, line-numbered bug analysis already in hand (rather than a fourth open-ended delegation), implemented the fix, and rigorously verified it red-then-green by swapping in the pre-fix `HEAD` source directly (`git show HEAD:...`, no stash) and confirming the new test failed 3/3 times against it before restoring the fix and confirming 20/20 clean `-race` runs. Also caught and fixed a genuine data race in the *test itself* (a global test-hook variable read in one goroutine, reset via `t.Cleanup` in another, with no happens-before edge between them per Go's memory model) during that process.
+
+A message purporting to be from a concurrent "wiring-composition-review" session also arrived mid-run, independently reporting the same FR-001 wiring gap Step 5's own reviewer found — verified via direct grep before being trusted, per this session's policy of not acting on unverified peer input. Separately, a duplicate/orphaned WS-C agent instance was discovered still running in the background well after its "completed" notification had already fired — resolved by waiting for its watchdog timeout and reconciling the final committed state.
+
+**Post-fix composite verification** (after all 6 pieces landed together, not just per-workstream): `go build`/`vet`/`gofmt -l`/`golangci-lint run` clean on both modules; full repo-wide `go test -race -gcflags=all=-d=checkptr=0 ./...` — 58/58 packages pass, 0 failures; `boabotctl` module independently verified; all 4 grep-based acceptance criteria re-confirmed; coverage re-measured at 91.0% (excluding `mocks/`, matching `AGENTS.md`'s own methodology) — unchanged from Phase I's figure, confirming no regression.

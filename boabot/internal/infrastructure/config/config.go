@@ -58,7 +58,9 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 // tag, and BUZZ_API_TOKEN — MUST NOT appear under this block: it resolves
 // only through the FR-002 domain.SecretStore credential path (env var,
 // systemd credential, OS keystore, or ~/.boabot/credentials — see
-// internal/infrastructure/buzz.PrivateKeySecretName/APITokenSecretName).
+// internal/infrastructure/buzz.PrivateKeySecretName/APITokenSecretName/
+// AuthTagSecretName, all three resolved and wired by
+// cmd/boabot/main.go's buildBuzzMonitor).
 // Load's yaml.Decoder.KnownFields(true) already rejects any key under
 // buzz: that is not one of the fields below, with a clear
 // "field <name> not found in type config.BuzzConfig" error — proof (not an

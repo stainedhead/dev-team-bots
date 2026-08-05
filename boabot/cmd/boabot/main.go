@@ -204,6 +204,19 @@ func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.Secre
 		opts = append(opts, buzzinfra.WithAPIToken(token, false))
 	}
 
+	// FR-001: resolve an optional NIP-OA owner-attestation "auth" tag and
+	// attach it to every AUTH event via WithAuthTagFunc, so this bot can
+	// gain NIP-AA virtual channel membership without being explicitly
+	// enrolled. Absent or invalid is not fatal to Buzz activation -- a bot
+	// that only needs to act as an explicitly-enrolled member legitimately
+	// has no tag configured, so this logs and continues, matching the
+	// LoadAPIToken pattern immediately above.
+	if authTagFn, found, tagErr := buzzinfra.LoadAuthTag(ctx, store, bc.BotName, pk.Hex()); tagErr != nil {
+		slog.Warn("buzz monitor: failed to resolve/validate NIP-OA auth tag; Buzz will connect without owner attestation (virtual membership limited to explicit relay enrollment)", "bot", bc.BotName, "err", tagErr)
+	} else if found {
+		opts = append(opts, buzzinfra.WithAuthTagFunc(authTagFn))
+	}
+
 	rc := buzzinfra.NewRelayClient(bc.RelayURL, sk, opts...)
 
 	if !queueAlreadyRegistered {

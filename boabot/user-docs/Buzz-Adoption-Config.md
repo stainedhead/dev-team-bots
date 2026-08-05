@@ -44,7 +44,7 @@ There is deliberately no `channels:` list: channel membership is discovered dyna
 
 ---
 
-## Step 3 — Provision the private key (and, if required, the API token)
+## Step 3 — Provision the private key (and, if required, the API token or an auth tag)
 
 The private key resolves through the same ordered `SecretStore` chain used for every other boabot secret: **environment variable → systemd credential → OS keystore → `~/.boabot/credentials` file**, first hit wins. The logical secret name is `buzz_private_key`, namespaced by `bot_name` on every provider except the environment variable (which is process-global).
 
@@ -56,6 +56,28 @@ The private key resolves through the same ordered `SecretStore` chain used for e
 | `~/.boabot/credentials` | Add `tech-lead_buzz_private_key = nsec1...` under `[default]` in a `chmod 600` file | The file must not be world-readable — boabot refuses to start otherwise. |
 
 An optional `BUZZ_API_TOKEN` (logical name `buzz_api_token`, same chain and namespacing) is attached as an `Authorization: Bearer` header on every relay connection when the relay is deployed with `BUZZ_REQUIRE_AUTH_TOKEN=true` — provision it the same way as the private key, substituting `buzz_api_token` for `buzz_private_key`.
+
+### Optional: the NIP-OA owner-attestation tag (`buzz_auth_tag`)
+
+To grant this bot Buzz virtual channel membership (NIP-AA) without explicitly enrolling it — the "NIP-OA / NIP-AA attestation" capability listed under **What's supported** above — provision a third, also-optional secret: `buzz_auth_tag`, same chain and namespacing as `buzz_private_key`/`buzz_api_token` above (substitute `buzz_auth_tag` for `buzz_private_key` in the table). If it is not configured, boabot logs and connects normally without owner attestation — this is not a required secret, only a bot that only ever needs to act as an explicitly-enrolled channel member.
+
+**Format:** a single opaque, pipe-delimited string with exactly three fields:
+
+```
+owner_pubkey_hex|conditions|sig_hex
+```
+
+- `owner_pubkey_hex` — the attesting owner's public key, hex-encoded.
+- `conditions` — the NIP-OA conditions clause the owner signed (may be empty), e.g. `kind=9&created_at<1999999999`.
+- `sig_hex` — the owner's Schnorr signature over the NIP-OA preimage, hex-encoded.
+
+This is exactly the shape an external NIP-OA attestation-issuance tool produces (`tag[1]|tag[2]|tag[3]` of the underlying 4-element `["auth", owner_pubkey_hex, conditions, sig_hex]` Nostr tag) — paste that tool's output verbatim, joined with `|`, as the secret value. boabotctl does not add a `--format` flag for this: it treats the value as an opaque string like every other secret, and boabot itself parses and validates it (rejecting, at startup, a malformed field count or a signature that fails to verify — logged and non-fatal, exactly like an absent tag). Issuing the attestation itself (deciding what conditions to sign, running the signing tool) is out of scope for boabot/boabotctl.
+
+```bash
+boabotctl secret set buzz_auth_tag --bot tech-lead     # prompts for the value (or reads piped stdin)
+boabotctl secret get buzz_auth_tag --bot tech-lead      # reports presence only — never prints the value
+boabotctl secret delete buzz_auth_tag --bot tech-lead
+```
 
 ### `boabotctl secret` reference
 

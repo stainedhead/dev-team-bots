@@ -12,6 +12,7 @@ import (
 	"fiatjaf.com/nostr/nip19"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	buzzinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/buzz"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/secret"
@@ -339,6 +340,258 @@ func TestBuildBuzzMonitor_QueueAlreadyRegistered_DoesNotDoubleRegister(t *testin
 	mon := buildBuzzMonitor(context.Background(), cfg, store, router, true, "", t.TempDir(), nil)
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor")
+	}
+}
+
+// --- FR-001 (WS-A): NIP-OA auth-tag wiring ---------------------------------
+
+// containsSecretRef reports whether calls includes ref -- used to prove
+// buildBuzzMonitor actually asked the SecretStore for a given secret,
+// which is the concrete evidence that FR-001's wiring gap existed (nothing
+// in main.go ever requested buzz_auth_tag) and, once fixed, that it now
+// does.
+func containsSecretRef(calls []domain.SecretRef, ref domain.SecretRef) bool {
+	for _, c := range calls {
+		if c == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBuildBuzzMonitor_AuthTagSecretIsResolved is WS-A1's Red test for
+// FR-001: "the feature's headline capability -- a NIP-OA owner-attested
+// agent joining a channel without being explicitly enrolled -- cannot work
+// in the shipped binary" because buildBuzzMonitor never asks the
+// SecretStore for an auth-tag secret at all. This test configures a
+// resolvable, well-formed auth-tag secret (a real owner-signed NIP-OA tag,
+// pipe-delimited per research.md's OQ-R1 resolution) and asserts
+// buildBuzzMonitor's SecretStore lookups include a request for it -- using
+// the literal secret name "buzz_auth_tag" rather than a
+// buzzinfra.AuthTagSecretName constant, since that constant does not exist
+// yet on current HEAD (it is added in WS-A2's Green step). This fails
+// today: buildBuzzMonitor's opts slice only ever appends WithLogger,
+// WithProfile, and conditionally WithAPIToken (per the review PRD's FR-001
+// finding) -- nothing requests buzz_auth_tag.
+func TestBuildBuzzMonitor_AuthTagSecretIsResolved(t *testing.T) {
+	agentSK, agentNsec := genTestKeypair(t)
+	ownerSK := nostr.Generate()
+	agentPubHex := agentSK.Public().Hex()
+
+	tag, err := buzzinfra.SignAuthTag(ownerSK, agentPubHex, "kind=9")
+	if err != nil {
+		t.Fatalf("SignAuthTag: %v", err)
+	}
+	// owner_pubkey_hex|conditions|sig_hex, per research.md's OQ-R1
+	// resolution and data-dictionary.md.
+	secretValue := strings.Join(tag[1:], "|")
+
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: "buzz_private_key", Bot: "buzzbot"}: agentNsec,
+		{Name: "buzz_auth_tag", Bot: "buzzbot"}:    secretValue,
+	}}
+	cfg := config.Config{
+		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
+	}
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+	if mon == nil {
+		t.Fatal("expected a non-nil Monitor for a valid, enabled BuzzConfig with a resolvable auth-tag secret")
+	}
+	wantRef := domain.SecretRef{Name: "buzz_auth_tag", Bot: "buzzbot"}
+	if !containsSecretRef(store.calls, wantRef) {
+		t.Errorf("expected buildBuzzMonitor to resolve %+v through the SecretStore, got calls: %+v", wantRef, store.calls)
+	}
+}
+
+// TestBuildBuzzMonitor_NoAuthTagSecret_StillActivates is the negative
+// control at the buildBuzzMonitor level, matching FR-001's own acceptance
+// criterion: "A boabot process with no such secret configured behaves
+// exactly as today (no tag, no error)." internal/infrastructure/buzz's
+// phase_e_wiring_test.go TestE3_NoAuthTagFuncOmitsAuthTag proves the
+// RelayClient/AUTH-event half of this mechanism (unmodified by this
+// workstream); this test proves the buildBuzzMonitor wiring half does not
+// regress activation when no tag is configured -- "log and continue ...
+// not fail closed" per FR-001's Green guidance.
+func TestBuildBuzzMonitor_NoAuthTagSecret_StillActivates(t *testing.T) {
+	_, nsec := genTestKeypair(t)
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: "buzz_private_key", Bot: "buzzbot"}: nsec,
+	}}
+	cfg := config.Config{
+		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
+	}
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+	if mon == nil {
+		t.Fatal("expected a non-nil Monitor when no auth-tag secret is configured")
+	}
+}
+
+// TestLoadAuthTag_ResolvesAndValidatesWellFormedTag is WS-A2's Green test:
+// buzzinfra.LoadAuthTag, given a resolvable, well-formed
+// owner_pubkey_hex|conditions|sig_hex secret, returns found=true, a nil
+// error, and an AuthTagFunc whose returned tag round-trips exactly through
+// SignAuthTag's own output and independently passes
+// buzzinfra.ValidateAuthTag -- the same tag TestE3_NIPOAAuthTagIncludedOnAuthEvent
+// (internal/infrastructure/buzz/phase_e_wiring_test.go, unmodified by this
+// workstream) proves ends up on the signed AUTH event once wired via
+// WithAuthTagFunc.
+func TestLoadAuthTag_ResolvesAndValidatesWellFormedTag(t *testing.T) {
+	agentSK := nostr.Generate()
+	ownerSK := nostr.Generate()
+	agentPubHex := agentSK.Public().Hex()
+
+	wantTag, err := buzzinfra.SignAuthTag(ownerSK, agentPubHex, "kind=9&created_at<2000000000")
+	if err != nil {
+		t.Fatalf("SignAuthTag: %v", err)
+	}
+	secretValue := strings.Join(wantTag[1:], "|")
+
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: buzzinfra.AuthTagSecretName, Bot: "buzzbot"}: secretValue,
+	}}
+
+	fn, found, err := buzzinfra.LoadAuthTag(context.Background(), store, "buzzbot", agentPubHex)
+	if err != nil {
+		t.Fatalf("LoadAuthTag: unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true for a resolvable auth-tag secret")
+	}
+
+	gotTag, err := fn(context.Background())
+	if err != nil {
+		t.Fatalf("AuthTagFunc: unexpected error: %v", err)
+	}
+	if len(gotTag) != 4 {
+		t.Fatalf("got %d-element tag, want 4: %v", len(gotTag), gotTag)
+	}
+	for i, v := range wantTag {
+		if gotTag[i] != v {
+			t.Errorf("tag[%d] = %q, want %q", i, gotTag[i], v)
+		}
+	}
+	if err := buzzinfra.ValidateAuthTag(gotTag, agentPubHex); err != nil {
+		t.Fatalf("ValidateAuthTag on the resolved tag: %v", err)
+	}
+}
+
+// TestLoadAuthTag_NoSecretConfigured_CleanMiss verifies the "optional
+// secret" contract: a SecretStore miss is found=false, err=nil -- not a
+// failure -- matching LoadAPIToken's existing behaviour.
+func TestLoadAuthTag_NoSecretConfigured_CleanMiss(t *testing.T) {
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{}}
+
+	fn, found, err := buzzinfra.LoadAuthTag(context.Background(), store, "buzzbot", nostr.Generate().Public().Hex())
+	if err != nil {
+		t.Fatalf("expected a clean miss (nil error), got %v", err)
+	}
+	if found {
+		t.Fatal("expected found=false when no auth-tag secret is configured")
+	}
+	if fn != nil {
+		t.Fatal("expected a nil AuthTagFunc on a clean miss")
+	}
+}
+
+// TestLoadAuthTag_MalformedFieldCount_ReturnsError verifies a secret value
+// that does not split into exactly three pipe-delimited fields is a
+// genuine error (not a clean miss), and never causes a panic.
+func TestLoadAuthTag_MalformedFieldCount_ReturnsError(t *testing.T) {
+	cases := []string{
+		"only_two|fields",
+		"way|too|many|fields|here",
+	}
+	for _, v := range cases {
+		store := &buzzFakeStore{values: map[domain.SecretRef]string{
+			{Name: buzzinfra.AuthTagSecretName, Bot: "buzzbot"}: v,
+		}}
+		_, found, err := buzzinfra.LoadAuthTag(context.Background(), store, "buzzbot", nostr.Generate().Public().Hex())
+		if err == nil {
+			t.Errorf("value %q: expected an error for a malformed field count", v)
+		}
+		if found {
+			t.Errorf("value %q: expected found=false on error", v)
+		}
+	}
+}
+
+// TestLoadAuthTag_InvalidSignature_ReturnsError verifies a tampered
+// signature -- syntactically well-formed (three fields) but failing
+// StaticAuthTagFunc's own validation -- is reported as an error, not
+// silently accepted.
+func TestLoadAuthTag_InvalidSignature_ReturnsError(t *testing.T) {
+	agentSK := nostr.Generate()
+	ownerSK := nostr.Generate()
+	agentPubHex := agentSK.Public().Hex()
+
+	tag, err := buzzinfra.SignAuthTag(ownerSK, agentPubHex, "kind=9")
+	if err != nil {
+		t.Fatalf("SignAuthTag: %v", err)
+	}
+	// Tamper the signature hex so it no longer verifies.
+	tampered := []string{tag[1], tag[2], strings.Repeat("a", len(tag[3]))}
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: buzzinfra.AuthTagSecretName, Bot: "buzzbot"}: strings.Join(tampered, "|"),
+	}}
+
+	_, found, err := buzzinfra.LoadAuthTag(context.Background(), store, "buzzbot", agentPubHex)
+	if err == nil {
+		t.Fatal("expected an error for a tampered/non-verifying signature")
+	}
+	if found {
+		t.Fatal("expected found=false on validation failure")
+	}
+}
+
+// TestLoadAuthTag_EmptyConditionsIsLegal verifies the empty-conditions
+// case (ValidateConditions("") is valid per nipoa.go) round-trips through
+// the pipe-delimited format without a spurious rejection.
+func TestLoadAuthTag_EmptyConditionsIsLegal(t *testing.T) {
+	agentSK := nostr.Generate()
+	ownerSK := nostr.Generate()
+	agentPubHex := agentSK.Public().Hex()
+
+	tag, err := buzzinfra.SignAuthTag(ownerSK, agentPubHex, "")
+	if err != nil {
+		t.Fatalf("SignAuthTag with empty conditions: %v", err)
+	}
+	secretValue := strings.Join(tag[1:], "|") // owner||sig
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: buzzinfra.AuthTagSecretName, Bot: "buzzbot"}: secretValue,
+	}}
+
+	_, found, err := buzzinfra.LoadAuthTag(context.Background(), store, "buzzbot", agentPubHex)
+	if err != nil {
+		t.Fatalf("LoadAuthTag with empty conditions: unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true for an empty-but-valid conditions field")
+	}
+}
+
+// TestBuildBuzzMonitor_InvalidAuthTagSecret_LogsAndContinues verifies
+// buildBuzzMonitor's log-and-continue (not fail-closed) handling of a
+// malformed/invalid auth-tag secret: Buzz still activates, matching
+// LoadAPIToken's existing "optional secret" treatment of any resolution
+// failure.
+func TestBuildBuzzMonitor_InvalidAuthTagSecret_LogsAndContinues(t *testing.T) {
+	_, nsec := genTestKeypair(t)
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{
+		{Name: "buzz_private_key", Bot: "buzzbot"}: nsec,
+		{Name: "buzz_auth_tag", Bot: "buzzbot"}:    "not|enough", // wrong field count
+	}}
+	cfg := config.Config{
+		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
+	}
+
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), false, "", t.TempDir(), nil)
+
+	if mon == nil {
+		t.Fatal("expected a non-nil Monitor even when the configured auth-tag secret is malformed (log-and-continue, not fail-closed)")
 	}
 }
 

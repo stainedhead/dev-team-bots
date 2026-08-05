@@ -179,6 +179,13 @@ jobs:
       # than a step output, since this action's outputs are not statically
       # declared and an unverified output name would fail silently.
       - name: Enable automerge on the release-please PR
+        # Override the workflow-level `defaults.run.working-directory:
+        # boabot` -- this job never checks out the repo (the
+        # release-please-action step above doesn't need it, and this step
+        # only calls `gh` with --repo, touching no local files), so `boabot/`
+        # doesn't exist on the runner and the default would fail with
+        # "No such file or directory".
+        working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

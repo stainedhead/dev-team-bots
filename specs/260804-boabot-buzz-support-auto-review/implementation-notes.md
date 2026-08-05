@@ -99,6 +99,26 @@ What was actually verified about `os.Link` on `windows` GOOS, split into what's 
 
 **Verification:** `go build ./...`, `go vet ./...`, `golangci-lint run` (0 issues), `go test -race -gcflags=all=-d=checkptr=0 -count=20 ./internal/infrastructure/buzz/...` (clean, both new tests), and the full repo-wide `go test -race -gcflags=all=-d=checkptr=0 ./...` (every pre-existing test across every package, unmodified and passing) all pass.
 
+## WS-B5 (Doc consolidation) — 2026-08-05
+
+Collected the ADR/technical-details entries WS-A3, WS-C3, and WS-D3 each deliberately deferred (per `architecture.md` AD-2), plus WS-B's own (the largest of the four), into one pass against `docs/architectural-decision-record.md` and `docs/technical-details.md`. Source material was entirely the detailed, already-written accounts in this file's WS-A/WS-B/WS-C/WS-D sections above and `architecture.md`'s AD-1/AD-3/AD-4 — no new research, synthesis and placement only.
+
+**`docs/architectural-decision-record.md`** — four new entries appended after `ADR-B021` (the file's existing numbering has gaps/out-of-order entries already, e.g. `ADR-B011`/`ADR-B015` appear after higher numbers, so `B022`–`B025` simply continue the highest number in the file):
+- `ADR-B022` (FR-001) — the `AuthTagSecretName`/`LoadAuthTag` decision, the three rejected alternatives (structured `boabotctl` format, dedicated config field, split three-secret scheme), and the Phase H root-cause note: `tasks.md` Phase H1 wired `PrivateKeySecretName`/`APITokenSecretName` but never allocated a corresponding path for the auth tag, even though the tag's own sign/validate logic (`nipoa.go`) had already been built and tested in an earlier phase — creating the appearance of completeness that let the gap go unnoticed until this review.
+- `ADR-B023` (FR-002/FR-003) — given the most weight of the four, per the task brief: the attach-generation-counter + per-entry-`WaitGroup` design, and specifically the departure from the review PRD's own suggested `atomic.Bool` in favor of `rc.mu`-guarded ordering — spelled out why `atomic.Bool` alone would not have been sufficient (it makes `closed` race-safe in isolation but doesn't order it against the generation bump and `wg.Add()`, which is the actual invariant needed), plus the rejected continuous-lock-holding alternative and the WS-B4 lock-ordering audit result.
+- `ADR-B024` (FR-004) — the `os.Link`-over-`os.Rename` decision, framed as a correction of `research.md`'s original two-primitive framing (Rename provides no mutual exclusion at all, so there was never a real choice), and the precise confirmed-vs-inferred split on Windows behavior (stdlib source read directly; `CreateHardLinkW`'s actual runtime behavior on destination-exists not independently verified; Go's own `TestHardLink` CI as indirect corroboration). Notes that this resolves `architecture.md` AD-3, which is no longer OPEN.
+- `ADR-B025` (FR-005) — the 64 KiB constant-not-config-field decision, its rationale, and its documented promotion path (`Config.MaxContentLen`, defaulting to the constant when zero, mirroring `PresenceInterval`) if a concrete need ever surfaces.
+
+**`docs/technical-details.md`** — the "Buzz (Nostr) Channel Monitor" section already documented the package at a reasonable level of detail from the original feature's Phase H doc pass, so additions were corrections/insertions into existing paragraphs rather than new sections, except one:
+- "Identity and auth" — added a sentence naming `buzz_auth_tag`/`AuthTagSecretName`/`LoadAuthTag`, its pipe-delimited format, and the log-and-continue behavior on a missing/malformed secret.
+- "Channel participation" — added a sentence on `Monitor.dispatch`'s `maxContentLen` (64 KiB) rejection, cross-referencing ADR-B025.
+- New paragraph "Subscribe/reconnect/close concurrency" — the generation-counter mechanism, in enough detail for a developer to understand the invariant without reading `relay_client.go` cold, cross-referencing ADR-B023.
+- "Process-singleton lock" — extended with the `publishLockFile`/`os.Link` atomic-publish mechanism, cross-referencing ADR-B024.
+
+The "Secret Storage" section's existing per-bot-namespacing description already generalizes correctly to a third secret (`buzz_auth_tag`) without needing an edit — it describes the chain and namespacing scheme generically, not by enumerating every secret name.
+
+**Verification:** `go build ./...` from `boabot/` confirmed unaffected (docs-only change), as expected. Markdown structure checked against the existing files' own heading level/numbering conventions (`## ADR-B0NN — Title` with `---` separators; existing section prose style in `technical-details.md`) — no new heading level introduced, no broken anchor.
+
 ## Edge Cases & Solutions
 
 - **WS-C's temp-file naming collision handling:** `publishLockFile` uses `os.CreateTemp(dir, ".buzz-lock-*.tmp")`, which generates a unique name per call (via a random suffix), so concurrent `AcquireLock` calls — however many — never collide on the temp file itself; only the final `os.Link(tmpPath, path)` publish step is contended, and `os.Link` guarantees exactly one caller wins per the EEXIST-checked semantics verified above.

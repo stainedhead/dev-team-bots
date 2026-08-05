@@ -1,9 +1,12 @@
 package buzz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -730,6 +733,134 @@ func TestMonitor_Start_AuthenticateFailure_LoggedNotFatal(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if fr.subCount() != 0 {
 		t.Fatal("expected no subscriptions to be attempted after an authenticate failure")
+	}
+}
+
+// --- G1: FR-031/OQ-1 process-singleton lock, wired into Start/Stop --------
+
+// TestMonitor_Start_SingletonLock_SecondMonitorRefused is G1's core
+// acceptance test: two Monitor.Start calls against the same identity
+// (same LockDir + AgentPubKeyHex) -- standing in for two boabot processes
+// started against the same nsec -- demonstrate that the second refuses to
+// attach (never touches its relay at all) while the first is completely
+// unaffected and proceeds normally, all within a single test process.
+func TestMonitor_Start_SingletonLock_SecondMonitorRefused(t *testing.T) {
+	lockDir := t.TempDir()
+	cfg := testConfig()
+	cfg.LockDir = lockDir
+
+	fr1 := newFakeRelay()
+	q1 := &mocks.MessageQueue{}
+	m1 := NewMonitor(fr1, cfg, q1, nil, WithMonitorLogger(discardLogger()))
+
+	if err := m1.Start(context.Background()); err != nil {
+		t.Fatalf("first Monitor.Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return fr1.subCount() >= 2 })
+
+	var logBuf bytes.Buffer
+	fr2 := newFakeRelay()
+	q2 := &mocks.MessageQueue{}
+	m2 := NewMonitor(fr2, cfg, q2, nil, WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	if err := m2.Start(context.Background()); err != nil {
+		t.Fatalf("second Monitor.Start must not itself return an error (FR-003: no crash): %v", err)
+	}
+	// Give any wrongly-launched goroutine a chance to run before asserting
+	// its absence.
+	time.Sleep(20 * time.Millisecond)
+	if fr2.subCount() != 0 {
+		t.Fatalf("second monitor must never attach (no subscriptions) while the first holds the lock, got %d subs", fr2.subCount())
+	}
+
+	// G1's acceptance criteria requires the refusal to be logged clearly,
+	// not just silently swallowed.
+	logged := logBuf.String()
+	if !strings.Contains(logged, "FR-031") || !strings.Contains(logged, "singleton lock") {
+		t.Fatalf("expected a clear FR-031/singleton-lock refusal log, got: %q", logged)
+	}
+	if !strings.Contains(logged, cfg.AgentPubKeyHex) {
+		t.Fatalf("expected the refusal log to identify the contended identity's pubkey, got: %q", logged)
+	}
+
+	// The first monitor is completely unaffected by the second's refused
+	// attempt: it keeps its existing subscriptions.
+	if fr1.subCount() < 2 {
+		t.Fatalf("first monitor's subscriptions should be unaffected, got %d", fr1.subCount())
+	}
+}
+
+// TestMonitor_Stop_ReleasesSingletonLock_AllowsRestart confirms the lock
+// is released as part of the same shutdown sequence as the offline-
+// presence publish (presence.go's Stop), so a clean restart of the same
+// process/identity is never permanently wedged by its own prior run.
+func TestMonitor_Stop_ReleasesSingletonLock_AllowsRestart(t *testing.T) {
+	lockDir := t.TempDir()
+	cfg := testConfig()
+	cfg.LockDir = lockDir
+
+	fr1 := newFakeRelay()
+	q1 := &mocks.MessageQueue{}
+	m1 := NewMonitor(fr1, cfg, q1, nil, WithMonitorLogger(discardLogger()))
+	if err := m1.Start(context.Background()); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return fr1.subCount() >= 2 })
+
+	if err := m1.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	fr2 := newFakeRelay()
+	q2 := &mocks.MessageQueue{}
+	m2 := NewMonitor(fr2, cfg, q2, nil, WithMonitorLogger(discardLogger()))
+	if err := m2.Start(context.Background()); err != nil {
+		t.Fatalf("second Start after first Stop: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return fr2.subCount() >= 2 })
+}
+
+// TestMonitor_Start_NoLockDir_LockingDisabled confirms Config.LockDir's
+// zero value leaves Start's pre-Phase-G behaviour completely unchanged --
+// every existing test in this file relies on this -- but still warns that
+// FR-031 protection is inactive, so a missed Phase H wiring step is
+// greppable in the running process's own logs.
+func TestMonitor_Start_NoLockDir_LockingDisabled(t *testing.T) {
+	var logBuf bytes.Buffer
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := NewMonitor(fr, testConfig(), q, nil, WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return fr.subCount() >= 2 })
+
+	if !strings.Contains(logBuf.String(), "INACTIVE") {
+		t.Fatalf("expected a warning that FR-031 protection is inactive, got: %q", logBuf.String())
+	}
+}
+
+// TestMonitor_Start_LockDirSetButNoPubkey_Refuses guards against every
+// identity collapsing onto the same buzz-.lock file: LockDir configured
+// with an empty AgentPubKeyHex must refuse to start (and must never
+// attempt to acquire a meaningless shared lock) rather than silently
+// letting unrelated bots/identities falsely contend with each other.
+func TestMonitor_Start_LockDirSetButNoPubkey_Refuses(t *testing.T) {
+	cfg := testConfig()
+	cfg.LockDir = t.TempDir()
+	cfg.AgentPubKeyHex = ""
+
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := NewMonitor(fr, cfg, q, nil, WithMonitorLogger(discardLogger()))
+
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start must not itself return an error: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if fr.subCount() != 0 {
+		t.Fatal("expected no subscriptions when LockDir is set but AgentPubKeyHex is empty")
 	}
 }
 

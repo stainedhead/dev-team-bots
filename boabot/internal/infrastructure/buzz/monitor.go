@@ -101,6 +101,29 @@ type Config struct {
 	// validating operator-supplied durations against that bound is a
 	// config-loading concern (H1), not Monitor's.
 	PresenceInterval time.Duration
+
+	// LockDir is the directory Start uses to acquire FR-031/OQ-1's
+	// process-singleton lock (see lock.go): the file itself is named
+	// buzz-<shortpubkey>.lock (lockFileName), so it is already scoped to
+	// AgentPubKeyHex -- never the raw nsec, which this package never
+	// writes to disk. LockDir MUST therefore be the *shared* memory root
+	// (internal/application/team.ManagerConfig.MemoryRoot), not a
+	// per-bot subdirectory: the whole point of keying on the derived
+	// pubkey rather than bot name is to catch two boabot processes with
+	// *different* bot configs pointed at the same nsec, which a per-bot
+	// directory would defeat. Phase H's cmd/boabot/main.go wiring is
+	// expected to set it accordingly.
+	//
+	// Empty (the zero value) disables the lock entirely -- Start behaves
+	// exactly as it did before Phase G (and logs a warning, since this
+	// leaves FR-031's protection inactive). This keeps Config
+	// dependency-free per architecture.md's Phase H note (NewMonitor
+	// takes plain typed parameters, not *config.BuzzConfig) and leaves
+	// every pre-Phase-G test unaffected; production activation of the
+	// lock is Phase H's wiring concern, not this struct's -- H2 MUST set
+	// both LockDir and AgentPubKeyHex for the lock to actually protect
+	// anything.
+	LockDir string
 }
 
 // replyTarget is where HandleResult (F12) publishes a task's kind:9 reply.
@@ -138,6 +161,12 @@ type Monitor struct {
 
 	presenceMu     sync.Mutex
 	presenceCancel context.CancelFunc
+
+	// lockMu guards lock, which Start acquires (FR-031/OQ-1) and Stop
+	// releases (presence.go), alongside the offline-presence publish, as
+	// part of the same shutdown sequence.
+	lockMu sync.Mutex
+	lock   *Lock
 }
 
 var _ domain.ChannelMonitor = (*Monitor)(nil)
@@ -186,11 +215,53 @@ func NewMonitor(rc relayClient, cfg Config, queue domain.MessageQueue, screener 
 	return m
 }
 
-// Start implements domain.ChannelMonitor. It launches connect/authenticate/
-// discovery in a goroutine and returns immediately -- mirroring
+// Start implements domain.ChannelMonitor. It first acquires FR-031/OQ-1's
+// process-singleton lock (when Config.LockDir is set): a second boabot
+// process started against the same identity (nsec) -- an operator-error
+// double-start, or a botched upgrade leaving two copies running -- finds
+// the lock already held, logs why clearly, and returns nil without
+// launching connect/authenticate/discovery, without returning an error,
+// and without touching m.relay at all. This mirrors
+// internal/infrastructure/credentials.Load's fail-fast-without-crashing
+// precedent: the Buzz monitor declines to attach, but every other channel
+// monitor and every other bot in this process starts normally (FR-003).
+//
+// Once the lock (if any) is held, connect/authenticate/discovery run in a
+// goroutine and Start returns immediately -- mirroring
 // slack.Monitor.Start -- so a Buzz outage at startup never blocks Slack,
 // SQS, or scheduled-task processing (NFR Reliability).
 func (m *Monitor) Start(ctx context.Context) error {
+	switch {
+	case m.cfg.LockDir == "":
+		// Locking is opt-in (Config.LockDir's zero value): Phase H's
+		// cmd/boabot/main.go wiring is responsible for setting it.
+		// Warn loudly rather than silently leaving FR-031 unenforced, so
+		// a missed H2 wiring step is greppable in the running process's
+		// own logs, not just discoverable by reading this file.
+		m.logger.Warn("buzz monitor: singleton lock not configured (Config.LockDir empty); FR-031/OQ-1 multi-instance protection is INACTIVE for this monitor",
+			"agent_pubkey", m.cfg.AgentPubKeyHex)
+	case m.cfg.AgentPubKeyHex == "":
+		// Without a pubkey every identity collapses onto the same
+		// buzz-.lock file, which would make unrelated bots/identities
+		// falsely contend with each other. Refuse outright rather than
+		// acquiring a meaningless shared lock.
+		m.logger.Error("buzz monitor: refusing to start -- LockDir is configured but AgentPubKeyHex is empty; " +
+			"cannot key the FR-031/OQ-1 singleton lock to an identity")
+		return nil
+	default:
+		lock, err := AcquireLock(LockPath(m.cfg.LockDir, m.cfg.AgentPubKeyHex))
+		if err != nil {
+			m.logger.Error("buzz monitor: refusing to start -- singleton lock for this identity is already held (FR-031/OQ-1); "+
+				"another boabot process is likely already running against this nsec (operator double-start or a botched upgrade); "+
+				"the Buzz monitor will not attach, but all other channels and bots in this process continue normally",
+				"agent_pubkey", m.cfg.AgentPubKeyHex, "lock_dir", m.cfg.LockDir, "err", err)
+			return nil
+		}
+		m.lockMu.Lock()
+		m.lock = lock
+		m.lockMu.Unlock()
+	}
+
 	go m.run(ctx)
 	return nil
 }

@@ -73,12 +73,15 @@ func (m *Monitor) publishPresence(ctx context.Context, status string) {
 	}
 }
 
-// Stop implements domain.ChannelMonitor / F15: publishes offline presence
-// and closes the relay connection cleanly, synchronously, before
-// returning -- which is what makes it happen "before the existing
-// shutdown path completes" (application.RunAgentUseCase.Shutdown calls
-// Stop on every monitor, in order, before it broadcasts the shutdown
-// message).
+// Stop implements domain.ChannelMonitor / F15: publishes offline presence,
+// releases FR-031/OQ-1's singleton lock (if Start acquired one), and
+// closes the relay connection cleanly, synchronously, before returning --
+// which is what makes it happen "before the existing shutdown path
+// completes" (application.RunAgentUseCase.Shutdown calls Stop on every
+// monitor, in order, before it broadcasts the shutdown message). The lock
+// release happens in this same sequence, alongside the offline-presence
+// publish, so a clean shutdown always frees the identity for a subsequent
+// restart of this same process/identity.
 //
 // ctx may already be canceled by the time Stop runs (e.g. a SIGTERM
 // handler that cancels the root context before calling Shutdown);
@@ -97,6 +100,16 @@ func (m *Monitor) Stop(ctx context.Context) error {
 	defer cancel()
 	if err := m.relay.Publish(pubCtx, domain.Event{Kind: kindPresence, Content: "offline"}); err != nil {
 		m.logger.Warn("buzz monitor: publish offline presence failed", "err", err)
+	}
+
+	m.lockMu.Lock()
+	lock := m.lock
+	m.lock = nil
+	m.lockMu.Unlock()
+	if lock != nil {
+		if err := lock.Release(); err != nil {
+			m.logger.Warn("buzz monitor: release singleton lock failed", "err", err)
+		}
 	}
 
 	return m.relay.Close()

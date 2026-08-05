@@ -79,6 +79,15 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 // "field not found" config-load error — the honest outcome — until (if
 // ever) a future phase actually threads static channel scoping through
 // Monitor/discovery.go.
+//
+// Also deliberately NOT present: reconnect backoff/auth-retry tuning
+// (FR-007). internal/infrastructure/buzz.RelayClient's WithBackoff/
+// WithAuthRetryInterval Options exist but are intentionally never wired
+// here — the hardcoded defaults (1s/30s backoff, 200ms auth retry) satisfy
+// the PRD's "bounded exponential backoff and jitter" requirement, and no
+// operator need to tune them has surfaced (research.md OQ-R2). This is a
+// permanent decision, not an oversight; revisit only if a concrete
+// operator need is identified.
 type BuzzConfig struct {
 	Enabled            bool     `yaml:"enabled"`
 	RelayURL           string   `yaml:"relay_url"`

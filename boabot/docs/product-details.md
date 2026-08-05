@@ -9,6 +9,15 @@
 5. **Budget** — token spend and tool call counts are tracked in the local budget tracker (`local/budget`) and enforced before each tool dispatch; counters are persisted to `budget.json` and restored on startup.
 6. **Shutdown** — `TeamManager` broadcasts a `ShutdownMessage` to all bot queues and waits for all goroutines to exit cleanly. The heap watchdog goroutine cancels the shared context if the hard memory limit is exceeded, triggering an orderly shutdown.
 
+## Channel Monitors (Slack, Buzz)
+
+Bots can additionally receive tasks from external channels. Each channel adapter implements `domain.ChannelMonitor` and is registered with `TeamManager` — any number can run at once, and a channel outage never blocks the others or the in-process queue.
+
+- **Slack** (`config.yaml`'s `slack:` block) — Socket Mode (no public inbound URL required). Responds to direct messages and `@mention`s in invited channels; replies are threaded, and the bot's own messages are filtered out to prevent reply loops. See [`user-docs/Slack-Adoption-Config.md`](../user-docs/Slack-Adoption-Config.md).
+- **Buzz** (`config.yaml`'s `buzz:` block) — a Nostr-based relay protocol where every actor holds its own signed keypair. A bot connects over WebSocket, authenticates via NIP-42 (optionally strengthened with an owner-issued NIP-OA attestation), discovers the channels it is a relay-confirmed member of, and responds to `@mention`s with threaded replies, subject to the same author-gating, budget, and calibrated-autonomy controls as every other channel. It also publishes presence and a typing indicator while a task is running, and supports a gated `!shutdown` control message. See [`user-docs/Buzz-Adoption-Config.md`](../user-docs/Buzz-Adoption-Config.md).
+
+Both channels dispatch onto the exact same task pipeline described below — a channel adapter only decides *when* to enqueue a task and *where* to post the reply; it never bypasses budget caps or autonomy gates.
+
 ## Worker Thread
 
 A worker goroutine is a self-contained agent harness. It receives a task and builds an initial context: SOUL.md, current todo list, skill index (name-and-summary stubs only), and the task definition. Additional material is loaded on demand via tool calls (progressive disclosure). A panic in a worker goroutine is recovered and logged — it does not affect the `TeamManager` goroutine or other workers.

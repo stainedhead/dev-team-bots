@@ -39,7 +39,6 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
-	slackinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/slack"
 )
 
 // TeamConfig is the parsed team.yaml structure.
@@ -129,9 +128,10 @@ type TeamManager struct {
 	dynamicBots   map[string]*dynamicBot
 	dynamicBotsMu sync.Mutex
 
-	// slackMonitor is the optional Slack Socket Mode channel monitor.
-	// Set via WithSlackMonitor; nil means Slack integration is disabled.
-	slackMonitor *slackinfra.Monitor
+	// monitors holds every registered domain.ChannelMonitor (Slack today;
+	// Buzz and any future channel adapters attach here too). Registered via
+	// WithChannelMonitor; empty means no channel integrations are enabled.
+	monitors []domain.ChannelMonitor
 
 	// askRouter routes mid-task user questions to running bots.
 	askRouter *teamAskRouter
@@ -198,19 +198,25 @@ func (tm *TeamManager) AskRouter() domain.AskRouter { return tm.askRouter }
 // Registry returns the BotRegistry so callers can inspect running bots.
 func (tm *TeamManager) Registry() *BotRegistry { return tm.registry }
 
-// WithSlackMonitor attaches an optional Slack Socket Mode monitor that
-// receives DMs and @mentions and posts results back to Slack.
-func (tm *TeamManager) WithSlackMonitor(m *slackinfra.Monitor) {
-	tm.slackMonitor = m
+// WithChannelMonitor registers a channel adapter (Slack, Buzz, or any future
+// domain.ChannelMonitor implementation) that receives inbound messages and
+// posts task results back to its channel. It appends to tm.monitors rather
+// than occupying a dedicated field, so any number of channel adapters can
+// register with no TeamManager changes. Accepting the domain interface
+// rather than a concrete infrastructure type keeps internal/application/team
+// free of infrastructure imports (FR-034).
+func (tm *TeamManager) WithChannelMonitor(m domain.ChannelMonitor) {
+	tm.monitors = append(tm.monitors, m)
 }
 
-// slackMonitors returns the Slack monitor as a []domain.ChannelMonitor slice,
-// or nil if no monitor has been configured.
-func (tm *TeamManager) slackMonitors() []domain.ChannelMonitor {
-	if tm.slackMonitor == nil {
-		return nil
+// forwardResultToMonitors delivers a completed task's result to every
+// registered channel monitor. Each monitor is responsible for recognising
+// whether it originated the task (and treating the call as a no-op
+// otherwise), so this simply fans the result out unconditionally.
+func forwardResultToMonitors(ctx context.Context, monitors []domain.ChannelMonitor, p domain.TaskResultPayload) {
+	for _, m := range monitors {
+		m.HandleResult(ctx, p)
 	}
-	return []domain.ChannelMonitor{tm.slackMonitor}
 }
 
 // Run reads team.yaml, starts all enabled bots, blocks until ctx is cancelled,
@@ -850,7 +856,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 		q,
 		tm.bus,
 		workerFactory,
-		tm.slackMonitors(),
+		tm.monitors,
 		orchestratorName,
 	)
 
@@ -873,6 +879,11 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	// Register result handler on every bot so any bot's reply surfaces in chat.
 	sharedChat := tm.sharedChatStore
 	sharedTasks := tm.sharedTaskStore
+	// Snapshot the monitor slice at closure-construction time. Monitors are
+	// registered once via WithChannelMonitor before Run() starts any goroutine,
+	// so this avoids a data race between concurrent startBot invocations and
+	// any future mutation of tm.monitors.
+	monitors := tm.monitors
 	if sharedChat != nil && sharedTasks != nil {
 		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
 			if _, err := sharedTasks.Get(handlerCtx, p.TaskID); err != nil {
@@ -918,16 +929,15 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 				}
 			}
 
-			// Forward the result to the Slack monitor so it can post a reply.
-			if tm.slackMonitor != nil {
-				tm.slackMonitor.HandleResult(handlerCtx, p)
-			}
+			// Forward the result to every registered channel monitor so each
+			// can post its own reply (Slack today; Buzz and others later).
+			forwardResultToMonitors(handlerCtx, monitors, p)
 		})
-	} else if tm.slackMonitor != nil {
-		// In non-orchestrator mode, install a minimal result handler just for Slack.
-		slackMon := tm.slackMonitor
+	} else if len(monitors) > 0 {
+		// In non-orchestrator mode, install a minimal result handler that
+		// just fans the result out to the registered channel monitors.
 		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
-			slackMon.HandleResult(handlerCtx, p)
+			forwardResultToMonitors(handlerCtx, monitors, p)
 		})
 	}
 

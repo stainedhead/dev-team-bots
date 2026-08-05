@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 )
@@ -348,5 +349,155 @@ func TestLoad_OrchestratorJWTAndAdminPassword(t *testing.T) {
 	}
 	if cfg.Orchestrator.AdminPassword != "mypassword" {
 		t.Errorf("AdminPassword: got %q, want mypassword", cfg.Orchestrator.AdminPassword)
+	}
+}
+
+// TestLoad_BuzzConfig verifies that BuzzConfig's fields (FR-035) round-trip
+// through YAML.
+func TestLoad_BuzzConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `buzz:
+  enabled: true
+  relay_url: wss://relay.example.com
+  bot_name: tech-lead
+  owner_pubkey: abc123
+  respond_to: def456
+  respond_to_allowlist:
+    - def456
+    - ghi789
+  presence_interval: 45s
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	b := cfg.Buzz
+	if !b.Enabled {
+		t.Error("expected Buzz.Enabled=true")
+	}
+	if b.RelayURL != "wss://relay.example.com" {
+		t.Errorf("RelayURL: got %q", b.RelayURL)
+	}
+	if b.BotName != "tech-lead" {
+		t.Errorf("BotName: got %q", b.BotName)
+	}
+	if b.OwnerPubkey != "abc123" {
+		t.Errorf("OwnerPubkey: got %q", b.OwnerPubkey)
+	}
+	if b.RespondTo != "def456" {
+		t.Errorf("RespondTo: got %q", b.RespondTo)
+	}
+	if len(b.RespondToAllowlist) != 2 || b.RespondToAllowlist[0] != "def456" || b.RespondToAllowlist[1] != "ghi789" {
+		t.Errorf("RespondToAllowlist: got %v", b.RespondToAllowlist)
+	}
+	if time.Duration(b.PresenceInterval) != 45*time.Second {
+		t.Errorf("PresenceInterval: got %v, want 45s", time.Duration(b.PresenceInterval))
+	}
+}
+
+// TestLoad_BuzzConfig_MissingBlock verifies that an absent buzz: block
+// leaves BuzzConfig at its zero value (Enabled=false), matching Slack's
+// "activation requires everything present" pattern.
+func TestLoad_BuzzConfig_MissingBlock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `bot:
+  name: mybot
+  type: worker
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Buzz.Enabled {
+		t.Error("expected Buzz.Enabled=false by default")
+	}
+	if cfg.Buzz.PresenceInterval != 0 {
+		t.Errorf("expected zero PresenceInterval by default, got %v", cfg.Buzz.PresenceInterval)
+	}
+}
+
+// TestLoad_BuzzSecretLikeKeyRejected verifies FR-035's "reject any
+// secret-looking key under the buzz: block" requirement. Load's
+// yaml.Decoder.KnownFields(true) already rejects any key that is not a
+// literal BuzzConfig field, so a plausible-looking secret key such as
+// buzz.nsec or buzz.private_key produces a clear "field ... not found"
+// decode error rather than being silently ignored or accepted.
+func TestLoad_BuzzSecretLikeKeyRejected(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"nsec", "private_key", "api_token", "auth_tag", "buzz_private_key", "secret"} {
+		key := key
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			p := writeConfig(t, dir, "buzz:\n  enabled: true\n  "+key+": should-be-rejected\n")
+			_, err := config.Load(p)
+			if err == nil {
+				t.Fatalf("expected an error for buzz.%s, got nil", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Errorf("expected error to name the offending key %q, got: %v", key, err)
+			}
+		})
+	}
+}
+
+// TestLoad_BuzzChannelsKeyRejected verifies the H1 judgment call documented
+// on BuzzConfig: since Phase F's channel discovery is fully dynamic
+// (kind:39000/39002 + membership events), no static "channels" field
+// exists on BuzzConfig, so a buzz.channels: key is a config-load error
+// (KnownFields(true)), not silently-ignored dead config.
+func TestLoad_BuzzChannelsKeyRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `buzz:
+  enabled: true
+  channels:
+    - some-channel-uuid
+`)
+	_, err := config.Load(p)
+	if err == nil {
+		t.Fatal("expected an error for buzz.channels (not a BuzzConfig field), got nil")
+	}
+	if !strings.Contains(err.Error(), "channels") {
+		t.Errorf("expected error to name 'channels', got: %v", err)
+	}
+}
+
+// TestLoad_BuzzPresenceIntervalTooHighRejected verifies FR-023's 180s
+// staleness bound is enforced at config-load time, per Config's own doc
+// comment in internal/infrastructure/buzz/monitor.go assigning that
+// validation to config-loading rather than Monitor.
+func TestLoad_BuzzPresenceIntervalTooHighRejected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `buzz:
+  enabled: true
+  presence_interval: 180s
+`)
+	_, err := config.Load(p)
+	if err == nil {
+		t.Fatal("expected an error for presence_interval >= 180s, got nil")
+	}
+	if !strings.Contains(err.Error(), "180") {
+		t.Errorf("expected error to mention the 180s bound, got: %v", err)
+	}
+}
+
+// TestLoad_BuzzPresenceIntervalUnderBoundAccepted verifies a value safely
+// under the 180s bound loads without error.
+func TestLoad_BuzzPresenceIntervalUnderBoundAccepted(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := writeConfig(t, dir, `buzz:
+  presence_interval: 90s
+`)
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if time.Duration(cfg.Buzz.PresenceInterval) != 90*time.Second {
+		t.Errorf("PresenceInterval: got %v, want 90s", time.Duration(cfg.Buzz.PresenceInterval))
 	}
 }

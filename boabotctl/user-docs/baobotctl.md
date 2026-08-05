@@ -25,6 +25,43 @@ baobotctl logout     Clear stored credentials
 
 On first login you will be prompted to change your password.
 
+## baobotctl secret
+
+Manage boabot secrets in **this machine's** OS keystore (macOS Keychain,
+Windows Credential Manager, or Linux Secret Service) — local machine only,
+no remote-host support. These are the same secrets boabot's own
+`SecretStore` provider chain resolves at startup (see boabot's
+`internal/infrastructure/secret/keystore` package), so a secret written here
+is immediately usable by a boabot process running on this machine.
+
+```
+baobotctl secret set <name> [--bot <bot>]      Write a secret to the local OS keystore
+baobotctl secret get <name> [--bot <bot>]      Report whether a secret is present (never the value)
+baobotctl secret delete <name> [--bot <bot>]   Delete a secret from the local OS keystore
+```
+
+- `<name>` is the logical secret name boabot's config uses (e.g.
+  `anthropic_api_key`, `slack_bot_token`, `buzz_private_key`).
+- `--bot <bot>` namespaces the secret to one bot by name, matching
+  `SecretRef.Bot`. Omit it for a global/shared secret.
+- `secret set` reads the value from an interactive masked prompt (or piped
+  stdin) — never from a command-line argument or flag, since process
+  arguments are world-readable on every platform.
+- `secret get` **only reports presence or absence** — it never prints the
+  secret value under any circumstances. Use it to confirm a secret was
+  written correctly without risking exposure in your terminal history or
+  screen-share.
+- `secret delete` is not an error when the named secret is already absent.
+
+Examples:
+
+```
+baobotctl secret set anthropic_api_key
+baobotctl secret set buzz_private_key --bot buzzbot
+baobotctl secret get buzz_private_key --bot buzzbot
+baobotctl secret delete buzz_private_key --bot buzzbot
+```
+
 ## baobotctl board
 
 ```

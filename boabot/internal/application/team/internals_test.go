@@ -221,13 +221,72 @@ func TestIsDirEmpty_NonEmptyDir_ReturnsFalse(t *testing.T) {
 	}
 }
 
-// ── slackMonitors ─────────────────────────────────────────────────────────────
+// ── monitors / WithSlackMonitor / forwardResultToMonitors ──────────────────
 
-func TestTeamManager_SlackMonitors_Nil(t *testing.T) {
-	tm := &TeamManager{slackMonitor: nil}
-	if tm.slackMonitors() != nil {
-		t.Error("expected nil slice when no monitor configured")
+// fakeChannelMonitor is a minimal domain.ChannelMonitor test double used to
+// verify that TeamManager forwards task results to every registered monitor,
+// not just a single hardcoded Slack instance.
+type fakeChannelMonitor struct {
+	handled []domain.TaskResultPayload
+}
+
+func (f *fakeChannelMonitor) Start(context.Context) error { return nil }
+func (f *fakeChannelMonitor) Stop(context.Context) error  { return nil }
+func (f *fakeChannelMonitor) HandleResult(_ context.Context, p domain.TaskResultPayload) {
+	f.handled = append(f.handled, p)
+}
+
+func TestTeamManager_Monitors_EmptyByDefault(t *testing.T) {
+	tm := &TeamManager{}
+	if len(tm.monitors) != 0 {
+		t.Errorf("expected no monitors by default, got %d", len(tm.monitors))
 	}
+}
+
+func TestTeamManager_WithChannelMonitor_AppendsToMonitors(t *testing.T) {
+	tm := &TeamManager{}
+	m1 := &fakeChannelMonitor{}
+	tm.WithChannelMonitor(m1)
+
+	if len(tm.monitors) != 1 {
+		t.Fatalf("expected 1 monitor, got %d", len(tm.monitors))
+	}
+	if tm.monitors[0] != domain.ChannelMonitor(m1) {
+		t.Error("expected the registered monitor to be present in tm.monitors")
+	}
+}
+
+func TestTeamManager_WithChannelMonitor_MultipleCallsAppendEachMonitor(t *testing.T) {
+	tm := &TeamManager{}
+	m1 := &fakeChannelMonitor{}
+	m2 := &fakeChannelMonitor{}
+	tm.WithChannelMonitor(m1)
+	tm.WithChannelMonitor(m2)
+
+	if len(tm.monitors) != 2 {
+		t.Fatalf("expected 2 monitors after two calls (e.g. Slack + Buzz), got %d", len(tm.monitors))
+	}
+}
+
+func TestForwardResultToMonitors_CallsHandleResultOnEveryMonitor(t *testing.T) {
+	m1 := &fakeChannelMonitor{}
+	m2 := &fakeChannelMonitor{}
+	payload := domain.TaskResultPayload{TaskID: "t-1", Output: "done", Success: true}
+
+	forwardResultToMonitors(context.Background(), []domain.ChannelMonitor{m1, m2}, payload)
+
+	if len(m1.handled) != 1 || m1.handled[0].TaskID != "t-1" {
+		t.Errorf("expected m1 to receive the payload, got %+v", m1.handled)
+	}
+	if len(m2.handled) != 1 || m2.handled[0].TaskID != "t-1" {
+		t.Errorf("expected m2 to receive the payload, got %+v", m2.handled)
+	}
+}
+
+func TestForwardResultToMonitors_EmptySlice_NoOp(t *testing.T) {
+	// Must not panic when no monitors are registered (e.g. Slack and Buzz
+	// both disabled).
+	forwardResultToMonitors(context.Background(), nil, domain.TaskResultPayload{TaskID: "t-2"})
 }
 
 // ── spawnTechLead / stopTechLead / isTechLeadRunning ─────────────────────────

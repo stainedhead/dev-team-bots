@@ -43,6 +43,7 @@ func newRootCmd() *cobra.Command {
 		commands.NewMemoryCmd(c, os.Stdout),
 		commands.NewPluginCmd(c, os.Stdout),
 		commands.NewConfigCmd(),
+		commands.NewSecretCmd(os.Stdout),
 	)
 
 	return root

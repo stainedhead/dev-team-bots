@@ -16,8 +16,9 @@ This document describes the system-level architecture. For module-specific techn
 | Model inference | Anthropic API (primary), AWS Bedrock (optional), OpenAI-compatible endpoints (optional, incl. Ollama) |
 | Tool integration | MCP (Model Context Protocol) |
 | Tool gating | BM25 scoring (Tool Attention, 20-tool cap) |
+| External channels | Slack (Socket Mode) and [Buzz](https://github.com/block/buzz) (Nostr relay, secp256k1 agent identity) — optional, independent `ChannelMonitor` adapters |
 | CI/CD | GitHub Actions |
-| Credentials | `~/.boabot/credentials` INI file + environment variables |
+| Credentials | Ordered `SecretStore` provider chain: environment variable → systemd credential → OS keystore (macOS/Windows/Linux) → `~/.boabot/credentials` INI file |
 | Authentication | JWT (username/password, HS256) |
 | Observability | OpenTelemetry (traces, metrics, logs) |
 
@@ -48,6 +49,8 @@ This document describes the system-level architecture. For module-specific techn
        │
   baobotctl / Browser
 ```
+
+Each bot may additionally register one or more `ChannelMonitor` adapters (Slack, Buzz) that watch an external channel and dispatch matching messages onto that bot's `local/queue` exactly like an internal task — external channels are an input source to the same pipeline, not a separate control plane. See `boabot/docs/technical-details.md`'s "Buzz (Nostr) Channel Monitor" and "Secret Storage" sections for module-level detail.
 
 ## Messaging Topology
 

@@ -46,12 +46,17 @@ jobs:
           golangci-lint run
 
       - name: Test
-        run: go test -race ./...
+        # -gcflags=all=-d=checkptr=0 works around a confirmed upstream
+        # unsafe.Pointer bug in fiatjaf.com/nostr's event-signing code that
+        # otherwise aborts `-race` non-deterministically. See
+        # specs/260804-boabot-buzz-support/research.md ("Critical finding",
+        # Phase D) and implementation-notes.md's Deviations from Plan.
+        run: go test -race -gcflags=all=-d=checkptr=0 ./...
 
       - name: Coverage check
         run: |
           CORE_PKGS=$(go list ./internal/domain/... ./internal/application/... | grep -v /mocks)
-          go test -coverprofile=coverage.out $CORE_PKGS
+          go test -race -gcflags=all=-d=checkptr=0 -coverprofile=coverage.out $CORE_PKGS
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Domain+Application Coverage: ${COVERAGE}%"
           awk "BEGIN { if ($COVERAGE < 90) { print \"Coverage ${COVERAGE}% is below 90% threshold\"; exit 1 } }"

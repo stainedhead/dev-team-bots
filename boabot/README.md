@@ -4,7 +4,7 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 
 ## What It Does
 
-- Polls the in-process queue, monitors Slack and Teams, spawns worker threads for incoming tasks.
+- Polls the in-process queue, monitors Slack and Buzz (a Nostr-based relay protocol), spawns worker threads for incoming tasks.
 - Executes tasks agentically using a configured language model, built-in harness tools, MCP tools, and Agent Skills.
 - Maintains a local git-backed memory directory with optional GitHub backup; uses a local BM25 embedder and cosine similarity vector store for semantic search.
 - Enforces Tool Attention (BM25 scoring) to keep injected tool schemas under the 20-tool cap.
@@ -31,7 +31,11 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 - [`user-docs/AWS-Bedrock-Adoption-Config.md`](user-docs/AWS-Bedrock-Adoption-Config.md) — AWS Bedrock (SSO, service account, machine identity)
 - [`user-docs/OpenAI-Adoption-Config.md`](user-docs/OpenAI-Adoption-Config.md) — OpenAI-compatible endpoints (OpenAI, Ollama, vLLM, OpenRouter, Azure)
 - [`user-docs/Slack-Adoption-Config.md`](user-docs/Slack-Adoption-Config.md) — Slack Socket Mode (DMs and @mentions)
-- [`user-docs/Microsoft-Teams-Adoption-Config.md`](user-docs/Microsoft-Teams-Adoption-Config.md) — Microsoft Teams (planned)
+- [`user-docs/Buzz-Adoption-Config.md`](user-docs/Buzz-Adoption-Config.md) — Buzz (Nostr relay): enabling the channel, secret provisioning per OS/mode
+
+**Planned / roadmap (not yet implemented — no code exists for this today):**
+
+- [`user-docs/Microsoft-Teams-Adoption-Config.md`](user-docs/Microsoft-Teams-Adoption-Config.md) — Microsoft Teams; describes the intended configuration so you can plan ahead, not a usable integration
 
 ### Plugin Registry
 
@@ -108,24 +112,26 @@ Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config
 
 | Package | LOC | Coverage |
 |---|---|---|
-| `internal/domain` | 933 | 100% |
+| `internal/domain` | 1413 | 94.9% |
 | `internal/domain/cost` | 126 | 100% |
 | `internal/domain/eta` | 74 | 100% |
 | `internal/domain/screening` | 41 | 100% |
 | `internal/domain/workflow` | 225 | 100% |
-| `internal/application` | 543 | 98.9% |
+| `internal/application` | 545 | 98.9% |
 | `internal/application/backup` | 74 | 100% |
 | `internal/application/cost` | 156 | 100% |
 | `internal/application/eta` | 30 | 100% |
 | `internal/application/metrics` | 66 | 100% |
-| `internal/application/orchestrator` | 309 | 97.8% |
+| `internal/application/notifications` | 181 | 94.8% |
+| `internal/application/orchestrator` | 764 | 95.4% |
 | `internal/application/plugin` | 256 | 93.1% |
 | `internal/application/pool` | 259 | 97.8% |
 | `internal/application/rebalancing` | 74 | 100% |
 | `internal/application/scheduler` | 296 | 98.6% |
+| `internal/application/scheduling` | 129 | 91.3% |
 | `internal/application/screening` | 37 | 100% |
 | `internal/application/subteam` | 328 | 91.6% |
-| `internal/application/team` | 1176 | 76.3% |
+| `internal/application/team` | 1267 | 77.8% |
 | `internal/application/workflow` | 393 | 98.9% |
 
 Run `go test -race -coverprofile=coverage.out ./internal/domain/... ./internal/application/... && go tool cover -func=coverage.out` to reproduce.

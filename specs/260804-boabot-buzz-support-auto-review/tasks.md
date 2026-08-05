@@ -43,7 +43,7 @@ FR-007 batched into this workstream (not WS-E) solely because both touch `intern
 
 ## WS-B — FR-002 (P0) + FR-003 (P1): `attachSub` double-attach and post-Close attach races
 
-**Must be fixed together, one workstream, one design decision** — both stem from `attachSub` lacking a validity/generation check (review PRD's explicit instruction; see `architecture.md` AD-1 for the resolved fix shape).
+**Must be fixed together, one workstream, one design decision** — both stem from `attachSub` lacking a validity/generation check (review PRD's explicit instruction; see `architecture.md` AD-1 for the resolved fix shape). **Commit-count exception:** `spec.md`'s NFR "one commit per FR, do not batch multiple findings into one commit" rule does not apply here — FR-002 and FR-003 land in **one** commit whose message names both (e.g. `fix(buzz): FR-002/FR-003 — guard attachSub against duplicate/stale attach`, the review PRD's own example), since splitting them would defeat the "one shared fix" instruction above.
 
 | ID | Task | Depends On | Est. Duration | Acceptance Criteria |
 |---|---|---|---|---|

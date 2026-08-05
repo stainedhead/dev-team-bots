@@ -1,7 +1,7 @@
 # Dev-Flow Implementation Status
 
 **PRD:** boabot-buzz-support-PRD.md
-**Spec:** specs/260804-boabot-buzz-support
+**Spec:** specs/archive/260804-boabot-buzz-support
 **Branch:** worktree-buzz-support-prd
 **Review PRD:** specs/260804-boabot-buzz-support-auto-review/boabot-buzz-support-auto-review-PRD.md
 **Review Spec:** specs/260804-boabot-buzz-support-auto-review

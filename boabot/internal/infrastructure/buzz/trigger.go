@@ -25,7 +25,7 @@ const (
 // judgment call (neither the PRD nor architecture.md specifies the exact
 // tag-vs-content detection mechanism).
 func classifyTrigger(evt domain.Event, selfPubKeyHex string) triggerKind {
-	if evt.Kind != 9 {
+	if evt.Kind != kindChannelMessage {
 		return triggerNone
 	}
 	if !hasTagValue(evt.Tags, "p", selfPubKeyHex) {

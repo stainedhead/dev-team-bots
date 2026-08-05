@@ -2,6 +2,20 @@
 // construction and Schnorr sign/verify (Phase E, FR-005-FR-009). See the
 // PRD's "NIP-OA in detail" section for the byte-exact specification this
 // code is written against.
+//
+// Threat-model note (FR-006, review PRD): ValidateAuthTag and FindAuthTag
+// are well-tested but, as of this writing, are never invoked against any
+// inbound, attacker-controlled data. ValidateAuthTag's only non-test call
+// site is StaticAuthTagFunc (this file), which validates a single,
+// locally-configured outbound tag once at construction time -- the tag
+// BaoBot presents about itself on its own AUTH event, not anything
+// asserted by a peer. FindAuthTag has no non-test call site at all today.
+// Membership/attestation enforcement for *other* parties' identities is
+// the relay's job server-side under the NIP-AA model, not BaoBot's. A
+// future change that starts parsing a peer-supplied "auth" tag off an
+// inbound event (e.g. to verify who attested a channel member) would be
+// entering new threat-model territory this package has not yet exercised
+// or been reviewed against.
 package buzz
 
 import (

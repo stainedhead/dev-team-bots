@@ -75,7 +75,7 @@ Prerequisite for everything else; must land with Slack tests green before any Bu
 
 ## Phase F — Channel participation
 
-Includes FR-025/FR-026/FR-027 (typing, gated `!shutdown`, reactions), pulled forward from PRD P1 into this run's scope — see `spec.md` §Timeline and Milestones.
+Includes FR-025/FR-026/FR-027 (typing, gated `!shutdown`, a reaction-subscription shape guard), pulled forward from PRD P1 into this run's scope — see `spec.md` §Timeline and Milestones. **Correction (post-review, FR-008):** FR-027/F18 below implements only the defensive subscription-shape guard (rejecting a kinds-only reaction subscription); no reaction *publish* function and no `Monitor` code that subscribes to or handles `kind:7` reactions was built this phase — see `implementation-notes.md`'s manual-verification list ("no F1–F18 task has `Monitor` actually subscribe to reactions yet"). Do not read "reactions" in this line as "reactions are usable" — only the guard around a subscription that is never actually made ships this phase.
 
 | ID | Task | Depends On | Est. Duration | Acceptance Criteria |
 |---|---|---|---|---|
@@ -96,7 +96,7 @@ Includes FR-025/FR-026/FR-027 (typing, gated `!shutdown`, reactions), pulled for
 | F15 | Graceful shutdown: publish `offline` presence and close the relay connection cleanly, before the existing shutdown path completes | F14 | 2h | FR-024; PRD AC "on `SIGTERM` it publishes `offline` and closes cleanly before exit" |
 | F16 | `kind:20002` typing indicator while a triggered task executes *(pulled forward from PRD P1)* | F11 | 2h | FR-025 |
 | F17 | `!shutdown` as a stop signal routed through the existing graceful-shutdown path, gated by F8's author gate; rejected+logged from any other pubkey *(pulled forward from PRD P1)* | F8 | 2h | FR-026; PRD AC "`!shutdown` from a pubkey outside the FR-029 author gate is ignored and logged... one from an allowed pubkey shuts the bot down gracefully" |
-| F18 | Reaction subscriptions always `{"kinds":[7],"#h":[channel-uuid]}`; kinds-only reaction subscription rejected *(pulled forward from PRD P1)* | F2 | 2h | FR-027; PRD AC "reaction subscription is asserted by test to carry `#h`; a kinds-only reaction subscription is asserted to be rejected" |
+| F18 | Reaction subscription *shape guard only* (in `RelayClient.Subscribe`, `guard.go`): a `kind:7` subscription must always carry `{"kinds":[7],"#h":[channel-uuid]}`; a kinds-only reaction subscription is rejected. No reaction publish and no `Monitor` subscribe/consume of `kind:7` events exists — nothing in this phase actually opens a reaction subscription for the guard to apply to yet *(pulled forward from PRD P1; guard-only correction added post-review, FR-008)* | F2 | 2h | FR-027; PRD AC "reaction subscription is asserted by test to carry `#h`; a kinds-only reaction subscription is asserted to be rejected" |
 
 ## Phase G — Process-singleton lock (OQ-1)
 

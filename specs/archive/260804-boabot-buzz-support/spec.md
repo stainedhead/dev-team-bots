@@ -77,7 +77,7 @@ Carried from the PRD's NFR section: Performance (500ms p95 dispatch, 1s p95 repl
 - `internal/infrastructure/buzz/monitor.go` — `buzz.Monitor` implementing `domain.ChannelMonitor`
 - `internal/infrastructure/buzz/relay_client.go` — `RelayClient` implementation over `fiatjaf.com/nostr`, incl. `domain.Event`/`Filter` ⇄ `nostr.Event`/`Filter` translation
 - `internal/infrastructure/buzz/nipoa.go` — NIP-OA/NIP-AA preimage construction, Schnorr sign/verify
-- `internal/infrastructure/buzz/kinds.go` — event-kind constants and per-kind handling (§Enumerations)
+- ~~`internal/infrastructure/buzz/kinds.go` — event-kind constants and per-kind handling (§Enumerations)~~ **Correction (post-review, FR-008):** this file was never created. Event-kind constants ended up defined directly in `internal/infrastructure/buzz/monitor.go` (its "Nostr/Buzz event kinds this file cares about" block), with a separate `reactionKind = 7` in `guard.go`. Functionally equivalent and consistently used; the standalone-file split planned here just wasn't needed in practice. Left struck through rather than deleted so this plan-vs-built discrepancy stays visible.
 - `internal/infrastructure/buzz/lock.go` — process-singleton lock (OQ-1 resolution, FR-031)
 - `internal/infrastructure/secret/store.go` — `SecretStore` implementation (ordered provider chain)
 - `internal/infrastructure/secret/env/provider.go`

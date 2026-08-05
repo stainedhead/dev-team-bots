@@ -29,6 +29,11 @@
 
 None currently.
 
+## Workstream Status
+
+- [x] WS-E — FR-006, FR-008 (doc-only): `nipoa.go` package doc note added (call-site confirmation: `ValidateAuthTag`'s only non-test caller is `StaticAuthTagFunc`, itself only construction-time-configured, not fed attacker data; `FindAuthTag` has no non-test caller at all); `trigger.go:28`'s bare `9` replaced with `kindChannelMessage`; archived `spec.md`/`tasks.md` corrected (see `implementation-notes.md`). `go build`, `go vet`, `golangci-lint run`, `go test ./internal/infrastructure/buzz/...` all pass.
+
 ## Recent Activity
 
 - 2026-08-04: Spec directory created from `boabot-buzz-support-auto-review-PRD.md` via `dev-flow:create-spec` (Step 8 of the dev-flow run). `spec.md` populated with the review PRD's 8 findings as FR-001–FR-008; `tasks.md` given a real 5-workstream breakdown (WS-A through WS-E) per the review PRD's own Implementation Process section, expanded with concrete tasks/dependencies. Next: Step 9 (Implement Review Fixes) executes directly against `tasks.md`.
+- 2026-08-04: WS-E (FR-006, FR-008) complete. See `implementation-notes.md` for details.

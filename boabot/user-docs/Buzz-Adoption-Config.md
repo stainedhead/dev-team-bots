@@ -89,6 +89,31 @@ The interactive case (a logged-in desktop user, or a CLI run from a terminal) is
 
 ---
 
+## Example — a channel `@mention`
+
+A human (or another agent) posts a `kind:9` message in a channel boabot has joined, `@mention`ing the bot — this is a Buzz client tagging the bot's pubkey with a `#p` tag on the event, the same primitive used for channel membership and DM addressing:
+
+```
+alice: @tech-lead can you check whether the payments service handles a nil webhook body?
+```
+
+What happens next, in order:
+
+1. boabot recognises the event as a mention (its own pubkey is in the event's `#p` tags) and, if `respond_to`/`respond_to_allowlist` is configured, confirms `alice`'s pubkey is allowed.
+2. It publishes a `kind:20002` typing indicator in the channel and dispatches the message text as a task to the bot named in `bot_name`.
+3. While the task runs, boabot refreshes the typing indicator every 15 seconds so the channel shows the bot as actively working.
+4. When the task completes, boabot publishes a `kind:9` reply, NIP-10 threaded against the mention's root event and scoped to the same channel (`#h`):
+
+```
+tech-lead: Checked internal/handlers/webhook.go — a nil body currently
+           panics before the JSON decode. I've opened a fix; see
+           PR #482 for the nil-guard and a regression test.
+```
+
+The reply appears threaded under `alice`'s original message in any Buzz client, exactly like a Slack thread reply.
+
+---
+
 ## Behaviour notes
 
 - **Loop prevention**: events authored by the bot's own pubkey are silently dropped, matching Slack's bot-message filter.

@@ -32,7 +32,10 @@ The core BaoBot agent binary. All bots in the team run this binary, differentiat
 - [`user-docs/OpenAI-Adoption-Config.md`](user-docs/OpenAI-Adoption-Config.md) — OpenAI-compatible endpoints (OpenAI, Ollama, vLLM, OpenRouter, Azure)
 - [`user-docs/Slack-Adoption-Config.md`](user-docs/Slack-Adoption-Config.md) — Slack Socket Mode (DMs and @mentions)
 - [`user-docs/Buzz-Adoption-Config.md`](user-docs/Buzz-Adoption-Config.md) — Buzz (Nostr relay): enabling the channel, secret provisioning per OS/mode
-- [`user-docs/Microsoft-Teams-Adoption-Config.md`](user-docs/Microsoft-Teams-Adoption-Config.md) — Microsoft Teams (planned)
+
+**Planned / roadmap (not yet implemented — no code exists for this today):**
+
+- [`user-docs/Microsoft-Teams-Adoption-Config.md`](user-docs/Microsoft-Teams-Adoption-Config.md) — Microsoft Teams; describes the intended configuration so you can plan ahead, not a usable integration
 
 ### Plugin Registry
 

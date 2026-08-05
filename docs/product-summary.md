@@ -21,6 +21,7 @@ BaoBot is a system of cooperative, always-on AI agents that function as a softwa
 ## Key Capabilities
 
 - Agents communicate via in-process message queues (direct) and in-process broadcaster (team-wide), with structured delegation messages (A2A-shaped envelopes with full task lifecycle tracking).
+- Bots optionally join Slack and/or [Buzz](https://github.com/block/buzz) (a Nostr-native, cryptographically-identified workspace for humans and AI agents) to respond to @mentions and DMs from human operators or teammates; secrets for either channel resolve through an OS-native credential chain (environment variable, systemd, OS keystore, or a local credentials file) rather than living in config files.
 - Each agent maintains a local filesystem memory directory with optional scheduled GitHub git backup; semantic retrieval uses a local BM25 embedder and cosine similarity vector store.
 - Work is tracked on an internal Kanban board with a browser-accessible web UI.
 - Anthropic Claude is the primary model provider (via `ANTHROPIC_API_KEY`); AWS Bedrock and OpenAI-compatible endpoints are supported as optional alternatives.

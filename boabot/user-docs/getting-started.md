@@ -29,7 +29,7 @@ EOF
 chmod 600 ~/.boabot/credentials
 ```
 
-Alternatively, export `ANTHROPIC_API_KEY` directly — environment variables take precedence over the credentials file.
+Alternatively, export `ANTHROPIC_API_KEY` directly — environment variables take precedence over the credentials file. This credentials file is one of four ways boabot can resolve any secret (env var, systemd credential, OS keystore, or this file); see [`configuration.md`](configuration.md#secret-storage) for the full provider chain, including how to store secrets in your OS's native keystore instead of a plaintext file.
 
 ## 3. Create a Team Directory
 
@@ -130,6 +130,15 @@ baobotctl board list
 
 See [`boabotctl/user-docs/baobotctl.md`](../../boabotctl/user-docs/baobotctl.md) for the full CLI reference.
 
+## Connecting a Channel (Optional)
+
+By default a bot only responds to tasks dispatched programmatically (e.g. via `baobotctl` or the orchestrator's scheduler). To let humans (and, for Buzz, other agents) talk to a bot directly, enable a channel monitor in `config.yaml`:
+
+- **Slack** — the bot joins a Slack workspace over Socket Mode and responds to DMs and `@mention`s. See [`Slack-Adoption-Config.md`](Slack-Adoption-Config.md).
+- **Buzz** — the bot joins a [Buzz](https://github.com/block/buzz) (Nostr-native) workspace with its own signed keypair and responds to channel `@mention`s. See [`Buzz-Adoption-Config.md`](Buzz-Adoption-Config.md).
+
+Both channels are optional, can be enabled together or independently, and share the same secret-provisioning chain — see [`configuration.md`](configuration.md#secret-storage).
+
 ## Memory and Backup (Optional)
 
 By default memory is stored in the `memory/` directory next to the binary. To enable GitHub git backup, add to each bot's `config.yaml`:
@@ -151,7 +160,7 @@ Add your GitHub token to `~/.boabot/credentials`:
 ```ini
 [default]
 anthropic_api_key = sk-ant-...
-backup_token = ghp_...
+boabot_backup_token = ghp_...
 ```
 
 ## Heap Watchdog

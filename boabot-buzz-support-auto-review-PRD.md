@@ -49,6 +49,8 @@ Acceptance Criteria:
 
 If a reconnect completes (`rc.conn` swapped, `resubscribeAll` invoked) in the narrow window between `Subscribe` registering its new entry and `Subscribe` calling its own `attachSub`, both call paths call `attachSub(ctx, conn, entry)` for the *same* `entry` — one with the old (dying) connection, one with the new one. `attachSub` (`relay_client.go:540-558`) only guards against attaching an entry that has been *removed*; it has no guard against attaching an entry that is already attached. Both calls pass the membership check, both call `conn.Subscribe(...)`, both overwrite `entry.pumpDone` (the struct's own doc comment concedes this: `pumpDone chan struct{} // set by the most recent attachSub` — a single slot, not generation-tracked — so the second write silently discards the first attach's completion signal), and both start a `pumpSub` goroutine (`relay_client.go:556,560-578`) forwarding onto the *same* `entry.out` channel.
 
+Note precisely what kind of race this is, so a Step 9 implementer reading `attachSub`'s own doc comment doesn't conclude the finding is stale: `attachSub` holds `subMu` across its presence check, `conn.Subscribe` call, `entry.pumpDone = done` assignment, and `rc.pumpWG.Add(1)` — so the two calls' *critical sections* are serialized, not interleaved, and `attachSub`'s doc comment's safety claim ("a concurrent `removeAndClose` can never observe a `pumpWG.Add()` that races past its own wait") is correct as far as it goes. The defect is not a missing lock; it is that `attachSub` has no guard against being called a *second* time for an entry that is already attached — each serialized call unconditionally overwrites `entry.pumpDone` and starts a second `pumpSub`, and the doc comment's safety claim is scoped only to `removeAndClose`'s interaction with `pumpWG`, not to double-attach.
+
 When the subscription is later torn down (`removeAndClose`, `relay_client.go:587-602`), it waits only on `entry.pumpDone` — which now points to the *second* attach's completion channel — and then closes `entry.out`. The *first* attach's `pumpSub` goroutine has no one waiting on its own (orphaned) `pumpDone` and can still be running; its send (`case out <- FromLibraryEvent(evt):`) is guarded only by `rc.closedCh` (closed on full `RelayClient.Close()`, not on this one subscription's teardown), so if that orphaned pump receives an event after `entry.out` has already been closed by `removeAndClose`, it sends on a closed channel — an unrecovered panic that terminates the entire `boabot` process (every bot in it; nothing in `pumpSub` or its callers uses `recover()`).
 
 This requires a specific but realistic timing window: a new channel subscription (e.g. discovery finding a new membership, `discovery.go`'s `subscribeToChannel`) racing a reconnect (a routine network blip) for that same, still-being-attached subscription. No existing test (`reconnect_test.go`, `relay_client_test.go`) exercises concurrent `Subscribe`-during-reconnect timing — the existing tests drive `fakeConn` deterministically and sequentially, so `-race` has never had a chance to observe this interleaving.
@@ -62,7 +64,7 @@ This requires a specific but realistic timing window: a new channel subscription
 Acceptance Criteria:
 - [ ] The red test above fails on current `HEAD` and passes after the fix.
 - [ ] `go test -race -gcflags=all=-d=checkptr=0 ./internal/infrastructure/buzz/...` passes, including the new test, with no `-race` warnings and no panics under repeated (`-count=20` or similar) runs.
-- [ ] `removeAndClose` never closes `entry.out` while any pump for that entry could still be sending on it, verified structurally (not just by the absence of an observed panic in one test run).
+- [ ] `removeAndClose` never closes `entry.out` while any pump for that entry could still be sending on it, verified structurally: the "wait for every attach generation" invariant (e.g. a per-entry `sync.WaitGroup` covering every `pumpSub` ever started for that entry, or an equivalent generation-tracking mechanism) is stated in a doc comment on `subEntry`, and both `removeAndClose` and `Close` wait on it — not merely inferred from the absence of an observed panic in one test run.
 
 ---
 
@@ -71,6 +73,8 @@ Acceptance Criteria:
 **Finding:** A second, distinct race in the same subscription-lifecycle machinery as FR-002, with a different trigger. `reconnect()` (`reconnect.go:145-154`) checks `rc.closed` under `rc.mu`, sets `rc.conn = conn`, unlocks, and only then — **outside the lock** — calls `resubscribeAll(conn)` → `attachSub` → `rc.pumpWG.Add(1)` plus a new `pumpSub` goroutine. `attachSub` gates only on the entry's presence in `rc.subs` (`subMu`), never on `rc.closed`.
 
 Meanwhile `Close()` (`relay_client.go:606-633`) sets `closed = true`, closes `closedCh`, closes the old connection, and calls `rc.pumpWG.Wait()` (line 623) — which can return as soon as the live pump count hits zero — **before** it acquires `subMu` to close every entry's `out` channel (lines 625-630). If `Close()` runs in the gap between `reconnect()`'s unlock and its `resubscribeAll` call, `pumpWG.Wait()` can return 0 first; `attachSub`'s subsequent `pumpWG.Add(1)` then starts a brand-new pump *after* the WaitGroup already believed all work was done — a documented misuse pattern for `sync.WaitGroup` ("new `Add` calls must happen after all previous `Wait` calls have returned") — and if that new pump's `select` happens to choose the `evt, ok := <-inner` case over the (already-closed, always-ready) `<-rc.closedCh` case at the moment it tries to forward an event, it sends on a channel `Close()` is about to (or has just) closed, producing the same class of unrecovered `panic: send on closed channel` as FR-002.
+
+This is precisely the gap `attachSub`'s own doc comment leaves open (see FR-002's added note above): its safety claim about `pumpWG.Add()` never racing past a `Wait()` is scoped to interaction with `removeAndClose`'s per-entry teardown, not to `Close()`'s process-wide `pumpWG.Wait()` — the two are different call paths with different waits, and only the former is covered by the comment's stated invariant.
 
 No test exercises `Close()` racing a concurrently-completing `reconnect()` — the fake-relay test harness drives these sequentially/deterministically, so this interleaving has never been observed by CI.
 
@@ -115,7 +119,7 @@ Acceptance Criteria:
 **TDD guidance — Refactor:** Consider whether the bound belongs in `Monitor.Config` (operator-tunable) or as a package constant; document the choice.
 
 Acceptance Criteria:
-- [ ] An inbound `kind:9` event exceeding the configured content bound is rejected before becoming a `TaskPayload`, with a structured log line naming the event ID and size.
+- [ ] An inbound `kind:9` event exceeding the content bound — whether implemented as a package constant or an operator-configurable `Monitor.Config` field, per the Refactor note above — is rejected before becoming a `TaskPayload`, with a structured log line naming the event ID and size.
 - [ ] Ordinary-sized messages are unaffected (existing dispatch tests continue to pass unmodified).
 
 ---
@@ -166,6 +170,37 @@ Acceptance Criteria:
 | P2 (should fix) | FR-004 – FR-008 | A narrow, low-impact local TOCTOU; defense-in-depth input validation; threat-model documentation; one small unwired-but-harmless `Option`; and two documentation-accuracy nits. None block merge on their own. |
 
 P0 findings must be resolved before this PR is merged. P1 is strongly recommended in the same PR since it shares root cause and fix shape with FR-002. P2 findings may be deferred to a follow-up if agreed with the team.
+
+---
+
+## Implementation Process
+
+Per this repo's `AGENTS.md` ("Test-Driven Development" and "Dev-Flow Skills"), Step 9 (Implement Review Fixes) of the implementation workflow follows the rules below. This section is process guidance for *how* the eight findings above get fixed, not a ninth finding.
+
+**TDD is mandatory, per finding, no exceptions.** Every finding above already carries its own Red/Green/Refactor guidance; follow it literally — write the failing test named in the "Red" step first, confirm it fails against current `HEAD`, then write the minimum code to pass it, then refactor. This applies to FR-006/FR-007/FR-008 too, even though their "TDD guidance" says "no code change required": the acceptance criteria for those are still checkable facts (a grep, a doc statement) and should be verified as failing before the doc edit and passing after, the same red/green discipline applied to a documentation-only change.
+
+**A brief code/design review follows each fix, before starting the next one.** Per `AGENTS.md`: *"every finding in the review PRD must have a corresponding commit before the step is marked complete... check each finding off explicitly against the commit log — do not rely on memory."* Concretely: one commit per FR (message referencing the FR number, e.g. `fix(buzz): FR-002/FR-003 — guard attachSub against duplicate/stale attach`), each commit preceded by `go fmt ./...`, `go vet ./...`, `golangci-lint run`, and `go test -race -gcflags=all=-d=checkptr=0 ./...` passing locally, and a short review (self-review or teammate review, whichever this run's Step 9 configuration uses) of that fix's diff before moving to the next finding. Do not batch multiple findings into one commit — the per-finding commit is what Step 9's close-out checks against.
+
+**Workstream partition for parallel execution.** The eight findings split into five independent workstreams with no shared root cause between them, safe to run concurrently by separate agent teammates:
+
+| Workstream | Findings | Primary files | Notes |
+|---|---|---|---|
+| WS-A | FR-001 | `cmd/boabot/main.go`, `internal/infrastructure/config/config.go`, `internal/infrastructure/buzz/{keypair,token}.go`, `user-docs/Buzz-Adoption-Config.md` | New secret name + wiring; no overlap with WS-B's files. |
+| WS-B | FR-002 **and** FR-003 together | `internal/infrastructure/buzz/relay_client.go`, `reconnect.go` | **Do not split these two.** Both are defects in the same `attachSub`/`subEntry`/`pumpDone` machinery, FR-003's own Green guidance explicitly proposes `atomic.Bool` as a mechanism shared with FR-002's fix, and the Refactor note under FR-003 recommends "a single shared fix and a single combined test suite covering both interleavings." One workstream, one design decision, one PR-visible diff — not two agents independently locking the same struct two different ways. |
+| WS-C | FR-004 | `internal/infrastructure/*/lock.go` | Self-contained; no overlap with buzz package files. |
+| WS-D | FR-005 | `internal/infrastructure/buzz/monitor.go` (`dispatch`), possibly `discovery.go` | Self-contained. |
+| WS-E | FR-006 + FR-008 | `nipoa.go`/`architecture.md`, `trigger.go`, `spec.md`, `tasks.md` | Both are doc-only or trivial; batching avoids two agents touching `spec.md`/`architecture.md` in the same window. |
+
+Each workstream should run in its **own git worktree** (`git worktree add ../<ws-name> worktree-buzz-support-prd`, branching from `worktree-buzz-support-prd` — this feature is not yet merged to `main`, so worktrees branch from this branch, not from `main`), so parallel agents never share a working tree or step on each other's uncommitted changes. Fixes land as commits on this same branch/PR (or on short-lived branches merged back into it) — this is a review-fix pass on an open PR, not a set of new features each needing its own PR-with-automerge.
+
+**Doc-file collision hazard.** Per `AGENTS.md`'s "Documentation Requirements," a behavior change requires `docs/technical-details.md` updates and a new `docs/architectural-decision-record.md` entry. If WS-A, WS-B, WS-C, and WS-D each append to those two files independently and in parallel, their worktree merges will conflict on the same file. Two options, pick one before starting parallel work: (a) each workstream's ADR/technical-details edit lands as a small serialized commit immediately after that workstream's worktree merges back (not written concurrently with the others), or (b) one workstream (suggest WS-B, since it owns the two P0/P1-adjacent findings with the most architectural weight) collects all four ADR entries in one pass after the others land. Either way, do not let four agents edit `architectural-decision-record.md` concurrently in four worktrees.
+
+---
+
+## Open Questions
+
+- **OQ-R1 (FR-001 Refactor):** Should `boabotctl secret set` gain a `--format` hint for the new multi-part auth-tag secret (`owner_pubkey_hex|conditions|sig_hex` or a JSON envelope), or is asking the operator to paste an external attestation tool's raw tag output sufficient? A product decision, not purely mechanical — resolve before or during WS-A, since it affects the secret's on-disk format and `user-docs/Buzz-Adoption-Config.md`'s instructions.
+- **OQ-R2 (FR-007):** Is reconnect backoff (`WithBackoff`/`WithAuthRetryInterval`) something an operator actually needs to tune, or is the hardcoded default (1s/30s backoff, 200ms auth retry) permanent? If no operator need surfaces during Step 9, FR-007's acceptance criterion is satisfied by a one-line doc comment recording that decision — resolve either way so this doesn't get silently revisited later.
 
 ---
 

@@ -507,6 +507,36 @@ func TestMonitor_Dispatch_ContentIsScreened(t *testing.T) {
 	}
 }
 
+// TestMonitor_Dispatch_OversizedContent_RejectedNotDispatched closes review
+// PRD FR-005: an inbound kind:9 event with a multi-megabyte Content must be
+// rejected (logged, not dispatched as a task instruction) rather than
+// forwarded to the worker harness with no size bound. See maxContentLen's
+// doc comment (monitor.go) for the chosen bound and AD-4's constant-vs-
+// config-field reasoning.
+func TestMonitor_Dispatch_OversizedContent_RejectedNotDispatched(t *testing.T) {
+	var logBuf bytes.Buffer
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := NewMonitor(fr, testConfig(), q, nil, WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	huge := strings.Repeat("a", 2*1024*1024) // 2 MiB -- well over any reasonable chat-style message
+	evt := domain.Event{ID: "evt-huge", PubKey: "someone", Kind: 9, Tags: [][]string{{"p", "self-pk"}}, Content: huge}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+
+	time.Sleep(50 * time.Millisecond)
+	if len(q.GetSendCalls()) != 0 {
+		t.Fatal("expected oversized content to be rejected rather than dispatched as a task")
+	}
+
+	got := logBuf.String()
+	if !strings.Contains(got, "evt-huge") {
+		t.Fatalf("expected the rejected event's ID to appear in structured logs, got: %q", got)
+	}
+	if !strings.Contains(got, "2097152") { // len(huge) in bytes
+		t.Fatalf("expected the content size (bytes) to appear in structured logs, got: %q", got)
+	}
+}
+
 // --- F12/F5/F6: HandleResult -------------------------------------------------
 
 func TestMonitor_HandleResult_PublishesThreadedReply(t *testing.T) {

@@ -33,6 +33,32 @@ const (
 // shutdownCommand is FR-026's exact stop-signal string.
 const shutdownCommand = "!shutdown"
 
+// maxContentLen bounds an inbound kind:9 event's Content before it is
+// allowed to become a TaskPayload.Instruction (review PRD FR-005). Nothing
+// in this codebase caps evt.Content upstream (translate.go's
+// FromLibraryEvent/ToLibraryEvent impose no limit, nor does
+// fiatjaf.com/nostr's WebSocket transport, verified but not relied upon) --
+// once BaoBot is authenticated into a workspace, any other member can
+// publish an arbitrarily large kind:9 event that, if it passes the
+// trigger/author gate, would otherwise become an uncapped worker-harness
+// instruction with no demonstrated exploit but real uncontrolled token/cost
+// spend on a single oversized message.
+//
+// 64 KiB is chosen as generous for any legitimate multi-paragraph chat
+// message (Nostr relays and clients commonly cap event/content sizes in a
+// similar tens-of-KB range) while still closing off the unbounded-spend
+// concern; it does not need to be operator-tunable to satisfy that goal.
+//
+// Package constant, not a Monitor.Config field (architecture.md AD-4):
+// consistent with FR-007/OQ-R2's resolution for reconnect backoff, this
+// avoids adding operator-tunable surface without a demonstrated need. No
+// concrete reason surfaced during WS-D's implementation (no existing test
+// fixture needed a non-default bound) to promote it to Config -- if an
+// operator need for a different bound is identified later, add a
+// MaxContentLen field to Config then, defaulting to this constant when
+// zero, mirroring PresenceInterval's existing zero-value-defaults pattern.
+const maxContentLen = 64 * 1024
+
 // relayClient is the seam Monitor needs from a relay connection. It is
 // satisfied by this package's own concrete *RelayClient in production, and
 // by a fake in tests -- so Monitor's discovery/dispatch/reply logic is
@@ -359,6 +385,18 @@ func (m *Monitor) handleShutdownCommand(ctx context.Context, evt domain.Event) {
 func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.Event) {
 	text := strings.TrimSpace(evt.Content)
 	if text == "" {
+		return
+	}
+
+	// FR-005: reject oversized content before it is ever used to build a
+	// task instruction. Checked ahead of the author gate deliberately -- an
+	// oversized-content attempt is worth logging regardless of who sent it,
+	// and there is no reason to spend a gate check on content that will be
+	// rejected anyway.
+	if n := len(evt.Content); n > maxContentLen {
+		m.logger.Warn("buzz monitor: event content exceeds max size, rejecting",
+			"event_id", evt.ID, "content_len", n, "max_content_len", maxContentLen,
+			"channel", channelUUID)
 		return
 	}
 

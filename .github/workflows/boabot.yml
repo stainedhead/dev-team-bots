@@ -192,9 +192,31 @@ jobs:
           PR_NUMBER=$(gh pr list --repo "${{ github.repository }}" \
             --label "autorelease: pending" --state open \
             --json number --jq '.[0].number // empty')
-          if [ -n "$PR_NUMBER" ]; then
-            gh pr merge --auto --squash "$PR_NUMBER" --repo "${{ github.repository }}"
+          if [ -z "$PR_NUMBER" ]; then
+            exit 0
           fi
+
+          # enablePullRequestAutoMerge (what `gh pr merge --auto` calls
+          # under the hood) can transiently fail with GraphQL "Pull
+          # request is in unstable status" right after a PR is created or
+          # updated, before GitHub finishes computing its mergeable
+          # status -- a documented race
+          # (https://github.com/peter-evans/enable-pull-request-automerge/issues/355
+          # and similar), not a real blocker. Retry a few times first.
+          for attempt in 1 2 3; do
+            if gh pr merge --auto --squash "$PR_NUMBER" --repo "${{ github.repository }}"; then
+              exit 0
+            fi
+            echo "attempt $attempt: enablePullRequestAutoMerge failed (likely the unstable-status race), retrying..."
+            sleep 5
+          done
+
+          # This repo has no required status checks today, so a direct
+          # merge is exactly as safe as the auto-merge --auto was trying
+          # to set up (nothing to wait for) -- fall back to it rather
+          # than leave the release PR stuck if the race persists.
+          echo "auto-merge retries exhausted, falling back to a direct merge"
+          gh pr merge --squash "$PR_NUMBER" --repo "${{ github.repository }}"
 
   # Builds and attaches the macOS (Apple Silicon) binary to the GitHub
   # Release release-please just created. Only runs on the merge that

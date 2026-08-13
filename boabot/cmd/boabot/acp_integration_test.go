@@ -220,6 +220,63 @@ func TestACPIntegration_FullTurn_AgainstRealBinary(t *testing.T) {
 	}
 }
 
+func TestACPIntegration_ExitsCleanlyOnStdinEOF(t *testing.T) {
+	// RT8/FR-009 (auto-review): FR-007's "exits cleanly on stdin EOF" claim
+	// was previously unverified by any test -- runACP had 0% coverage, and
+	// every other integration test's cleanup killed the subprocess rather
+	// than closing stdin to prove graceful exit. This test does neither:
+	// it performs a real handshake, then closes stdin (not Process.Kill)
+	// and asserts the process exits on its own with code 0.
+	bin := buildBoabotBinary(t)
+	server := mockOpenAIServer(t, "ok", 0)
+	defer server.Close()
+	configPath := writePersona(t, server.URL)
+
+	cmd := exec.Command(bin, "-acp", "-config", configPath)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start boabot -acp: %v", err)
+	}
+
+	client := &testACPClient{}
+	conn := sdk.NewClientSideConnection(client, stdin, stdout)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelCtx()
+	if _, err := conn.Initialize(ctx, sdk.InitializeRequest{ProtocolVersion: sdk.ProtocolVersionNumber}); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("initialize: %v", err)
+	}
+	if _, err := conn.NewSession(ctx, sdk.NewSessionRequest{Cwd: os.TempDir(), McpServers: []sdk.McpServer{}}); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("session/new: %v", err)
+	}
+
+	if err := stdin.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	exitErr := make(chan error, 1)
+	go func() { exitErr <- cmd.Wait() }()
+
+	select {
+	case err := <-exitErr:
+		if err != nil {
+			t.Errorf("process did not exit cleanly after stdin EOF: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("process did not exit within 10s of stdin EOF -- runACP is not honoring stdin EOF as a shutdown signal")
+	}
+}
+
 func TestACPIntegration_SlowTurn_KeepAliveFiresOverRealSubprocess(t *testing.T) {
 	bin := buildBoabotBinary(t)
 	// Slower than the keep-alive interval below, so at least one keep-alive

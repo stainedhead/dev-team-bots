@@ -51,16 +51,31 @@ type Agent struct {
 
 var _ sdk.Agent = (*Agent)(nil)
 
+// Option configures an Agent constructed by New.
+type Option func(*Agent)
+
+// WithKeepAliveInterval overrides the default keep-alive session/update
+// cadence (defaultKeepAliveInterval) -- mainly useful for tests, but also a
+// legitimate operator tuning knob if buzz-acp's --idle-timeout is
+// configured tighter than the default in a given deployment.
+func WithKeepAliveInterval(d time.Duration) Option {
+	return func(a *Agent) { a.keepAliveInterval = d }
+}
+
 // New constructs an Agent backed by the Worker workerFactory.New() returns.
 // workDir is applied to every domain.Task built from a session/prompt call,
 // matching the persona's configured work directory.
-func New(workerFactory domain.WorkerFactory, workDir string) *Agent {
-	return &Agent{
+func New(workerFactory domain.WorkerFactory, workDir string, opts ...Option) *Agent {
+	a := &Agent{
 		worker:            workerFactory.New(),
 		workDir:           workDir,
 		keepAliveInterval: defaultKeepAliveInterval,
 		sessions:          make(map[sdk.SessionId]*session),
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // SetConnection wires the live ACP connection after

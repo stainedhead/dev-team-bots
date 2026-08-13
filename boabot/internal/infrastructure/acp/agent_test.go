@@ -4,12 +4,20 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
 )
 
 func TestAgent_ImplementsSDKInterface(t *testing.T) {
 	var _ sdk.Agent = (*Agent)(nil)
+}
+
+func TestAgent_WithKeepAliveInterval_Overrides(t *testing.T) {
+	a := New(&fakeWorkerFactory{}, "", WithKeepAliveInterval(5*time.Millisecond))
+	if a.keepAliveInterval != 5*time.Millisecond {
+		t.Errorf("keepAliveInterval = %v, want 5ms", a.keepAliveInterval)
+	}
 }
 
 func TestAgent_Initialize(t *testing.T) {

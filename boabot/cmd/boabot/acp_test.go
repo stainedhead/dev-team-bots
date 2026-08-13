@@ -64,6 +64,26 @@ models:
 	}
 }
 
+func TestBuildACPAgent_InvalidKeepAliveIntervalFails(t *testing.T) {
+	configPath := writeACPTestPersona(t, `
+bot:
+  name: test-bot
+  type: test-bot
+models:
+  default: test-provider
+  providers:
+    - name: test-provider
+      type: anthropic
+      model_id: claude-x
+`)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("BOABOT_ACP_KEEPALIVE_INTERVAL", "not-a-duration")
+
+	if _, err := buildACPAgent(configPath); err == nil {
+		t.Fatal("expected an error for an invalid BOABOT_ACP_KEEPALIVE_INTERVAL, got nil")
+	}
+}
+
 func TestBuildACPAgent_UnknownProviderFails(t *testing.T) {
 	configPath := writeACPTestPersona(t, `
 bot:

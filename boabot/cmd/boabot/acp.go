@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
@@ -96,5 +97,14 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 
 	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, string(soulBytes))
 
-	return acpinfra.New(singleWorkerFactory{w: worker}, ""), nil
+	var opts []acpinfra.Option
+	if raw := os.Getenv("BOABOT_ACP_KEEPALIVE_INTERVAL"); raw != "" {
+		d, parseErr := time.ParseDuration(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid BOABOT_ACP_KEEPALIVE_INTERVAL %q: %w", raw, parseErr)
+		}
+		opts = append(opts, acpinfra.WithKeepAliveInterval(d))
+	}
+
+	return acpinfra.New(singleWorkerFactory{w: worker}, "", opts...), nil
 }

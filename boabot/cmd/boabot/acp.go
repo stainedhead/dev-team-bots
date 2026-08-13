@@ -17,6 +17,7 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
+	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 )
 
@@ -96,6 +97,20 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 	mcpClient := localmcp.NewClient(cfg.Orchestrator.WorkDirs)
 
 	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, string(soulBytes))
+
+	// Mirrors team_manager.go's startBot exactly (RT3/FR-004, auto-review):
+	// native mode wires a RulesTracker under this identical condition so the
+	// persona loads AGENTS.md/CLAUDE.md hierarchically for tasks that carry
+	// a WorkDir. ACP-mode tasks currently always have an empty WorkDir (see
+	// implementation-notes.md), so this wiring is presently inert in
+	// practice -- exactly as inert as it is for native mode's own
+	// Slack/Buzz chat-triggered tasks, which also carry no WorkDir. Wiring
+	// it anyway makes ACP mode's construction pattern identical to native
+	// mode's, so neither mode silently diverges if WorkDir population is
+	// ever added to either path.
+	if len(cfg.Orchestrator.WorkDirs) > 0 {
+		worker.WithRulesTracker(localrules.NewTracker(cfg.Orchestrator.WorkDirs))
+	}
 
 	var opts []acpinfra.Option
 	if raw := os.Getenv("BOABOT_ACP_KEEPALIVE_INTERVAL"); raw != "" {

@@ -42,6 +42,34 @@ models:
 	}
 }
 
+func TestBuildACPAgent_WithWorkDirsSucceeds(t *testing.T) {
+	// RT3/FR-004 (auto-review): wiring WithRulesTracker when
+	// orchestrator.work_dirs is set must not break construction.
+	configPath := writeACPTestPersona(t, `
+bot:
+  name: test-bot
+  type: test-bot
+orchestrator:
+  work_dirs:
+    - /tmp
+models:
+  default: test-provider
+  providers:
+    - name: test-provider
+      type: anthropic
+      model_id: claude-x
+`)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	agent, err := buildACPAgent(configPath)
+	if err != nil {
+		t.Fatalf("buildACPAgent returned error: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("buildACPAgent returned a nil Agent with no error")
+	}
+}
+
 func TestBuildACPAgent_MissingSOULFails(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

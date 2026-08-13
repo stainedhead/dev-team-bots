@@ -32,6 +32,8 @@ None currently. `buzz-acp --mcp-command` semantics remain unresolved (research.m
 
 ## Recent Activity
 
+- 2026-08-13: Implementation attempt #1 discovered `domain.BudgetTracker` does not exist anywhere in this codebase (grep-verified twice, independently) — `boabot/AGENTS.md`'s description of it is aspirational, not real. FR-005 and all dependent docs (data-dictionary.md, architecture.md, plan.md, tasks.md) corrected: v1 leaves `PromptResponse.Usage` nil; real budget enforcement is out of scope, flagged as a separate follow-up. Also found and documented the real `Worker` construction path (`application.NewExecuteTaskUseCase` + `WithProgressHandler`) and required construction primitives, and a small safe export-rename needed in `provider_factory.go` — folded into T1/architecture.md.
+
 - 2026-08-13: PRD authored, spec directory created, all phase files initialized.
 - 2026-08-13: Research completed — confirmed `github.com/coder/acp-go-sdk` as the Go ACP SDK, confirmed `buzz-acp`'s real method set and persistent pooled-process lifecycle via `strings` on the actual binary.
 - 2026-08-13: Architecture and data-dictionary finalized — thin adapter over existing `Worker`/`BudgetTracker`, no new domain interfaces. FR-003 refined from "incremental streaming" (not buildable — `Worker.Execute` has no streaming callback) to "keep-alive updates + final result," which also turned out to be a correctness requirement for `buzz-acp`'s idle-timeout, not just a UX nicety.

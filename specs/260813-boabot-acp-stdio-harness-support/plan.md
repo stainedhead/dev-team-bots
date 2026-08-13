@@ -5,7 +5,7 @@
 
 ## Development Approach
 
-TDD (red-green-refactor), per repo AGENTS.md — a failing test before any production code, for every task below. 90%+ coverage target on domain/application layers; `internal/infrastructure/acp` is infrastructure, not subject to that specific gate, but still fully unit-tested per repo mocking conventions (mock `Worker`/`WorkerFactory`/`BudgetTracker`, and mock the ACP SDK's client-side connection where the SDK supports it).
+TDD (red-green-refactor), per repo AGENTS.md — a failing test before any production code, for every task below. 90%+ coverage target on domain/application layers; `internal/infrastructure/acp` is infrastructure, not subject to that specific gate, but still fully unit-tested per repo mocking conventions (mock `Worker`/`WorkerFactory`, and mock the ACP SDK's client-side connection where the SDK supports it). Note: `domain.BudgetTracker` does not exist in this codebase (discovered during implementation) — no such mock is needed; see spec.md's corrected FR-005.
 
 ## Phase Breakdown
 
@@ -13,7 +13,7 @@ TDD (red-green-refactor), per repo AGENTS.md — a failing test before any produ
 2. **`initialize` + `session/new`** — minimal handshake, session allocation, unit-tested.
 3. **`session/prompt` core** — build `domain.Task` from prompt content, call `WorkerFactory.New().Execute`, map `TaskResult` to the ACP response (no keep-alive yet).
 4. **Keep-alive + `session/cancel`** — concurrent ticker emitting `acp::thought` updates during a turn; cancellation wired to the `Worker.Execute` context.
-5. **Budget/usage wiring** — `acp::usage` updates and response usage block sourced from `BudgetTracker`, per FR-005.
+5. **Usage wiring (scoped down)** — leave `PromptResponse.Usage` nil per corrected FR-005; no `acp::usage` source exists (no `BudgetTracker` in this codebase). Confirm this doesn't break `buzz-acp` (Usage is documented optional in the ACP SDK).
 6. **Process lifecycle** — clean shutdown on stdin EOF, panic recovery per FR-008.
 7. **Integration test against the real `buzz-acp` binary** — the acceptance-criteria smoke test; tagged `//go:build integration` per repo convention.
 8. **Docs + ADR** — new/superseding ADR entry, `docs/technical-details.md`, `docs/product-summary.md`, `README.md`.
@@ -24,7 +24,7 @@ TDD (red-green-refactor), per repo AGENTS.md — a failing test before any produ
 
 ## Testing Strategy
 
-- Unit tests per phase above (red-green-refactor), mocking `domain.Worker`/`WorkerFactory`/`BudgetTracker` per existing repo conventions (`internal/domain/mocks/`).
+- Unit tests per phase above (red-green-refactor), mocking `domain.Worker`/`WorkerFactory` per existing repo conventions (`internal/domain/mocks/`).
 - Integration test (`//go:build integration`) spawning the real bundled `buzz-acp` binary against `boabot acp`, verifying at minimum: `initialize` handshake succeeds, a `session/prompt` round-trip returns `stopReason: EndTurn`, and a deliberately slow task (mocked/stubbed Worker with an artificial delay exceeding a short test `--idle-timeout`) is NOT killed, proving the keep-alive mechanism actually works — not just that it's present.
 - Full `go test ./...` must remain green throughout — no regression to native daemon-mode tests at any phase.
 

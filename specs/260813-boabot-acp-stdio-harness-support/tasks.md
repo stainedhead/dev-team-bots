@@ -9,7 +9,7 @@
 
 ## Phase 1 — Dependency + Skeleton
 
-**T1** — Add `github.com/coder/acp-go-sdk` dependency; create `internal/infrastructure/acp/` package skeleton with a no-op `Agent`; wire a `-acp` flag/mode into `cmd/boabot/main.go` that constructs it and blocks on `acp.NewAgentSideConnection`.
+**T1** — Add `github.com/coder/acp-go-sdk` dependency; create `internal/infrastructure/acp/` package skeleton with a no-op `Agent`; wire a `-acp` flag/mode into `cmd/boabot/main.go` that constructs it and blocks on `acp.NewAgentSideConnection`. Includes the small export-rename `newLocalProviderFactory` → `NewLocalProviderFactory` in `internal/application/team/provider_factory.go` (2 call sites: `team_manager.go`, `export_test.go`) so the ACP package can construct providers the same way native mode does — already confirmed safe/isolated during research, just needs doing.
 - **Dependencies:** None
 - **Duration:** Small
 - **Acceptance criteria:** `go build` succeeds with the new dependency; `boabot -acp -config <persona>.yaml` starts and doesn't crash; existing daemon mode (`boabot -config <persona>.yaml`, no `-acp`) is unaffected — full `go test ./...` green.
@@ -35,12 +35,12 @@
 - **Duration:** Medium
 - **Acceptance criteria:** Unit test with an artificially slow mocked `Worker` asserts at least one keep-alive `session/update` is emitted before completion; a `session/cancel` call during that delay causes the turn's context to be cancelled and the call to return promptly.
 
-## Phase 5 — Budget/Usage Wiring
+## Phase 5 — Usage Field (Scoped Down)
 
-**T5** — Source `acp::usage` updates and the `session/prompt` response's usage block from `domain.BudgetTracker`, per FR-005.
+**T5** — Leave `PromptResponse.Usage` `nil` per corrected FR-005 (`domain.BudgetTracker` does not exist in this codebase — discovered during implementation, grep-verified). Confirm this doesn't break `buzz-acp`'s handling of `session/prompt` responses.
 - **Dependencies:** T3
-- **Duration:** Small
-- **Acceptance criteria:** Unit test asserts usage figures reflect `BudgetTracker` state after a turn, and that a budget-exceeded condition maps to the correct `stopReason` rather than a raw error.
+- **Duration:** Trivial
+- **Acceptance criteria:** Unit test asserts a `session/prompt` response with `Usage: nil` is accepted/handled correctly; no fabricated usage numbers appear anywhere in the response.
 
 ## Phase 6 — Process Lifecycle and Panic Recovery
 

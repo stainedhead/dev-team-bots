@@ -34,7 +34,7 @@ Buzz workspaces support "custom harness" agents: `buzz-acp` owns a workspace ide
 
 **FR-004:** ACP mode loads exactly one bot persona's `config.yaml` (same shape as native daemon mode) via a CLI flag, so persona behavior is identical across both modes.
 
-**FR-005:** ACP mode enforces the same `BudgetTracker` caps and calibrated-autonomy gates as native daemon mode, scoped to the single session/turn.
+**FR-005 (corrected during implementation — grep-verified, see implementation-notes.md):** `domain.BudgetTracker` does not exist anywhere in this codebase — `boabot/AGENTS.md`'s description of it is aspirational documentation, not a real interface. Native daemon mode enforces no such budget/token caps today, so this is a **pre-existing gap in the whole system**, not something introduced or worsened by ACP mode. Scope for v1: `PromptResponse.Usage` is left `nil` (the ACP SDK marks it optional) rather than inventing budget tracking as a side effect of this feature. Building real budget enforcement is a separate, standalone piece of work outside this PRD's scope — flag to the user as a follow-up, do not silently build it here.
 
 **FR-006:** ACP mode never opens a Slack or Buzz relay connection and registers no `ChannelMonitor` — purely a local stdio protocol server.
 

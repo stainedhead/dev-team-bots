@@ -1,8 +1,11 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +13,18 @@ import (
 	sdk "github.com/coder/acp-go-sdk"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
+
+// captureLogs swaps slog's default logger for the duration of the test,
+// returning a function that yields everything logged so far. Restores the
+// prior default logger on test cleanup.
+func captureLogs(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf.String
+}
 
 // fakeConn records SessionUpdate calls so tests can assert on keep-alive /
 // final-output behavior without a real ACP transport.
@@ -289,6 +304,78 @@ func TestAgent_Prompt_SameSessionOverlappingTurns_SecondCancelNotClobbered(t *te
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("second turn did not return promptly after Cancel -- its cancel function was clobbered or never wired")
+	}
+}
+
+func TestAgent_Prompt_LogsTurnStartAndEnd(t *testing.T) {
+	// RT2/FR-002 (auto-review): spec.md's NFR requires turn start/end,
+	// cancellation, and errors to be logged -- previously entirely unmet
+	// (zero slog calls in the package).
+	logs := captureLogs(t)
+	fw := &fakeWorker{result: domain.TaskResult{Output: "42", Success: true}}
+	a := New(&fakeWorkerFactory{worker: fw}, "")
+	a.setUpdater(&fakeConn{})
+	sid := newSessionForTest(t, a)
+
+	if _, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("question")},
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	out := logs()
+	if !strings.Contains(out, "acp turn started") {
+		t.Errorf("log output missing turn-start line:\n%s", out)
+	}
+	if !strings.Contains(out, "acp turn finished") {
+		t.Errorf("log output missing turn-finished line:\n%s", out)
+	}
+	if !strings.Contains(out, "end_turn") {
+		t.Errorf("log output missing the stop reason:\n%s", out)
+	}
+}
+
+func TestAgent_Prompt_LogsCancellation(t *testing.T) {
+	logs := captureLogs(t)
+	fw := &fakeWorker{delay: time.Second, result: domain.TaskResult{Output: "unused", Success: true}}
+	a := New(&fakeWorkerFactory{worker: fw}, "")
+	a.setUpdater(&fakeConn{})
+	sid := newSessionForTest(t, a)
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = a.Prompt(context.Background(), sdk.PromptRequest{SessionId: sid, Prompt: []sdk.ContentBlock{sdk.TextBlock("q")}})
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if err := a.Cancel(context.Background(), sdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	<-done
+
+	out := logs()
+	if !strings.Contains(out, "acp turn cancelled") {
+		t.Errorf("log output missing cancellation line:\n%s", out)
+	}
+}
+
+func TestAgent_Prompt_LogsRecoveredPanic(t *testing.T) {
+	logs := captureLogs(t)
+	a := New(&fakeWorkerFactory{worker: &panicWorker{}}, "")
+	a.setUpdater(&fakeConn{})
+	sid := newSessionForTest(t, a)
+
+	if _, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("trigger panic")},
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	out := logs()
+	if !strings.Contains(out, "acp worker panic recovered") {
+		t.Errorf("log output missing recovered-panic line:\n%s", out)
 	}
 }
 

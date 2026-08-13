@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,8 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		WorkDir:     a.workDir,
 	}
 
+	slog.Info("acp turn started", "session_id", params.SessionId, "task_id", task.ID)
+
 	// Keep-alive: a progress-driven signal when the Worker offers one, plus
 	// a ticker fallback for a single long silent tool call with no
 	// intermediate progress events -- architecture.md AD-3. This is a
@@ -79,22 +82,27 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 
 	if turnCtx.Err() != nil {
 		// Either session/cancel fired, or the parent context was cancelled.
+		slog.Warn("acp turn cancelled", "session_id", params.SessionId, "task_id", task.ID)
 		return sdk.PromptResponse{StopReason: sdk.StopReasonCancelled}, nil
 	}
 	if execErr != nil || !result.Success {
 		// A domain-level failure (including a recovered panic) ends the
 		// turn without a protocol-level error -- FR-008: never surface a
 		// raw crash to the host, always a well-formed ACP response.
+		slog.Info("acp turn finished", "session_id", params.SessionId, "task_id", task.ID,
+			"stop_reason", sdk.StopReasonRefusal, "err", execErr)
 		return sdk.PromptResponse{StopReason: sdk.StopReasonRefusal}, nil
 	}
 
 	a.emit(context.Background(), params.SessionId, sdk.UpdateAgentMessageText(result.Output))
 
+	slog.Info("acp turn finished", "session_id", params.SessionId, "task_id", task.ID,
+		"stop_reason", sdk.StopReasonEndTurn)
 	return sdk.PromptResponse{
 		StopReason: sdk.StopReasonEndTurn,
-		// Usage intentionally left nil: no domain.BudgetTracker exists in
-		// this codebase to source it from -- corrected FR-005, see
-		// specs/260813-boabot-acp-stdio-harness-support/spec.md.
+		// Usage intentionally left nil: no cost-enforcement is wired into
+		// the live task path in either mode to source it from -- corrected
+		// FR-005, see specs/archive/260813-boabot-acp-stdio-harness-support/spec.md.
 	}, nil
 }
 
@@ -104,6 +112,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 func (a *Agent) runWorkerSafely(ctx context.Context, task domain.Task) (result domain.TaskResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			slog.Error("acp worker panic recovered", "task_id", task.ID, "panic", r)
 			err = fmt.Errorf("acp: worker panic: %v", r)
 		}
 	}()

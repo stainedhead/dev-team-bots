@@ -58,6 +58,7 @@ func main() {
 		// ACP mode loads configPath itself (as a single persona's config,
 		// not team.yaml) and never touches TeamManager/ChannelMonitor --
 		// see cmd/boabot/acp.go and architecture.md.
+		slog.Info("starting boabot acp mode", "config", *configPath, "version", version)
 		if err := runACP(ctx, *configPath); err != nil {
 			slog.Error("acp agent exited with error", "err", err)
 			os.Exit(1)

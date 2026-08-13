@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-0/8 tasks complete.
+8/8 tasks complete.
 
 ## Phase 1 — Dependency + Skeleton
 

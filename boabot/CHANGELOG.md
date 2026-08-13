@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.3.0...boabot/v0.4.0) (2026-08-13)
+
+
+### Features
+
+* **acp:** add -agent/-bots-dir flags to select a persona by name ([48c4355](https://github.com/stainedhead/dev-team-bots/commit/48c4355a81b80a3dbbfdd6f383e0aec2bbf62e67))
+* boabot -acp -agent flag for selecting a persona by name ([e1aa9a0](https://github.com/stainedhead/dev-team-bots/commit/e1aa9a068e85043cd2f58fc387c9bb83276e78b8))
+
+
+### Bug Fixes
+
+* **acp:** emit a visible message when a turn fails, not silence ([2bc78e7](https://github.com/stainedhead/dev-team-bots/commit/2bc78e7ec809087eaa503b4c9056e9b4e84cb152))
+* boabot -acp emits a visible message when a turn fails ([4ad4c16](https://github.com/stainedhead/dev-team-bots/commit/4ad4c16b8e5d20cf66d87fcb9678fe1bce0639d4))
+
 ## [0.3.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.2.0...boabot/v0.3.0) (2026-08-13)
 
 

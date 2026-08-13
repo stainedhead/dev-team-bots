@@ -237,6 +237,61 @@ func TestAgent_Prompt_ConcurrentSessionsDoNotRace(t *testing.T) {
 	}
 }
 
+func TestAgent_Prompt_SameSessionOverlappingTurns_SecondCancelNotClobbered(t *testing.T) {
+	// RT4/FR-005 (auto-review): two overlapping Prompt calls for the SAME
+	// session used to race on session.cancel -- the first turn's deferred
+	// `s.cancel = nil` could null out the second turn's still-active cancel
+	// function. RT1's turnMu serialization (turn.go) makes "overlapping" on
+	// one session impossible by construction: the second call blocks until
+	// the first fully finishes, including its deferred reset. This test
+	// proves cancellation still works correctly for the second turn once it
+	// actually starts.
+	fw := &fakeWorker{delay: time.Second, result: domain.TaskResult{Output: "unused", Success: true}}
+	a := New(&fakeWorkerFactory{worker: fw}, "")
+	a.setUpdater(&fakeConn{})
+	sid := newSessionForTest(t, a)
+
+	// First turn: fire-and-forget, will be cancelled by the second call's
+	// arrival timing below is irrelevant -- we let it run to completion in
+	// the background and only care about the second, sequential turn.
+	first := make(chan sdk.PromptResponse, 1)
+	go func() {
+		resp, _ := a.Prompt(context.Background(), sdk.PromptRequest{SessionId: sid, Prompt: []sdk.ContentBlock{sdk.TextBlock("first")}})
+		first <- resp
+	}()
+
+	time.Sleep(10 * time.Millisecond) // let the first turn actually acquire turnMu and start
+	if err := a.Cancel(context.Background(), sdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatalf("Cancel (first turn): %v", err)
+	}
+	if resp := <-first; resp.StopReason != sdk.StopReasonCancelled {
+		t.Fatalf("first turn StopReason = %v, want Cancelled", resp.StopReason)
+	}
+
+	// Second turn on the SAME session, started only after the first fully
+	// returned (turnMu guarantees this ordering even if launched
+	// concurrently) -- cancel it too, and confirm ITS cancel function is
+	// live and works, proving the first turn's cleanup didn't leave the
+	// session's cancel state broken for reuse.
+	second := make(chan sdk.PromptResponse, 1)
+	go func() {
+		resp, _ := a.Prompt(context.Background(), sdk.PromptRequest{SessionId: sid, Prompt: []sdk.ContentBlock{sdk.TextBlock("second")}})
+		second <- resp
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if err := a.Cancel(context.Background(), sdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatalf("Cancel (second turn): %v", err)
+	}
+	select {
+	case resp := <-second:
+		if resp.StopReason != sdk.StopReasonCancelled {
+			t.Errorf("second turn StopReason = %v, want Cancelled", resp.StopReason)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second turn did not return promptly after Cancel -- its cancel function was clobbered or never wired")
+	}
+}
+
 type panicWorker struct{}
 
 func (panicWorker) Execute(context.Context, domain.Task) (domain.TaskResult, error) {

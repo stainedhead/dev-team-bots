@@ -12,7 +12,7 @@ Defines the domain entities, value objects, interfaces, and protocol message typ
 - `domain.Task` — `{ID, BoardItemID, Instruction, Source, WorkDir}`. ACP mode populates `Instruction` from the ACP `session/prompt` content (already fully assembled by `buzz-acp` — see research.md), `Source` set to a constant identifying ACP-mode origin (e.g. `"acp"`), `WorkDir` from persona config same as native mode.
 - `domain.TaskResult` — `{TaskID, Output, Success, Err}`. `Output` maps to the final `acp::stream` update content; `Success`/`Err` map to `session/prompt`'s `stopReason` (`EndTurn` on success, else an error-mapped reason).
 - `domain.WorkerFactory` — `New() Worker`, used exactly as native daemon mode uses it, scoped to the single persona ACP mode loads.
-- ~~`domain.BudgetTracker`~~ — **does not exist in this codebase** (grep-verified during implementation; `boabot/AGENTS.md`'s description of it is aspirational, not real). FR-005 corrected accordingly — see spec.md.
+- ~~`domain.BudgetTracker`~~ — not real as `boabot/AGENTS.md` describes it, but `internal/domain/cost.CostEnforcer`/`internal/application/cost.EnforceBudgetUseCase` are real and tested, just not wired into the live task path anywhere. FR-005 corrected accordingly — see spec.md.
 
 ## New Types (infrastructure/acp package)
 
@@ -32,4 +32,4 @@ Confirmed via research.md against the real `buzz-acp` binary: `initialize`/`init
 | `session/prompt` | Constructs one `domain.Task` from the prompt content, calls `WorkerFactory.New().Execute(ctx, task)` synchronously, emits keep-alive `session/update`s while it runs, maps the resulting `domain.TaskResult` to the ACP response. |
 | `session/cancel` | Cancels the `context.Context` passed to the in-flight `Worker.Execute` call for that session. |
 | `session/update` (`acp::stream`) | Final (v1) or incremental (future, if `Worker` gains streaming) `TaskResult.Output` content. |
-| `session/update` (`acp::usage`) | No source exists for v1 (no `BudgetTracker`) — omitted; `PromptResponse.Usage` left `nil`, which the SDK marks optional. |
+| `session/update` (`acp::usage`) | No source wired for v1 (cost enforcement exists but isn't wired into the task path) — omitted; `PromptResponse.Usage` left `nil`, which the SDK marks optional. |

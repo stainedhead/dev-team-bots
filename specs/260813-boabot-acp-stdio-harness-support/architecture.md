@@ -7,7 +7,7 @@
 
 `boabot acp -config <persona-config.yaml>` starts a **long-lived** process (not spawn-per-turn — confirmed by research.md's analysis of `buzz-acp`'s pooled-agent lifecycle) that:
 
-1. Loads exactly one persona's config the same way native daemon mode does (`config.Load`, `WorkerFactory` construction) — reusing existing wiring code from `cmd/boabot/main.go`, not duplicating it. **No budget tracker to construct — `domain.BudgetTracker` does not exist in this codebase (grep-verified); see the corrected FR-005 in spec.md.**
+1. Loads exactly one persona's config the same way native daemon mode does (`config.Load`, `WorkerFactory` construction) — reusing existing wiring code from `cmd/boabot/main.go`, not duplicating it. **No budget tracker to construct — nothing wires `internal/application/cost.EnforceBudgetUseCase` into the live task path in either mode; see the corrected FR-005 in spec.md.**
 2. Constructs an `internal/infrastructure/acp.Agent` implementing `coder/acp-go-sdk`'s `acp.Agent` interface.
 3. Wraps it with `acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin)` and blocks, letting the SDK own the JSON-RPC/stdio transport for the process's entire lifetime — across many sessions and many turns per session, per `buzz-acp`'s pooled-process model.
 
@@ -46,7 +46,7 @@ internal/infrastructure/acp/
 3. `buzz-acp` sends `session/new` for a channel/thread → `Agent` allocates a `session`, returns `sessionId`.
 4. On a mention, `buzz-acp` sends `session/prompt` with fully-assembled prompt content (platform context + team instructions + memory + persona system prompt + user message, all pre-assembled by `buzz-acp` per research.md — BaoBot treats it as opaque `Instruction` text).
 5. `Agent` builds a `domain.Task`, starts a goroutine calling `WorkerFactory.New().Execute(ctx, task)`, and **concurrently** emits periodic `session/update` (`acp::thought`) keep-alive notifications until it returns — required so `buzz-acp`'s `--idle-timeout` (silence-based) doesn't kill a long tool-using turn.
-6. On completion, `Agent` emits a final `session/update` (`acp::stream`) with the full output, then responds to `session/prompt` with `stopReason: EndTurn` (or an error-mapped reason); `Usage` is left `nil` for v1 (no `BudgetTracker` exists to source it from — see FR-005).
+6. On completion, `Agent` emits a final `session/update` (`acp::stream`) with the full output, then responds to `session/prompt` with `stopReason: EndTurn` (or an error-mapped reason); `Usage` is left `nil` for v1 (no enforcement is wired into the task path to source it from — see FR-005).
 7. `session/cancel` (if received mid-turn) cancels that session's active turn context; `Worker.Execute` must return promptly on context cancellation — verify this is already true of existing `Worker` implementations during implementation (if not, that's a pre-existing gap surfaced by this feature, to be logged in implementation-notes.md, not silently patched around).
 8. Process continues serving further `session/new`/`session/prompt` calls for the pool's lifetime; exits cleanly on stdin EOF (FR-007).
 
@@ -65,7 +65,7 @@ internal/infrastructure/acp/
 ## Architectural Decisions
 
 - **AD-1:** Reuse `Worker` directly rather than introducing a new domain seam — the ACP adapter is intentionally "thin." This is the concrete answer to ADR-B020's objection and must be reflected in the new/superseding ADR entry (spec.md acceptance criteria).
-- **AD-5:** `domain.BudgetTracker` does not exist in this codebase (grep-verified during implementation, contradicting `boabot/AGENTS.md`'s description) — native mode enforces no budget/token caps today. ACP mode's v1 leaves `PromptResponse.Usage` nil rather than inventing tracking as a side effect of this feature; real budget enforcement is a separate follow-up, out of scope here (see corrected FR-005 in spec.md).
+- **AD-5:** A real cost-enforcement system exists (`internal/domain/cost`, `internal/application/cost.EnforceBudgetUseCase`) but is wired into neither native nor ACP mode's task path (grep-verified: `NewEnforceBudgetUseCase` is constructed nowhere outside its own package) — `boabot/AGENTS.md`'s "BudgetTracker" description doesn't match either the old or corrected picture. ACP mode's v1 leaves `PromptResponse.Usage` nil; wiring real enforcement into either mode for the first time is a separate follow-up, out of scope here and asymmetric to do only for ACP mode (see corrected FR-005 in spec.md).
 - **AD-2:** `boabot acp` is a long-lived, multi-session, multi-turn process (not spawn-per-turn), per research.md's confirmed `buzz-acp` pooled-process behavior. Process lifecycle design (FR-007) targets clean shutdown on stdin EOF, not a single-turn-then-exit model.
 - **AD-3:** Keep-alive `session/update` notifications during a turn are a **correctness requirement** (idle-timeout compatibility), not just a UX nicety for FR-003 — `Worker.Execute` has no incremental output today, so true token-level streaming is out of scope for v1; this must be stated explicitly in the ADR and in FR-003's acceptance criteria language rather than left implicit.
 - **AD-4:** `buzz-acp --mcp-command` semantics remain unresolved (research.md) and are not required for FR-001–FR-008; not a blocking dependency for this feature's v1.

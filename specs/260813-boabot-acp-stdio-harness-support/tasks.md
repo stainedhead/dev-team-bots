@@ -37,7 +37,7 @@
 
 ## Phase 5 — Usage Field (Scoped Down)
 
-**T5** — Leave `PromptResponse.Usage` `nil` per corrected FR-005 (`domain.BudgetTracker` does not exist in this codebase — discovered during implementation, grep-verified). Confirm this doesn't break `buzz-acp`'s handling of `session/prompt` responses.
+**T5** — Leave `PromptResponse.Usage` `nil` per corrected FR-005 (cost enforcement exists in this codebase but isn't wired into the task path in either mode — discovered during implementation, grep-verified). Confirm this doesn't break `buzz-acp`'s handling of `session/prompt` responses.
 - **Dependencies:** T3
 - **Duration:** Trivial
 - **Acceptance criteria:** Unit test asserts a `session/prompt` response with `Usage: nil` is accepted/handled correctly; no fabricated usage numbers appear anywhere in the response.

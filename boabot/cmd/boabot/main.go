@@ -36,7 +36,16 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to config file")
 	diagSecrets := flag.Bool("diag-secrets", false, "report which provider resolves each configured secret (name only, never the value), then exit")
 	acpMode := flag.Bool("acp", false, "serve a single persona (configPath) as an Agent Client Protocol agent over stdio, for registration as a buzz-acp custom harness, instead of running the normal multi-bot daemon")
+	agentName := flag.String("agent", "orchestrator", "-acp mode only: bot persona name under -bots-dir to load, e.g. \"tech-lead\" resolves <bots-dir>/tech-lead/config.yaml (ignored if -config is passed explicitly)")
+	botsDir := flag.String("bots-dir", defaultBotsDir(), "-acp mode only: directory containing <agent>/config.yaml persona subdirectories, used to resolve -agent")
 	flag.Parse()
+
+	configExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configExplicit = true
+		}
+	})
 
 	if *diagSecrets {
 		cfg, err := config.Load(*configPath)
@@ -55,11 +64,13 @@ func main() {
 	defer cancel()
 
 	if *acpMode {
-		// ACP mode loads configPath itself (as a single persona's config,
-		// not team.yaml) and never touches TeamManager/ChannelMonitor --
-		// see cmd/boabot/acp.go and architecture.md.
-		slog.Info("starting boabot acp mode", "config", *configPath, "version", version)
-		if err := runACP(ctx, *configPath); err != nil {
+		// ACP mode loads a single persona's config (not team.yaml) and
+		// never touches TeamManager/ChannelMonitor -- see cmd/boabot/acp.go
+		// and architecture.md. resolveACPConfigPath lets an explicit
+		// -config win outright, or resolves -agent under -bots-dir.
+		resolvedConfigPath := resolveACPConfigPath(configExplicit, *configPath, *botsDir, *agentName)
+		slog.Info("starting boabot acp mode", "config", resolvedConfigPath, "agent", *agentName, "version", version)
+		if err := runACP(ctx, resolvedConfigPath); err != nil {
 			slog.Error("acp agent exited with error", "err", err)
 			os.Exit(1)
 		}

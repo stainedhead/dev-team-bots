@@ -29,6 +29,31 @@ type singleWorkerFactory struct{ w domain.Worker }
 
 func (f singleWorkerFactory) New() domain.Worker { return f.w }
 
+// defaultBotsDir returns <bin-dir>/bots, mirroring native daemon mode's own
+// ManagerConfig.BotsDir default (main.go's run()) -- the same bots/<type>/
+// layout, just resolved here for ACP mode's -agent flag.
+func defaultBotsDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "bots"
+	}
+	return filepath.Join(filepath.Dir(exe), "bots")
+}
+
+// resolveACPConfigPath determines which persona config.yaml -acp mode
+// loads. An explicitly-passed -config always wins (unchanged behavior from
+// before -agent existed). Otherwise, agent (default "orchestrator") is
+// resolved as <botsDir>/<agent>/config.yaml -- the same bots/<type>/
+// config.yaml layout native daemon mode already uses, so an operator who
+// already has a boabot-team/bots/ checkout can select a persona by name
+// instead of typing out a full path.
+func resolveACPConfigPath(configExplicit bool, configPath, botsDir, agent string) string {
+	if configExplicit {
+		return configPath
+	}
+	return filepath.Join(botsDir, agent, "config.yaml")
+}
+
 // runACP loads configPath as a single persona's config (the same
 // boabot-team/bots/<type>/config.yaml shape native daemon mode uses -- FR-004)
 // and serves it as an ACP agent over stdio until the peer disconnects.

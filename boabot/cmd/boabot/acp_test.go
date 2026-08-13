@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestResolveACPConfigPath_ExplicitConfigWins(t *testing.T) {
+	got := resolveACPConfigPath(true, "/explicit/path/config.yaml", "/bots", "tech-lead")
+	want := "/explicit/path/config.yaml"
+	if got != want {
+		t.Errorf("resolveACPConfigPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveACPConfigPath_AgentNameResolvesUnderBotsDir(t *testing.T) {
+	got := resolveACPConfigPath(false, "/ignored/default/config.yaml", "/bots", "tech-lead")
+	want := filepath.Join("/bots", "tech-lead", "config.yaml")
+	if got != want {
+		t.Errorf("resolveACPConfigPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveACPConfigPath_DefaultsToOrchestrator(t *testing.T) {
+	// Mirrors main()'s flag.String("agent", "orchestrator", ...) default --
+	// this test exercises resolveACPConfigPath directly with that same
+	// default value, since the flag default itself is exercised by the
+	// flag package, not this function.
+	got := resolveACPConfigPath(false, "/ignored/default/config.yaml", "/bots", "orchestrator")
+	want := filepath.Join("/bots", "orchestrator", "config.yaml")
+	if got != want {
+		t.Errorf("resolveACPConfigPath() = %q, want %q", got, want)
+	}
+}
+
 func writeACPTestPersona(t *testing.T, configYAML string) (configPath string) {
 	t.Helper()
 	dir := t.TempDir()

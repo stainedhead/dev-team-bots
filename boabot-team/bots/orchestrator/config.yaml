@@ -13,6 +13,14 @@ orchestrator:
   plugins:
     install_dir: /Users/iggybdda/Code/stainedhead/Golang/dev-team-bots/boabot/bin/plugins
 
+# Buzz (Nostr) workspace membership — see boabot/user-docs/Buzz-Adoption-Config.md.
+# The private key is NOT here: provision it with
+#   boabotctl secret set buzz_private_key --bot orchestrator
+buzz:
+  enabled: true
+  relay_url: wss://feral-sysd.communities.buzz.xyz
+  bot_name: orchestrator
+
 models:
   default: ollama-chat
   providers:

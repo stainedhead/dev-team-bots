@@ -30,7 +30,7 @@ Buzz workspaces support "custom harness" agents: `buzz-acp` owns a workspace ide
 
 **FR-002:** ACP mode implements the minimum ACP method set `buzz-acp` requires: session initialization, new-session, prompt/turn, cancellation. Exact method names/schema to be pinned during research against the ACP spec version `buzz-acp` implements.
 
-**FR-003:** ACP mode streams incremental turn output (text deltas, tool-call events) via ACP update notifications as the `Worker` produces them, without buffering the full response first.
+**FR-003 (refined during architecture — see architecture.md AD-3):** `domain.Worker.Execute` is blocking with no incremental output today, so true token-level streaming is out of scope for v1. ACP mode instead emits periodic `session/update` (`acp::thought`) keep-alive notifications while a turn is in flight, followed by one final `session/update` (`acp::stream`) carrying the complete output when the turn finishes. This is a **correctness requirement**, not cosmetic: `buzz-acp`'s `--idle-timeout` kills a turn after N seconds of stdout silence, so a long tool-using turn with zero interim output would be killed without the keep-alive.
 
 **FR-004:** ACP mode loads exactly one bot persona's `config.yaml` (same shape as native daemon mode) via a CLI flag, so persona behavior is identical across both modes.
 
@@ -52,19 +52,19 @@ Buzz workspaces support "custom harness" agents: `buzz-acp` owns a workspace ide
 
 ## System Architecture
 
-**Affected layers:**
-- `cmd/boabot/main.go` — new CLI subcommand/flag routing to ACP mode instead of `mgr.Run(ctx)`.
-- New infrastructure package, e.g. `internal/infrastructure/acp/` — ACP JSON-RPC-over-stdio server implementation (transport + method handlers).
-- `internal/domain/` — likely a new narrow interface if ACP-mode turn execution needs a seam distinct from `ChannelMonitor`/`MessageQueue` (native mode's task-intake abstraction assumes an async multi-bot queue, which doesn't fit ACP's synchronous per-session model). Exact seam is `[TBD]` pending architecture.md.
-- `internal/application/` — a use case wrapping a single `Worker` invocation per ACP turn, reusing existing `BudgetTracker`/autonomy-gate application logic rather than duplicating it.
+**Affected layers (confirmed — see architecture.md):**
+- `cmd/boabot/main.go` — new `acp` mode routing, reusing existing config/provider/worker-factory/budget wiring instead of duplicating it.
+- New infrastructure package `internal/infrastructure/acp/` — implements `coder/acp-go-sdk`'s `acp.Agent` interface as a thin adapter over the existing `Worker`/`BudgetTracker`. This is the **only** new package.
+- `internal/domain/` — **no changes.** `Worker`, `Task`, `TaskResult`, `WorkerFactory`, `BudgetTracker` are reused as-is (architecture.md AD-1) — deliberately avoids introducing a parallel domain seam that would risk ADR-B020's original "duplicated logic" problem.
+- `internal/application/` — no new use-case package for v1; `internal/infrastructure/acp` calls `WorkerFactory`/`BudgetTracker` directly, mirroring how `main.go` already wires native mode. Revisit only if a genuine cross-cutting concern emerges during implementation.
 
-**New/modified components:** ACP transport/protocol handler, ACP-mode wiring in `main.go`, likely a session-turn use case. No changes anticipated to `TeamManager`, native `ChannelMonitor` implementations, or `MessageQueue`.
+**New/modified components:** ACP transport/protocol adapter (`internal/infrastructure/acp/`), ACP-mode wiring in `main.go`. No changes to `TeamManager`, native `ChannelMonitor` implementations, or `MessageQueue`.
 
 ## Scope of Changes
 
-- **New files:** `internal/infrastructure/acp/` package (server, protocol types, tests); `internal/application/acp/` or similar use-case package (exact naming `[TBD]`).
-- **Modified files:** `cmd/boabot/main.go` (new mode routing); `docs/architectural-decision-record.md` (new/superseding ADR entry vs. ADR-B020); `docs/technical-details.md`, `docs/product-summary.md`, `README.md`.
-- **Dependencies:** Possible new Go module dependency for ACP/JSON-RPC — existence of a maintained Go ACP SDK is unconfirmed; see research.md.
+- **New files:** `internal/infrastructure/acp/` package — `agent.go`, `session.go`, `turn.go`, plus `*_test.go` (see architecture.md Component Architecture).
+- **Modified files:** `cmd/boabot/main.go` (new mode routing); `docs/architectural-decision-record.md` (new/superseding ADR entry vs. ADR-B020); `docs/technical-details.md`, `docs/product-summary.md`, `README.md`; `go.mod`/`go.sum`.
+- **Dependencies:** `github.com/coder/acp-go-sdk` (v0.13.5, Apache-2.0, actively maintained — confirmed via research.md) — no hand-rolled JSON-RPC transport needed.
 
 ## Breaking Changes
 
@@ -73,7 +73,7 @@ None anticipated. This is a new, additive, opt-in CLI mode. No changes to existi
 ## Success Criteria and Acceptance Criteria
 
 - [ ] `boabot acp -config <bot-config.yaml>` starts and responds correctly to ACP session initialization over stdio.
-- [ ] A prompt/turn request drives a real `Worker` execution and returns streamed updates plus a final result.
+- [ ] A prompt/turn request drives a real `Worker` execution, emits keep-alive `session/update` notifications throughout (verified to outpace `buzz-acp`'s idle-timeout on a multi-second turn), and returns a final result.
 - [ ] End-to-end smoke test against the real (or recorded) `buzz-acp` binary: a channel mention → `buzz-acp` spawns `boabot acp` → real reply → published to channel.
 - [ ] Native daemon-mode tests unaffected — full `go test ./...` passes with no regressions.
 - [ ] New ACP code meets 90%+ coverage on domain/application layers.
@@ -82,12 +82,13 @@ None anticipated. This is a new, additive, opt-in CLI mode. No changes to existi
 
 ## Risks and Mitigation
 
-| Risk | Mitigation |
-|------|------------|
-| No maintained Go ACP SDK exists | Research phase confirms availability; fall back to a minimal hand-rolled JSON-RPC 2.0 stdio implementation scoped to the required method set only. |
-| Re-introducing ADR-B020's control-inversion/duplicated-logic problems | FR-005 requires reuse of existing `BudgetTracker`/autonomy-gate logic; acceptance criteria require an explicit ADR entry documenting how this differs from the original rejected design. |
-| Unclear `buzz-acp` per-turn vs. per-session process lifecycle | Research phase inspects `buzz-acp` behavior/source (if available) and/or tests empirically against the bundled binary before finalizing FR-001/FR-007 design. |
-| Protocol version drift vs. `buzz-acp`'s actual expectations | Integration-test against the real bundled `buzz-acp` binary, not spec compliance alone. |
+| Risk | Status | Mitigation |
+|------|--------|------------|
+| No maintained Go ACP SDK exists | **Resolved** | `github.com/coder/acp-go-sdk` confirmed available and actively maintained (research.md). |
+| Re-introducing ADR-B020's control-inversion/duplicated-logic problems | Open — addressed by design | FR-005 + architecture.md AD-1 require reuse of existing `Worker`/`BudgetTracker`; acceptance criteria require an explicit ADR entry documenting how this differs from the original rejected design. |
+| Unclear `buzz-acp` per-turn vs. per-session process lifecycle | **Resolved** | Confirmed via `strings` on the real binary: persistent pooled processes, reused across turns (research.md, architecture.md AD-2). |
+| `Worker.Execute` has no incremental output — FR-003 as originally scoped isn't buildable as-is | **Resolved by re-scoping** | FR-003 refined to keep-alive + final-result model (architecture.md AD-3); true token streaming deferred as a future `Worker` interface enhancement, out of scope here. |
+| Protocol version drift vs. `buzz-acp`'s actual expectations | Open | Integration-test against the real bundled `buzz-acp` binary during implementation, not spec compliance alone. |
 
 ## Timeline and Milestones
 

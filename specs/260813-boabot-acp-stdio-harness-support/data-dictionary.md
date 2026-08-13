@@ -6,22 +6,30 @@
 
 Defines the domain entities, value objects, interfaces, and protocol message types introduced by BaoBot's ACP stdio harness mode.
 
-## Entities
+## Existing Types Reused (no changes)
 
-`[TBD]` — pending architecture.md. Likely candidates: an ACP session type wrapping a single persona's `Worker` invocation lifecycle.
+- `domain.Worker` — `Execute(ctx, Task) (TaskResult, error)`. **Blocking, single-shot — no incremental/streaming callback exists today.** This is a real constraint on FR-003 design; see architecture.md.
+- `domain.Task` — `{ID, BoardItemID, Instruction, Source, WorkDir}`. ACP mode populates `Instruction` from the ACP `session/prompt` content (already fully assembled by `buzz-acp` — see research.md), `Source` set to a constant identifying ACP-mode origin (e.g. `"acp"`), `WorkDir` from persona config same as native mode.
+- `domain.TaskResult` — `{TaskID, Output, Success, Err}`. `Output` maps to the final `acp::stream` update content; `Success`/`Err` map to `session/prompt`'s `stopReason` (`EndTurn` on success, else an error-mapped reason).
+- `domain.WorkerFactory` — `New() Worker`, used exactly as native daemon mode uses it, scoped to the single persona ACP mode loads.
+- `domain.BudgetTracker` — reused unchanged per FR-005; ACP mode's turn execution goes through the same `CheckAndRecordTokens`/`CheckAndRecordToolCall` calls as native mode.
 
-## Value Objects
+## New Types (infrastructure/acp package)
 
-`[TBD]`
+- **`Agent`** (implements `github.com/coder/acp-go-sdk`'s `acp.Agent` interface) — the ACP-side adapter. Holds a `domain.WorkerFactory`, the persona's `domain.BudgetTracker`, and session state.
+- **`session`** — internal struct tracking one ACP `sessionId`: created on `session/new`, holds a cancellation `context.CancelFunc` for in-flight turns (`session/cancel` target), and a turn counter (for `MaxTurnRequests` stop-reason mapping if a persona-level per-session turn cap is configured — `[TBD]` whether this is needed for v1 or deferred).
+- **Keep-alive ticker** — not a domain type, but a required behavior: since `Worker.Execute` is blocking with no incremental output, and `buzz-acp`'s `--idle-timeout` kills a turn after N seconds of *stdout silence*, ACP mode MUST emit periodic `session/update` notifications (e.g. an `acp::thought` "still working" ping) while a turn is in flight — mirroring the existing Slack-mode typing-indicator refresh pattern (`Buzz-Adoption-Config.md`'s 15s refresh) — or long-running turns will be killed by the host. This is a correctness requirement, not a cosmetic one.
 
-## Interfaces
+## ACP Protocol Types (from `coder/acp-go-sdk`, not redefined by BaoBot)
 
-`[TBD]` — likely a narrow domain-layer seam distinct from `ChannelMonitor`/`MessageQueue` (those model an async multi-bot queue; ACP mode is synchronous, single-persona, single-session). Exact shape pending architecture.md and research into `buzz-acp`'s per-turn/per-session behavior.
+Confirmed via research.md against the real `buzz-acp` binary: `initialize`/`initializeResult`, `authenticate`, `session/new`, `session/prompt` (response `stopReason` ∈ `{EndTurn, Cancelled, MaxTokens, MaxTurnRequests, Refusal}` + usage block), `session/update` (notification; kinds `acp::stream`, `acp::tool`, `acp::plan`, `acp::thought`, `acp::usage`), `session/cancel`, `session/request_permission`, `session/set_config_option`, `session/set_model`. BaoBot's ACP package uses the SDK's Go types directly for these — no BaoBot-side redefinition.
 
-## Enumerations
+## Mapping Table: ACP ↔ BaoBot domain
 
-`[TBD]` — e.g. ACP method/notification kinds, once confirmed against the protocol spec and `buzz-acp`'s actual usage.
-
-## API Request/Response Types
-
-`[TBD]` — ACP JSON-RPC request/response/notification payload shapes (initialize, session/new, session/prompt, session/update, session/cancel or equivalent), to be captured once confirmed during Phase 2 research.
+| ACP concept | BaoBot domain concept |
+|---|---|
+| `session/new` | Allocates a new `session` (no `domain.Task` yet — no work has been requested). |
+| `session/prompt` | Constructs one `domain.Task` from the prompt content, calls `WorkerFactory.New().Execute(ctx, task)` synchronously, emits keep-alive `session/update`s while it runs, maps the resulting `domain.TaskResult` to the ACP response. |
+| `session/cancel` | Cancels the `context.Context` passed to the in-flight `Worker.Execute` call for that session. |
+| `session/update` (`acp::stream`) | Final (v1) or incremental (future, if `Worker` gains streaming) `TaskResult.Output` content. |
+| `session/update` (`acp::usage`) | Sourced from `domain.BudgetTracker` state after the call, not from the ACP SDK's own accounting. |

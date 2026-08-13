@@ -23,6 +23,12 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		return sdk.PromptResponse{}, fmt.Errorf("acp: unknown session %q", params.SessionId)
 	}
 
+	// Serializes turn execution across every session on this Agent -- see
+	// the turnMu field doc comment on Agent for why this is required, not
+	// just a throughput choice.
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+
 	turnCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.mu.Lock()

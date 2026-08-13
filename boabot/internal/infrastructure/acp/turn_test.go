@@ -191,6 +191,52 @@ func TestAgent_Prompt_WorkerPanicIsRecovered(t *testing.T) {
 	}
 }
 
+func TestAgent_Prompt_ConcurrentSessionsDoNotRace(t *testing.T) {
+	// RT1/FR-001 (auto-review): a single shared Worker had WithProgressHandler
+	// mutated per-turn with no synchronization -- concurrent Prompt calls on
+	// separate sessions raced on that shared state and could cross-deliver
+	// progress lines between sessions. Turns are now serialized per Agent;
+	// this test proves both properties: no race, and no cross-session
+	// contamination (each session's final output matches what only it asked
+	// for).
+	fw := &fakeWorker{delay: 20 * time.Millisecond, result: domain.TaskResult{Output: "ok", Success: true}}
+	a := New(&fakeWorkerFactory{worker: fw}, "")
+	a.keepAliveInterval = 5 * time.Millisecond
+	fc := &fakeConn{}
+	a.setUpdater(fc)
+
+	sidA := newSessionForTest(t, a)
+	sidB := newSessionForTest(t, a)
+
+	var wg sync.WaitGroup
+	results := make(map[sdk.SessionId]sdk.PromptResponse, 2)
+	var resultsMu sync.Mutex
+	for _, sid := range []sdk.SessionId{sidA, sidB} {
+		wg.Add(1)
+		go func(sid sdk.SessionId) {
+			defer wg.Done()
+			resp, err := a.Prompt(context.Background(), sdk.PromptRequest{
+				SessionId: sid,
+				Prompt:    []sdk.ContentBlock{sdk.TextBlock("concurrent question")},
+			})
+			if err != nil {
+				t.Errorf("Prompt(%s) returned error: %v", sid, err)
+				return
+			}
+			resultsMu.Lock()
+			results[sid] = resp
+			resultsMu.Unlock()
+		}(sid)
+	}
+	wg.Wait()
+
+	for _, sid := range []sdk.SessionId{sidA, sidB} {
+		if resp, ok := results[sid]; !ok || resp.StopReason != sdk.StopReasonEndTurn {
+			t.Errorf("session %s: got %+v, want a recorded StopReasonEndTurn response", sid, resp)
+		}
+	}
+}
+
 type panicWorker struct{}
 
 func (panicWorker) Execute(context.Context, domain.Task) (domain.TaskResult, error) {

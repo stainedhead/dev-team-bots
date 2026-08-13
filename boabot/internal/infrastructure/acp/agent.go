@@ -45,6 +45,24 @@ type Agent struct {
 
 	keepAliveInterval time.Duration
 
+	// turnMu serializes turn execution across every session on this Agent.
+	// The underlying Worker is a single shared instance (see New), and
+	// Worker.WithProgressHandler mutates unsynchronized state on it per
+	// turn (application.ExecuteTaskUseCase.progressFn has no lock of its
+	// own -- safe in native mode only because WithProgressHandler is called
+	// once at startup, never per-task). Serializing here is the fix for a
+	// real, reproduced data race (auto-review FR-001) and, as a side
+	// effect, also closes FR-005's same-session-ID cancellation
+	// re-entrancy bug: a second overlapping Prompt call for any session
+	// simply waits for the first to fully finish (including its deferred
+	// session.cancel reset) before starting, so there is never a live
+	// cancel func to clobber. Residual limitation: session/cancel for a
+	// session whose turn hasn't started yet (still queued behind another
+	// session's in-flight turn) is a no-op, since that session's
+	// session.cancel isn't set until its turn actually begins -- not
+	// addressed here; no finding required it.
+	turnMu sync.Mutex
+
 	mu       sync.Mutex
 	sessions map[sdk.SessionId]*session
 }

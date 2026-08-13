@@ -18,6 +18,10 @@ Bots can additionally receive tasks from external channels. Each channel adapter
 
 Both channels dispatch onto the exact same task pipeline described below — a channel adapter only decides *when* to enqueue a task and *where* to post the reply; it never bypasses budget caps or autonomy gates.
 
+## ACP Stdio Harness Mode (`boabot -acp`)
+
+A third, structurally different way for a persona to join a Buzz workspace: instead of the persona owning its own Nostr relay identity (native Buzz channel monitor, above), `boabot -acp -config <persona.yaml>` runs as a single-persona ACP (Agent Client Protocol) agent over stdio, registrable as a `buzz-acp` custom harness (`--agent-command boabot --agent-args -acp`) — the same mechanism Buzz uses to run `goose`. `buzz-acp` owns the relay connection, identity, and event dispatch; `boabot -acp` only ever executes turns, using the exact same `Worker` execution engine (model provider, tools, memory, skills) native daemon mode uses. This is *not* a `ChannelMonitor` and does not go through `TeamManager` — one process serves exactly one persona, driven synchronously by whichever ACP host spawns it, rather than boabot's normal async multi-bot queue. See [`user-docs/ACP-Harness-Adoption-Config.md`](../user-docs/ACP-Harness-Adoption-Config.md) and `docs/architectural-decision-record.md`'s ADR-B026 for when to choose this over the native channel monitor.
+
 ## Worker Thread
 
 A worker goroutine is a self-contained agent harness. It receives a task and builds an initial context: SOUL.md, current todo list, skill index (name-and-summary stubs only), and the task definition. Additional material is loaded on demand via tool calls (progressive disclosure). A panic in a worker goroutine is recovered and logged — it does not affect the `TeamManager` goroutine or other workers.

@@ -16,6 +16,7 @@
 - Anthropic Claude is the primary model provider, configured via `ANTHROPIC_API_KEY`; AWS Bedrock is supported as an optional alternative model provider via `internal/infrastructure/aws/bedrock`.
 - Configuration loaded from per-bot `config.yaml` and a shared `team.yaml`; secrets resolve through an ordered `SecretStore` provider chain (environment variable → systemd credential → OS keystore → `~/.boabot/credentials` file) — no secrets are stored in config files.
 - Optionally joins a Slack workspace (Socket Mode) and/or a [Buzz](https://github.com/block/buzz) (Nostr-native) workspace as a first-class, cryptographically identified agent, responding to @mentions and DMs from either channel through the same dispatch, budget, and autonomy controls.
+- Alternatively, a single persona can be registered as a `buzz-acp` custom harness (`boabot -acp`), speaking the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio — a lighter-weight distribution path than the native Buzz integration, for the case where a persona shouldn't own its own relay identity/key. See `user-docs/ACP-Harness-Adoption-Config.md`.
 
 ## Orchestrator Mode
 

@@ -129,6 +129,35 @@ func TestAgent_Prompt_WorkerErrorMapsToRefusal(t *testing.T) {
 	}
 }
 
+func TestAgent_Prompt_EmitsVisibleMessageOnFailure(t *testing.T) {
+	// A failed turn must not be silent: without this, a human watching Buzz
+	// sees the keep-alive "thinking" indicator and then nothing at all, with
+	// no way to tell anything went wrong.
+	fw := &fakeWorker{err: errors.New("boom")}
+	a := New(&fakeWorkerFactory{worker: fw}, "")
+	fc := &fakeConn{}
+	a.setUpdater(fc)
+
+	sid := newSessionForTest(t, a)
+	if _, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("do the thing")},
+	}); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	found := false
+	for _, u := range fc.snapshot() {
+		if u.Update.AgentMessageChunk != nil && u.Update.AgentMessageChunk.Content.Text != nil &&
+			strings.Contains(u.Update.AgentMessageChunk.Content.Text.Text, "boom") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no session/update carried a visible error message mentioning the underlying failure")
+	}
+}
+
 func TestAgent_Prompt_KeepAliveDuringLongTurn(t *testing.T) {
 	// A turn slower than one keep-alive tick must still produce at least one
 	// keep-alive update before completion -- this is the idle-timeout

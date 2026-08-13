@@ -88,9 +88,13 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	if execErr != nil || !result.Success {
 		// A domain-level failure (including a recovered panic) ends the
 		// turn without a protocol-level error -- FR-008: never surface a
-		// raw crash to the host, always a well-formed ACP response.
+		// raw crash to the host, always a well-formed ACP response. It must
+		// not be silent, though: without an emitted message, a human
+		// watching the channel sees the keep-alive "thinking" indicator and
+		// then nothing at all, with no way to tell anything went wrong.
 		slog.Info("acp turn finished", "session_id", params.SessionId, "task_id", task.ID,
 			"stop_reason", sdk.StopReasonRefusal, "err", execErr)
+		a.emit(context.Background(), params.SessionId, sdk.UpdateAgentMessageText(turnFailureMessage(execErr, result)))
 		return sdk.PromptResponse{StopReason: sdk.StopReasonRefusal}, nil
 	}
 
@@ -104,6 +108,19 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		// the live task path in either mode to source it from -- corrected
 		// FR-005, see specs/archive/260813-boabot-acp-stdio-harness-support/spec.md.
 	}, nil
+}
+
+// turnFailureMessage builds a human-readable explanation for a failed turn,
+// preferring the returned error, then domain.TaskResult.Err, then a generic
+// fallback -- there is always something to show, never a bare silence.
+func turnFailureMessage(execErr error, result domain.TaskResult) string {
+	if execErr != nil {
+		return fmt.Sprintf("Sorry, I couldn't complete that: %v", execErr)
+	}
+	if result.Err != nil {
+		return fmt.Sprintf("Sorry, I couldn't complete that: %v", result.Err)
+	}
+	return "Sorry, I couldn't complete that task."
 }
 
 // runWorkerSafely recovers a panicking Worker so it surfaces as an error

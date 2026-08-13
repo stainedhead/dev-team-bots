@@ -53,6 +53,16 @@ jobs:
         # Phase D) and implementation-notes.md's Deviations from Plan.
         run: go test -race -gcflags=all=-d=checkptr=0 ./...
 
+      - name: ACP integration test
+        # Real end-to-end test of the ACP stdio harness (see
+        # cmd/boabot/acp_integration_test.go and ADR-B026): builds the
+        # actual boabot binary, spawns it as a real subprocess, and drives
+        # it over real stdio pipes with coder/acp-go-sdk's own client-side
+        # connection. Needs no network access or credentials -- a local
+        # mock HTTP server substitutes for the model provider -- so it's
+        # safe to run unconditionally in CI, not just manually.
+        run: go test -race -tags=integration -run TestACPIntegration ./cmd/boabot/...
+
       - name: Coverage check
         run: |
           CORE_PKGS=$(go list ./internal/domain/... ./internal/application/... | grep -v /mocks)

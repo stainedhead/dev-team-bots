@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.2.0...boabot/v0.3.0) (2026-08-13)
+
+
+### Features
+
+* **acp:** add turn-level logging; make the doc's log-line claim real (RT2/FR-002/FR-003) ([d7767ed](https://github.com/stainedhead/dev-team-bots/commit/d7767ed61c3a390f17581cf8030a10dbf34bb16a))
+* **acp:** implement ACP Agent adapter over the existing Worker (T2-T6) ([58752ec](https://github.com/stainedhead/dev-team-bots/commit/58752ec714f424c56fcefc532eda60012e8087ea))
+* **acp:** real CloseSession + bounded session map (RT5/FR-006) ([7e0703b](https://github.com/stainedhead/dev-team-bots/commit/7e0703bfae59cc988a2a4eca34c9364059aaf184))
+* **acp:** wire RulesTracker to match native mode's construction (RT3/FR-004) ([a5e2040](https://github.com/stainedhead/dev-team-bots/commit/a5e2040ed32efa95d2caf0645f0697fe93c23320))
+* BaoBot ACP stdio harness support ([f8c1048](https://github.com/stainedhead/dev-team-bots/commit/f8c1048b9574bfef9eb481bbf0cc814a5baed934))
+* **cmd:** wire boabot -acp mode into main.go (T1) ([7285a9e](https://github.com/stainedhead/dev-team-bots/commit/7285a9e95c554471676cb39245edbcdd9e75f027))
+
+
+### Bug Fixes
+
+* **acp:** serialize turn execution to fix a reproduced data race (RT1/FR-001) ([7907a68](https://github.com/stainedhead/dev-team-bots/commit/7907a68ee9c889f06877d859a926a8dae4616220))
+
 ## [0.2.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.1.0...boabot/v0.2.0) (2026-08-05)
 
 

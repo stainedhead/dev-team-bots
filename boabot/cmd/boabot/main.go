@@ -35,15 +35,15 @@ var version = "dev"
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to config file")
 	diagSecrets := flag.Bool("diag-secrets", false, "report which provider resolves each configured secret (name only, never the value), then exit")
+	acpMode := flag.Bool("acp", false, "serve a single persona (configPath) as an Agent Client Protocol agent over stdio, for registration as a buzz-acp custom harness, instead of running the normal multi-bot daemon")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("failed to load config", "path", *configPath, "err", err)
-		os.Exit(1)
-	}
-
 	if *diagSecrets {
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			slog.Error("failed to load config", "path", *configPath, "err", err)
+			os.Exit(1)
+		}
 		if err := runDiagSecrets(cfg, os.Stdout); err != nil {
 			slog.Error("secret diagnostics failed", "err", err)
 			os.Exit(1)
@@ -51,10 +51,27 @@ func main() {
 		return
 	}
 
-	slog.Info("starting boabot", "name", cfg.Bot.Name, "type", cfg.Bot.BotType, "version", version)
-
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	if *acpMode {
+		// ACP mode loads configPath itself (as a single persona's config,
+		// not team.yaml) and never touches TeamManager/ChannelMonitor --
+		// see cmd/boabot/acp.go and architecture.md.
+		if err := runACP(ctx, *configPath); err != nil {
+			slog.Error("acp agent exited with error", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("failed to load config", "path", *configPath, "err", err)
+		os.Exit(1)
+	}
+
+	slog.Info("starting boabot", "name", cfg.Bot.Name, "type", cfg.Bot.BotType, "version", version)
 
 	if err := run(ctx, cfg); err != nil {
 		slog.Error("agent exited with error", "err", err)

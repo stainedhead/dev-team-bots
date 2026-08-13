@@ -1,0 +1,103 @@
+# Spec: BaoBot ACP Stdio Harness Support
+
+**Created:** 2026-08-13
+**Status:** Draft
+
+## Executive Summary
+
+Give `boabot` a second, opt-in entrypoint that speaks the Agent Client Protocol (ACP) over stdin/stdout, so a single BaoBot persona can be registered as a `buzz-acp` custom harness — spawned per turn/session by Block's `buzz-acp` bridge the same way `goose acp` is today — without requiring that persona to own its own Buzz relay identity, private key, or always-on daemon process. This is additive: the native `internal/infrastructure/buzz` `ChannelMonitor` integration (merged PR #26) is untouched and remains the recommended path for always-on, BaoBot-owned team identities.
+
+## Problem Statement
+
+Buzz workspaces support "custom harness" agents: `buzz-acp` owns a workspace identity's relay connection and, per turn, spawns a configured `--agent-command`/`--agent-args` process that speaks ACP over stdio. BaoBot currently has no such mode — its only Buzz integration is the native `ChannelMonitor`, which requires a dedicated Nostr keypair and a persistent `boabot` daemon per persona. Operators who want the lighter-weight, `buzz-acp`-managed distribution model (as already used for `goose`, and presumably `claude`/`codex`, per the `.claude`/`.codex`/`.goose` directories Buzz Desktop scaffolds) have no way to register BaoBot that way today.
+
+## Goals / Non-Goals
+
+**Goals:**
+- `boabot` gains a CLI mode that speaks ACP over stdio sufficiently for `buzz-acp` to drive a full turn (initialize → prompt → streamed output → completion/cancellation).
+- Reuse BaoBot's existing single-turn execution engine (`Worker`/`WorkerFactory`, model provider abstraction, tool attention, skills, memory, `BudgetTracker`, calibrated-autonomy gates) — not a parallel runtime.
+- Fully additive: native `ChannelMonitor`/`TeamManager` daemon mode is unaffected.
+
+**Non-Goals:**
+- Replacing or deprecating the native Buzz `ChannelMonitor` integration.
+- Full ACP breadth (IDE/editor-oriented filesystem, LSP-style capabilities) — scope is limited to what `buzz-acp`'s bridge exercises.
+- Multi-bot orchestration within one `boabot acp` process — one process = one persona/config.
+- BaoBot managing any Buzz relay connection, private key, or event signing in ACP mode — exclusively `buzz-acp`'s responsibility.
+
+## User Requirements
+
+**FR-001:** `boabot` supports a new invocation mode (`boabot acp` or equivalent flag) that starts a single-persona ACP JSON-RPC server over stdin/stdout instead of the long-running `TeamManager.Run()` daemon loop.
+
+**FR-002:** ACP mode implements the minimum ACP method set `buzz-acp` requires: session initialization, new-session, prompt/turn, cancellation. Exact method names/schema to be pinned during research against the ACP spec version `buzz-acp` implements.
+
+**FR-003 (refined during architecture — see architecture.md AD-3):** `domain.Worker.Execute` is blocking with no incremental output today, so true token-level streaming is out of scope for v1. ACP mode instead emits periodic `session/update` (`acp::thought`) keep-alive notifications while a turn is in flight, followed by one final `session/update` (`acp::stream`) carrying the complete output when the turn finishes. This is a **correctness requirement**, not cosmetic: `buzz-acp`'s `--idle-timeout` kills a turn after N seconds of stdout silence, so a long tool-using turn with zero interim output would be killed without the keep-alive.
+
+**FR-004:** ACP mode loads exactly one bot persona's `config.yaml` (same shape as native daemon mode) via a CLI flag, so persona behavior is identical across both modes.
+
+**FR-005 (corrected twice during implementation — see implementation-notes.md):** `domain.BudgetTracker`, as `boabot/AGENTS.md` describes it, does not exist — but a real, fully-built, tested budget/cost enforcement system does: `internal/domain/cost.CostEnforcer` and `internal/application/cost.EnforceBudgetUseCase` (`CheckBudget`/`RecordSpend`/`DailySpend`/`MonthlySpend`). It is simply **not wired into the live task-execution path** — `grep` confirms `NewEnforceBudgetUseCase` is constructed nowhere outside its own package; `team_manager.go`'s `startBot` never calls into it. So "no budget enforcement happens today" is still operationally true, but "the capability doesn't exist in this codebase" was wrong and has been corrected everywhere it was stated. This is a **pre-existing gap in the whole system** (native daemon mode doesn't wire this either), not something ACP mode introduces or worsens. Wiring `EnforceBudgetUseCase` into either mode for the first time is a standalone piece of work outside this PRD's scope — doing it only for ACP mode would be asymmetric with native mode and is not a fix worth making unilaterally here. Scope for v1: `PromptResponse.Usage` is left `nil` (the ACP SDK marks it optional).
+
+**FR-006:** ACP mode never opens a Slack or Buzz relay connection and registers no `ChannelMonitor` — purely a local stdio protocol server.
+
+**FR-007:** `boabot acp` exits cleanly on stdin EOF or host shutdown, and respects mid-turn cancellation, compatible with `buzz-acp`'s `--idle-timeout`/`--max-turn-duration` controls.
+
+**FR-008:** Worker panics during an ACP turn are recovered and surfaced as protocol-compliant error responses, never a raw process crash.
+
+## Non-Functional Requirements
+
+- **Performance:** Streamed output begins before full-turn completion. `[TBD]` specific latency target.
+- **Reliability:** Turn execution is bound to a cancellable `context.Context` wired to ACP cancellation and `buzz-acp`'s max-turn-duration.
+- **Security:** No new secret categories; ACP mode never touches `BUZZ_PRIVATE_KEY`/Buzz secrets; still requires the persona's model-provider credentials.
+- **Observability:** Turn start/end, tool calls, and errors logged with the same structure as native daemon-mode task execution.
+- **Compatibility:** Verified against the actual bundled `buzz-acp` binary, not spec-reading alone.
+
+## System Architecture
+
+**Affected layers (confirmed — see architecture.md):**
+- `cmd/boabot/main.go` — new `acp` mode routing, reusing existing config/provider/worker-factory/budget wiring instead of duplicating it.
+- New infrastructure package `internal/infrastructure/acp/` — implements `coder/acp-go-sdk`'s `acp.Agent` interface as a thin adapter over the existing `Worker`/`BudgetTracker`. This is the **only** new package.
+- `internal/domain/` — **no changes.** `Worker`, `Task`, `TaskResult`, `WorkerFactory`, `BudgetTracker` are reused as-is (architecture.md AD-1) — deliberately avoids introducing a parallel domain seam that would risk ADR-B020's original "duplicated logic" problem.
+- `internal/application/` — no new use-case package for v1; `internal/infrastructure/acp` calls `WorkerFactory`/`BudgetTracker` directly, mirroring how `main.go` already wires native mode. Revisit only if a genuine cross-cutting concern emerges during implementation.
+
+**New/modified components:** ACP transport/protocol adapter (`internal/infrastructure/acp/`), ACP-mode wiring in `main.go`. No changes to `TeamManager`, native `ChannelMonitor` implementations, or `MessageQueue`.
+
+## Scope of Changes
+
+- **New files:** `internal/infrastructure/acp/` package — `agent.go`, `session.go`, `turn.go`, plus `*_test.go` (see architecture.md Component Architecture).
+- **Modified files:** `cmd/boabot/main.go` (new mode routing); `docs/architectural-decision-record.md` (new/superseding ADR entry vs. ADR-B020); `docs/technical-details.md`, `docs/product-summary.md`, `README.md`; `go.mod`/`go.sum`.
+- **Dependencies:** `github.com/coder/acp-go-sdk` (v0.13.5, Apache-2.0, actively maintained — confirmed via research.md) — no hand-rolled JSON-RPC transport needed.
+
+## Breaking Changes
+
+None anticipated. This is a new, additive, opt-in CLI mode. No changes to existing `config.yaml` schema, native daemon behavior, or public interfaces of existing packages.
+
+## Success Criteria and Acceptance Criteria
+
+- [ ] `boabot acp -config <bot-config.yaml>` starts and responds correctly to ACP session initialization over stdio.
+- [ ] A prompt/turn request drives a real `Worker` execution, emits keep-alive `session/update` notifications throughout (verified to outpace `buzz-acp`'s idle-timeout on a multi-second turn), and returns a final result.
+- [ ] End-to-end smoke test against the real (or recorded) `buzz-acp` binary: a channel mention → `buzz-acp` spawns `boabot acp` → real reply → published to channel.
+- [ ] Native daemon-mode tests unaffected — full `go test ./...` passes with no regressions.
+- [ ] New ACP code meets 90%+ coverage on domain/application layers.
+- [ ] New/superseding ADR entry added addressing ADR-B020's original objections directly.
+- [ ] `README.md`, `docs/technical-details.md`, `docs/product-summary.md` updated.
+
+## Risks and Mitigation
+
+| Risk | Status | Mitigation |
+|------|--------|------------|
+| No maintained Go ACP SDK exists | **Resolved** | `github.com/coder/acp-go-sdk` confirmed available and actively maintained (research.md). |
+| Re-introducing ADR-B020's control-inversion/duplicated-logic problems | Open — addressed by design | FR-005 + architecture.md AD-1 require reuse of existing `Worker`/`BudgetTracker`; acceptance criteria require an explicit ADR entry documenting how this differs from the original rejected design. |
+| Unclear `buzz-acp` per-turn vs. per-session process lifecycle | **Resolved** | Confirmed via `strings` on the real binary: persistent pooled processes, reused across turns (research.md, architecture.md AD-2). |
+| `Worker.Execute` has no incremental output — FR-003 as originally scoped isn't buildable as-is | **Resolved by re-scoping** | FR-003 refined to keep-alive + final-result model (architecture.md AD-3); true token streaming deferred as a future `Worker` interface enhancement, out of scope here. |
+| Protocol version drift vs. `buzz-acp`'s actual expectations | Open | Integration-test against the real bundled `buzz-acp` binary during implementation, not spec compliance alone. |
+
+## Timeline and Milestones
+
+`[TBD]` — to be filled in during plan.md / tasks.md breakdown.
+
+## References
+
+- PRD: `specs/260813-boabot-acp-stdio-harness-support/boabot-acp-stdio-harness-support-PRD.md`
+- Prior rejection: `boabot/docs/architectural-decision-record.md` (ADR-B020)
+- Prior evaluation: `specs/archive/260804-boabot-buzz-support/boabot-buzz-support-PRD.md` (Option B, NG1)
+- Native Buzz integration: `boabot/user-docs/Buzz-Adoption-Config.md`, `internal/infrastructure/buzz/`
+- ACP protocol: https://agentclientprotocol.com/

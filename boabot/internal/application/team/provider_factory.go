@@ -22,9 +22,12 @@ type localProviderFactory struct {
 	errs      map[string]error
 }
 
-// newLocalProviderFactory builds a provider for each entry in cfgs.
+// NewLocalProviderFactory builds a provider for each entry in cfgs.
 // Unsupported provider types are recorded as errors and returned by Get.
-func newLocalProviderFactory(cfgs []config.ProviderConfig) *localProviderFactory {
+// Exported so other packages needing the exact same provider-construction
+// behavior as native daemon mode (e.g. internal/infrastructure/acp) can
+// reuse it instead of duplicating buildProvider's switch.
+func NewLocalProviderFactory(cfgs []config.ProviderConfig) domain.ProviderFactory {
 	f := &localProviderFactory{
 		providers: make(map[string]domain.ModelProvider, len(cfgs)),
 		errs:      make(map[string]error, len(cfgs)),

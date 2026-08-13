@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.6
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/go-git/go-git/v5 v5.18.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0

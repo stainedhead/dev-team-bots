@@ -44,7 +44,7 @@ An independent code review of `feat/boabot-acp-stdio-harness` (the branch implem
 - **Concurrency:** All fixes touching `internal/infrastructure/acp` must pass `go test -race` including any new concurrent-session tests.
 - **Regression safety:** `go build ./...`, `go vet ./...`, `golangci-lint run ./...`, and the full `go test ./...` (plus `-race -gcflags=all=-d=checkptr=0 ./...` per the documented `fiatjaf.com/nostr` workaround) must remain green throughout.
 - **TDD:** Every fix follows red-green-refactor — a failing test first, per AGENTS.md.
-- **Process:** Use git worktrees for parallel fix workstreams where fixes are independent (FR-001/002/003 in `internal/infrastructure/acp` + docs are somewhat coupled; FR-004 through FR-009 are largely independent of each other and of FR-001-003). Conduct a brief code and design review as each fix completes before moving to the next. P0 items first, then P1, then P2.
+- **Process:** Use git worktrees for parallel fix workstreams where fixes are independent (FR-001/002/003 in `internal/infrastructure/acp` + docs are somewhat coupled; FR-004 through FR-009 are largely independent of each other and of FR-001-003). Independent fixes (e.g. FR-006/FR-007/FR-009, none of which touch the same code as FR-001 or each other) are good candidates for parallel agent teammates rather than serial execution — assign one teammate per independent fix, each in its own worktree, and merge back after each passes its own review. Conduct a brief code and design review as each fix completes before moving to the next. P0 items first, then P1, then P2.
 
 ## Acceptance Criteria
 
@@ -63,9 +63,9 @@ An independent code review of `feat/boabot-acp-stdio-harness` (the branch implem
 
 | Item | Type | Notes |
 |------|------|-------|
-| FR-001's fix approach | Risk | Multiple valid fixes exist (per-turn `Worker`, a mutex serializing turns per `Agent`, or session-scoped progress routing) — pick based on which preserves `buzz-acp`'s expected concurrent-session behavior best; document the choice in implementation-notes.md. |
+| FR-001's fix approach | Risk | See Open Questions below — three valid options with different tradeoffs, not predetermined. |
 | FR-004's scope | Risk | If `WithRulesTracker` wiring surfaces further native-mode parity gaps not caught by this review, treat as a new finding for a future pass, not scope creep into this fix cycle. |
 
 ## Open Questions
 
-- None outstanding — all findings above are actionable as stated.
+- **FR-001's fix approach is a genuine decision, not predetermined.** Three valid options exist: (a) resolve a fresh `Worker` per turn instead of once per `Agent` (if the factory can cheaply produce independent instances without duplicating expensive setup like memory/vector store construction), (b) serialize turns per `Agent` with a mutex so only one turn executes at a time regardless of session count, or (c) make progress-handler routing session-scoped (e.g. a `map[sessionId]chan string` the shared worker's single handler dispatches into, keyed by the task ID each `Execute` call already carries). Option (c) preserves true cross-session concurrency (multiple turns executing at once) at the cost of more plumbing; option (b) is simplest but serializes what could otherwise be concurrent turns; option (a) depends on whether `Worker` construction is cheap enough to repeat per turn. Whoever implements FR-001 should pick one, document the choice and why in `implementation-notes.md`, and flag it back to the user if the tradeoff (especially (b)'s serialization) has product implications worth a second opinion.

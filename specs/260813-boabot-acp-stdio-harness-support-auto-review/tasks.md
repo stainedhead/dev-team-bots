@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-0/9 tasks complete.
+8/8 tasks complete (9 findings, RT2 covers both FR-002 and FR-003).
 
 ## P0 — Blockers
 

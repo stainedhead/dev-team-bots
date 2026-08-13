@@ -21,6 +21,12 @@ import (
 // documented in Buzz-Adoption-Config.md.
 const defaultKeepAliveInterval = 10 * time.Second
 
+// defaultMaxSessions bounds Agent.sessions for a long-lived, pooled process
+// (auto-review RT5/FR-006) -- a safety net for hosts that never call
+// session/close, on top of CloseSession now being a real removal path.
+// Generous: this is a leak backstop, not a real per-deployment limit.
+const defaultMaxSessions = 10_000
+
 // updater is the minimal surface of *sdk.AgentSideConnection this package
 // needs, kept as an interface so tests can substitute a fake instead of
 // standing up a real stdio transport.
@@ -63,8 +69,11 @@ type Agent struct {
 	// addressed here; no finding required it.
 	turnMu sync.Mutex
 
-	mu       sync.Mutex
-	sessions map[sdk.SessionId]*session
+	maxSessions int
+
+	mu           sync.Mutex
+	sessions     map[sdk.SessionId]*session
+	sessionOrder []sdk.SessionId // insertion order, for FIFO eviction once maxSessions is exceeded
 }
 
 var _ sdk.Agent = (*Agent)(nil)
@@ -80,6 +89,12 @@ func WithKeepAliveInterval(d time.Duration) Option {
 	return func(a *Agent) { a.keepAliveInterval = d }
 }
 
+// WithMaxSessions overrides defaultMaxSessions -- mainly useful for tests,
+// but also a legitimate knob for a deployment that wants a tighter bound.
+func WithMaxSessions(n int) Option {
+	return func(a *Agent) { a.maxSessions = n }
+}
+
 // New constructs an Agent backed by the Worker workerFactory.New() returns.
 // workDir is applied to every domain.Task built from a session/prompt call,
 // matching the persona's configured work directory.
@@ -88,6 +103,7 @@ func New(workerFactory domain.WorkerFactory, workDir string, opts ...Option) *Ag
 		worker:            workerFactory.New(),
 		workDir:           workDir,
 		keepAliveInterval: defaultKeepAliveInterval,
+		maxSessions:       defaultMaxSessions,
 		sessions:          make(map[sdk.SessionId]*session),
 	}
 	for _, opt := range opts {
@@ -118,6 +134,13 @@ func (a *Agent) Initialize(_ context.Context, _ sdk.InitializeRequest) (sdk.Init
 	return sdk.InitializeResponse{
 		ProtocolVersion: sdk.ProtocolVersionNumber,
 		AuthMethods:     []sdk.AuthMethod{},
+		AgentCapabilities: sdk.AgentCapabilities{
+			SessionCapabilities: sdk.SessionCapabilities{
+				// CloseSession is a real removal path, not a MethodNotFound
+				// stub -- RT5/FR-006, auto-review.
+				Close: &sdk.SessionCloseCapabilities{},
+			},
+		},
 	}, nil
 }
 
@@ -130,12 +153,28 @@ func (a *Agent) Authenticate(_ context.Context, _ sdk.AuthenticateRequest) (sdk.
 }
 
 // NewSession implements sdk.Agent, allocating per-session turn-cancellation
-// state (session.go).
+// state (session.go). Evicts the oldest session(s) first if maxSessions
+// would otherwise be exceeded (RT5/FR-006, auto-review).
 func (a *Agent) NewSession(_ context.Context, _ sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
 	sid := sdk.SessionId(randomID())
 	a.mu.Lock()
 	a.sessions[sid] = &session{}
+	a.sessionOrder = append(a.sessionOrder, sid)
+	var evicted []context.CancelFunc
+	for len(a.sessionOrder) > a.maxSessions {
+		oldest := a.sessionOrder[0]
+		a.sessionOrder = a.sessionOrder[1:]
+		if s, ok := a.sessions[oldest]; ok {
+			if s.cancel != nil {
+				evicted = append(evicted, s.cancel)
+			}
+			delete(a.sessions, oldest)
+		}
+	}
 	a.mu.Unlock()
+	for _, cancel := range evicted {
+		cancel()
+	}
 	return sdk.NewSessionResponse{SessionId: sid}, nil
 }
 
@@ -169,17 +208,38 @@ func (a *Agent) SetSessionMode(_ context.Context, _ sdk.SetSessionModeRequest) (
 	return sdk.SetSessionModeResponse{}, nil
 }
 
-// Logout, CloseSession, ListSessions, and ResumeSession are optional
-// capabilities Initialize does not advertise support for -- returning
-// MethodNotFound matches coder/acp-go-sdk's own reference example/agent's
-// treatment of unsupported optional methods.
+// Logout, ListSessions, and ResumeSession are optional capabilities
+// Initialize does not advertise support for -- returning MethodNotFound
+// matches coder/acp-go-sdk's own reference example/agent's treatment of
+// unsupported optional methods. CloseSession, below, IS supported for real.
 
 func (a *Agent) Logout(_ context.Context, _ sdk.LogoutRequest) (sdk.LogoutResponse, error) {
 	return sdk.LogoutResponse{}, sdk.NewMethodNotFound(sdk.AgentMethodLogout)
 }
 
-func (a *Agent) CloseSession(_ context.Context, _ sdk.CloseSessionRequest) (sdk.CloseSessionResponse, error) {
-	return sdk.CloseSessionResponse{}, sdk.NewMethodNotFound(sdk.AgentMethodSessionClose)
+// CloseSession implements sdk.Agent for real (RT5/FR-006, auto-review) --
+// advertised via AgentCapabilities.SessionCapabilities.Close in Initialize.
+// Per the ACP spec, closing must first cancel any ongoing work for the
+// session (treated as if session/cancel was called) and then free its
+// resources.
+func (a *Agent) CloseSession(_ context.Context, params sdk.CloseSessionRequest) (sdk.CloseSessionResponse, error) {
+	a.mu.Lock()
+	var cancel context.CancelFunc
+	if s, ok := a.sessions[params.SessionId]; ok {
+		cancel = s.cancel
+	}
+	delete(a.sessions, params.SessionId)
+	for i, sid := range a.sessionOrder {
+		if sid == params.SessionId {
+			a.sessionOrder = append(a.sessionOrder[:i], a.sessionOrder[i+1:]...)
+			break
+		}
+	}
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return sdk.CloseSessionResponse{}, nil
 }
 
 func (a *Agent) ListSessions(_ context.Context, _ sdk.ListSessionsRequest) (sdk.ListSessionsResponse, error) {

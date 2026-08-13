@@ -749,7 +749,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	}
 
 	// Wire domain.ModelProvider.
-	pf := newLocalProviderFactory(botCfg.Models.Providers)
+	pf := NewLocalProviderFactory(botCfg.Models.Providers)
 	providerName := botCfg.Models.Default
 	provider, err := pf.Get(providerName)
 	if err != nil {

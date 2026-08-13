@@ -15,11 +15,11 @@ import (
 // ProviderFactoryForTest wraps the unexported localProviderFactory so that
 // tests in the team_test package can exercise it.
 type ProviderFactoryForTest struct {
-	f *localProviderFactory
+	f domain.ProviderFactory
 }
 
 func NewProviderFactoryForTest(cfgs []config.ProviderConfig) *ProviderFactoryForTest {
-	return &ProviderFactoryForTest{f: newLocalProviderFactory(cfgs)}
+	return &ProviderFactoryForTest{f: NewLocalProviderFactory(cfgs)}
 }
 
 func (p *ProviderFactoryForTest) Get(name string) (domain.ModelProvider, error) {

@@ -36,7 +36,9 @@ No `buzz:` block is needed or used in this mode — `buzz-acp` handles the relay
 
 ## Step 2 — Register `boabot` as `buzz-acp`'s agent command
 
-Point `buzz-acp` at the `boabot` binary instead of its default (`goose`):
+Point `buzz-acp` at the `boabot` binary instead of its default (`goose`). Two ways to select which persona `-acp` mode loads:
+
+**By full path (`-config`)** — points directly at one persona's `config.yaml`:
 
 ```bash
 buzz-acp \
@@ -45,6 +47,20 @@ buzz-acp \
   --agent-command boabot \
   --agent-args "-acp,-config,/path/to/boabot-team/bots/tech-lead/config.yaml"
 ```
+
+**By name (`-agent`/`-bots-dir`)** — if you already have a `boabot-team/bots/` checkout, select a persona by name instead of typing out the full path:
+
+```bash
+buzz-acp \
+  --relay-url <your-relay-url> \
+  --private-key <your-agent's-nsec-or-hex> \
+  --agent-command boabot \
+  --agent-args "-acp,-agent,tech-lead,-bots-dir,/path/to/boabot-team/bots"
+```
+
+`-agent` defaults to `orchestrator` if omitted. `-bots-dir` defaults to `<directory-the-boabot-binary-lives-in>/bots` (the same convention native daemon mode's own `team.bots_dir` default uses) — pass it explicitly when your `boabot-team/bots/` checkout isn't in that location, which is the common case for a source checkout like this one. Running **more than one bot** this way means running **one `buzz-acp` process per bot**, each with its own Nostr identity/private key and its own `-agent`/`-bots-dir` (or `-config`) pointed at that persona — there is no single flag that lets one `buzz-acp` process route to multiple different bots dynamically.
+
+If both `-config` and `-agent` are passed, `-config` wins — it's treated as an explicit override.
 
 (Exact flag syntax for `--agent-args` — comma-separated vs. repeated flag — depends on your installed `buzz-acp` version; run `buzz-acp --help` to confirm.) The private key and relay URL here are `buzz-acp`'s own — this is the persona identity *Buzz* manages, entirely separate from `boabot`'s own `buzz_private_key` secret used by the native channel monitor (Step 1 above never touches this).
 

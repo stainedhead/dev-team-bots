@@ -140,10 +140,33 @@ func writePersona(t *testing.T, endpoint string) string {
 	return configPath
 }
 
-func startACPSubprocess(t *testing.T, bin, configPath string, keepAlive time.Duration) (*testACPClient, *sdk.ClientSideConnection, func()) {
+// writePersonaUnderBotsDir writes <root>/<agent>/{config.yaml,SOUL.md}
+// pointing at the mock OpenAI server, returning root (the -bots-dir value).
+func writePersonaUnderBotsDir(t *testing.T, agent, endpoint string) (botsDir string) {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, agent)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are a test persona."), 0o600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+	yaml := "bot:\n  name: " + agent + "\n  type: " + agent + "\nmodels:\n  default: mock\n  providers:\n    - name: mock\n      type: openai\n      model_id: mock-model\n      endpoint: " + endpoint + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+	return root
+}
+
+// startACPSubprocess spawns `bin -acp <args...>` and wires a real ACP
+// client-side connection to it. args carries whatever persona-selection
+// flags the caller wants (-config <path>, or -agent <name> -bots-dir <dir>).
+func startACPSubprocess(t *testing.T, bin string, args []string, keepAlive time.Duration) (*testACPClient, *sdk.ClientSideConnection, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, bin, "-acp", "-config", configPath)
+	cmdArgs := append([]string{"-acp"}, args...)
+	cmd := exec.CommandContext(ctx, bin, cmdArgs...)
 	cmd.Env = append(os.Environ(), "BOABOT_ACP_KEEPALIVE_INTERVAL="+keepAlive.String())
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
@@ -175,7 +198,7 @@ func TestACPIntegration_FullTurn_AgainstRealBinary(t *testing.T) {
 	defer server.Close()
 	configPath := writePersona(t, server.URL)
 
-	client, conn, cleanup := startACPSubprocess(t, bin, configPath, time.Second)
+	client, conn, cleanup := startACPSubprocess(t, bin, []string{"-config", configPath}, time.Second)
 	defer cleanup()
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 15*time.Second)
@@ -217,6 +240,76 @@ func TestACPIntegration_FullTurn_AgainstRealBinary(t *testing.T) {
 	}
 	if !found {
 		t.Error("no session/update carried the final output text over the real subprocess boundary")
+	}
+}
+
+func TestACPIntegration_AgentFlag_ResolvesPersonaUnderBotsDir(t *testing.T) {
+	// Proves `boabot -acp -agent <name> -bots-dir <dir>` resolves and loads
+	// the persona the same way an explicit -config path does, against the
+	// real compiled binary -- not just resolveACPConfigPath's unit-tested
+	// logic in isolation.
+	bin := buildBoabotBinary(t)
+	server := mockOpenAIServer(t, "resolved via -agent", 0)
+	defer server.Close()
+	botsDir := writePersonaUnderBotsDir(t, "tech-lead", server.URL)
+
+	_, conn, cleanup := startACPSubprocess(t, bin, []string{"-agent", "tech-lead", "-bots-dir", botsDir}, time.Second)
+	defer cleanup()
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelCtx()
+
+	if _, err := conn.Initialize(ctx, sdk.InitializeRequest{ProtocolVersion: sdk.ProtocolVersionNumber}); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	sess, err := conn.NewSession(ctx, sdk.NewSessionRequest{Cwd: os.TempDir(), McpServers: []sdk.McpServer{}})
+	if err != nil {
+		t.Fatalf("session/new: %v", err)
+	}
+
+	promptResp, err := conn.Prompt(ctx, sdk.PromptRequest{
+		SessionId: sess.SessionId,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("who are you?")},
+	})
+	if err != nil {
+		t.Fatalf("session/prompt: %v", err)
+	}
+	if promptResp.StopReason != sdk.StopReasonEndTurn {
+		t.Errorf("StopReason = %v, want %v (persona resolution likely failed)", promptResp.StopReason, sdk.StopReasonEndTurn)
+	}
+}
+
+func TestACPIntegration_AgentFlag_DefaultsToOrchestrator(t *testing.T) {
+	// Proves the -agent default ("orchestrator") is honored end-to-end when
+	// neither -agent nor -config is passed at all.
+	bin := buildBoabotBinary(t)
+	server := mockOpenAIServer(t, "default agent responded", 0)
+	defer server.Close()
+	botsDir := writePersonaUnderBotsDir(t, "orchestrator", server.URL)
+
+	_, conn, cleanup := startACPSubprocess(t, bin, []string{"-bots-dir", botsDir}, time.Second)
+	defer cleanup()
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelCtx()
+
+	if _, err := conn.Initialize(ctx, sdk.InitializeRequest{ProtocolVersion: sdk.ProtocolVersionNumber}); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	sess, err := conn.NewSession(ctx, sdk.NewSessionRequest{Cwd: os.TempDir(), McpServers: []sdk.McpServer{}})
+	if err != nil {
+		t.Fatalf("session/new: %v", err)
+	}
+
+	promptResp, err := conn.Prompt(ctx, sdk.PromptRequest{
+		SessionId: sess.SessionId,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("who are you?")},
+	})
+	if err != nil {
+		t.Fatalf("session/prompt: %v", err)
+	}
+	if promptResp.StopReason != sdk.StopReasonEndTurn {
+		t.Errorf("StopReason = %v, want %v (default-to-orchestrator resolution likely failed)", promptResp.StopReason, sdk.StopReasonEndTurn)
 	}
 }
 
@@ -287,7 +380,7 @@ func TestACPIntegration_SlowTurn_KeepAliveFiresOverRealSubprocess(t *testing.T) 
 	defer server.Close()
 	configPath := writePersona(t, server.URL)
 
-	client, conn, cleanup := startACPSubprocess(t, bin, configPath, 50*time.Millisecond)
+	client, conn, cleanup := startACPSubprocess(t, bin, []string{"-config", configPath}, 50*time.Millisecond)
 	defer cleanup()
 
 	ctx, cancelCtx := context.WithTimeout(context.Background(), 15*time.Second)

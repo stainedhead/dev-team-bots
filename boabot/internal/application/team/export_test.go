@@ -44,6 +44,13 @@ func (tm *TeamManager) ResolvedInstallDir() string {
 	return tm.resolvedInstallDir
 }
 
+// Monitors returns tm.monitors for use in tests that need to assert how many
+// domain.ChannelMonitor instances Run() ended up registering (e.g. the
+// per-persona Buzz-monitor-builder loop's nil-skip isolation behavior).
+func (tm *TeamManager) Monitors() []domain.ChannelMonitor {
+	return tm.monitors
+}
+
 // BotEntryForTest re-exports BotEntry so package-level tests can construct values.
 type BotEntryForTest = BotEntry
 

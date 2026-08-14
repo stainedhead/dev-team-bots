@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
@@ -65,7 +66,7 @@ func NewBuzzTaskBridgeWithDedupTTL(dispatcher domain.ScheduledTaskDispatcher, bo
 
 // Dispatch implements domain.BuzzTaskDispatcher.
 func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error) {
-	if eventID != "" && b.markSeenIfDuplicate(eventID) {
+	if eventID != "" && b.isDuplicateEvent(eventID) {
 		return domain.BuzzDispatchResult{Duplicate: true}, nil
 	}
 
@@ -77,6 +78,10 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 	if b.chatMgr != nil {
 		resp, handled, task, err := b.chatMgr.DetectAndHandle(ctx, threadID, instruction, domain.DirectTaskSourceBuzz)
 		if err != nil {
+			// Dedup state must only be recorded once the dispatch actually
+			// succeeds (FR-101): do NOT mark eventID seen here, so a relay
+			// reconnect/replay of this same event is retried, not silently
+			// dropped as a false "duplicate".
 			return domain.BuzzDispatchResult{}, fmt.Errorf("buzz task bridge: schedule detection: %w", err)
 		}
 		if handled {
@@ -86,6 +91,7 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 				result.AwaitResult = task.Status == domain.DirectTaskStatusRunning
 				b.createBoardItem(ctx, botName, instruction, *task)
 			}
+			b.markEventSeen(eventID)
 			return result, nil
 		}
 	}
@@ -95,9 +101,14 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 	task, err := b.dispatcher.DispatchWithSchedule(ctx, botName, instruction,
 		domain.Schedule{Mode: domain.ScheduleModeASAP}, domain.DirectTaskSourceBuzz, threadID, "", "")
 	if err != nil {
+		// See the FR-101 comment above: a failed dispatch must not mark
+		// eventID as seen, or a later relay replay of the identical event
+		// would be misreported as a harmless duplicate and the instruction
+		// permanently lost.
 		return domain.BuzzDispatchResult{}, fmt.Errorf("buzz task bridge: dispatch: %w", err)
 	}
 	b.createBoardItem(ctx, botName, instruction, task)
+	b.markEventSeen(eventID)
 
 	return domain.BuzzDispatchResult{
 		TaskID:      task.ID,
@@ -132,11 +143,12 @@ func (b *BuzzTaskBridge) createBoardItem(ctx context.Context, botName, instructi
 	}
 }
 
-// markSeenIfDuplicate returns true (and does not mark) if eventID was
-// already seen within the dedup TTL; otherwise it marks eventID seen now
-// and returns false. Also lazily evicts expired entries so the map does not
-// grow unbounded across a long-running process.
-func (b *BuzzTaskBridge) markSeenIfDuplicate(eventID string) bool {
+// isDuplicateEvent reports whether eventID was already marked seen within
+// the dedup TTL, without marking it itself (FR-101: dedup state must only be
+// recorded once a dispatch actually succeeds -- see markEventSeen). Also
+// lazily evicts expired entries on every call so the map does not grow
+// unbounded across a long-running process.
+func (b *BuzzTaskBridge) isDuplicateEvent(eventID string) bool {
 	now := time.Now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -152,19 +164,36 @@ func (b *BuzzTaskBridge) markSeenIfDuplicate(eventID string) bool {
 			return true
 		}
 	}
-	b.seenEvts[eventID] = now
 	return false
 }
 
+// markEventSeen records eventID as seen now. Callers must only invoke this
+// after the dispatch it guards has actually succeeded (FR-101) -- marking on
+// a failed attempt would cause a later relay reconnect/replay of the same
+// event ID to be misreported as a harmless duplicate and the instruction
+// permanently lost. A no-op for an empty eventID (some callers, e.g. tests,
+// dispatch without one).
+func (b *BuzzTaskBridge) markEventSeen(eventID string) {
+	if eventID == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.seenEvts[eventID] = time.Now()
+}
+
 // buzzBoardTitle derives a short board-item title from the (already
-// screened) Buzz instruction text.
+// screened) Buzz instruction text. Truncation is rune-safe (FR-102): slicing
+// by byte index can split a multi-byte UTF-8 rune in half, corrupting the
+// persisted WorkItem.Title.
 func buzzBoardTitle(instruction string) string {
 	title := strings.TrimSpace(instruction)
 	if title == "" {
 		return "Buzz task"
 	}
-	if len(title) > boardItemTitleMaxLen {
-		title = strings.TrimSpace(title[:boardItemTitleMaxLen]) + "…"
+	if utf8.RuneCountInString(title) > boardItemTitleMaxLen {
+		runes := []rune(title)
+		title = strings.TrimSpace(string(runes[:boardItemTitleMaxLen])) + "…"
 	}
 	return title
 }

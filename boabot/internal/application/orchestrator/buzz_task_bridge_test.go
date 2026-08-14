@@ -3,9 +3,11 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -229,6 +231,43 @@ func TestBuzzTaskBridge_Dispatch_DuplicateEventID_NoOp(t *testing.T) {
 	}
 }
 
+// TestBuzzTaskBridge_Dispatch_FailedDispatch_ThenRedelivery_IsRetriedNotDuplicate
+// is the FR-101 regression test: a dispatch attempt that fails must NOT mark
+// its event ID as "seen". A relay reconnect/replay redelivering that same
+// event ID afterward must be retried -- not silently reported Duplicate and
+// dropped. Before the fix, markSeenIfDuplicate marked the event ID seen
+// unconditionally on first delivery, regardless of whether the dispatch that
+// followed succeeded.
+func TestBuzzTaskBridge_Dispatch_FailedDispatch_ThenRedelivery_IsRetriedNotDuplicate(t *testing.T) {
+	d := &fakeScheduledDispatcher{err: errors.New("transient failure")}
+	board := &fakeBuzzBoardStore{}
+	ctm := orchestrator.NewChatTaskManager(d)
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, ctm)
+	ctx := context.Background()
+
+	_, err := bridge.Dispatch(ctx, "architect", "evt-replay", "chan-1", "please review the PR")
+	if err == nil {
+		t.Fatal("expected the first dispatch attempt to fail")
+	}
+
+	// Relay reconnect/replay redelivers the identical event ID. The transient
+	// failure is now gone.
+	d.err = nil
+	r2, err := bridge.Dispatch(ctx, "architect", "evt-replay", "chan-1", "please review the PR")
+	if err != nil {
+		t.Fatalf("unexpected error on redelivered dispatch: %v", err)
+	}
+	if r2.Duplicate {
+		t.Fatal("expected the redelivered event ID (whose first attempt failed) to be retried, not reported Duplicate")
+	}
+	if r2.TaskID != "test-task-id" {
+		t.Fatalf("expected the retried dispatch to succeed and return a TaskID, got %q", r2.TaskID)
+	}
+	if len(d.calls) != 2 {
+		t.Fatalf("expected 2 dispatch calls (failed attempt + successful retry), got %d", len(d.calls))
+	}
+}
+
 // --- Dispatch: errors ---------------------------------------------------------
 
 func TestBuzzTaskBridge_Dispatch_DispatcherError_Propagates(t *testing.T) {
@@ -255,6 +294,84 @@ func TestBuzzTaskBridge_Dispatch_BoardCreateError_NonFatal(t *testing.T) {
 	}
 	if result.TaskID != "test-task-id" {
 		t.Fatalf("expected the task to still be reported dispatched, got TaskID=%q", result.TaskID)
+	}
+}
+
+// --- buzzBoardTitle (via Dispatch's created board item): rune-safe truncation -
+
+// TestBuzzTaskBridge_Dispatch_BoardTitle_MidRuneTruncation_IsValidUTF8 is the
+// FR-102 regression test: an instruction whose 80-byte mark falls mid-rune
+// (multi-byte UTF-8, e.g. Japanese text after 78 ASCII bytes) must not
+// produce an invalid-UTF-8 board item title. Before the fix, buzzBoardTitle
+// sliced by byte index (title[:80]), which can split a multi-byte rune in
+// half.
+func TestBuzzTaskBridge_Dispatch_BoardTitle_MidRuneTruncation_IsValidUTF8(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	ctm := orchestrator.NewChatTaskManager(d)
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, ctm)
+
+	instr := strings.Repeat("a", 78) + "日本語のテキストです"
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "chan-1", instr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	created := board.getCreated()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 board item, got %d", len(created))
+	}
+	title := created[0].Title
+	if !utf8.ValidString(title) {
+		t.Fatalf("expected a valid UTF-8 title, got invalid: %q", title)
+	}
+	if title == instr {
+		t.Fatal("expected the title to actually be truncated for this input")
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_BoardTitle_EmptyInstruction_FallsBackToDefault
+// verifies the empty-instruction fallback ("Buzz task") still works after
+// the rune-safe truncation fix.
+func TestBuzzTaskBridge_Dispatch_BoardTitle_EmptyInstruction_FallsBackToDefault(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	ctm := orchestrator.NewChatTaskManager(d)
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, ctm)
+
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "chan-1", "   "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	created := board.getCreated()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 board item, got %d", len(created))
+	}
+	if created[0].Title != "Buzz task" {
+		t.Fatalf("expected fallback title %q, got %q", "Buzz task", created[0].Title)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_BoardTitle_ASCIIOnly_TruncationUnchanged verifies
+// the rune-safe fix does not change truncation behaviour for pure-ASCII
+// instructions.
+func TestBuzzTaskBridge_Dispatch_BoardTitle_ASCIIOnly_TruncationUnchanged(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	ctm := orchestrator.NewChatTaskManager(d)
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, ctm)
+
+	instr := strings.Repeat("a", 100)
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "chan-1", instr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	created := board.getCreated()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 board item, got %d", len(created))
+	}
+	want := strings.Repeat("a", 80) + "…"
+	if created[0].Title != want {
+		t.Fatalf("expected ASCII truncation to be unchanged: got %q, want %q", created[0].Title, want)
 	}
 }
 

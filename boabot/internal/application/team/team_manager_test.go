@@ -412,6 +412,87 @@ func TestTeamManager_BuzzMonitorBuilder_OnePersonaConfigLoadFails_OthersUnaffect
 	}
 }
 
+// TestTeamManager_BuzzMonitorBuilder_NilForOnePersona_SkippedOthersUnaffected
+// is the FR-103 regression test: it exercises the exact edge case spec.md's
+// Edge Cases section names by name -- "incomplete Buzz config fails in
+// isolation" -- at its real production integration point, Run()'s
+// `if mon == nil { continue }` branch (previously 0 coverage per the review
+// PRD). The builder mock returns nil for one Buzz-enabled persona (mirroring
+// buildBuzzMonitor's own "log and return nil" pattern for a bad/missing
+// key) and a real monitor for another; the nil persona must be skipped
+// without affecting the other persona's monitor or Run()'s overall success.
+func TestTeamManager_BuzzMonitorBuilder_NilForOnePersona_SkippedOthersUnaffected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := writeTeamYAML(t, dir, []team.BotEntryForTest{
+		{Name: "orchestrator", Type: "orchestrator", Enabled: true, Orchestrator: true},
+		{Name: "architect", Type: "architect", Enabled: true},
+		{Name: "implementer", Type: "implementer", Enabled: true},
+	})
+
+	botsDir := t.TempDir()
+	mgr, _, _, _ := newTestManagerWithBotsDir(t, teamFile, botsDir)
+	writeBotConfig(t, botsDir, "orchestrator", false, "")
+	// Both personas are Buzz-enabled; "architect"'s monitor construction
+	// will fail (builder returns nil), "implementer"'s must still succeed.
+	writeBotConfig(t, botsDir, "architect", true, "architect")
+	writeBotConfig(t, botsDir, "implementer", true, "implementer")
+
+	team.SetBotRunner(mgr, func(ctx context.Context, _ team.BotEntryForTest, _ string) error {
+		<-ctx.Done()
+		return nil
+	})
+
+	var built []string
+	var mu sync.Mutex
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+		mu.Lock()
+		built = append(built, entry.Name)
+		mu.Unlock()
+		if entry.Name == "architect" {
+			// Simulates buildBuzzMonitor's own "bad/missing config" isolation
+			// pattern: log and return nil rather than erroring the whole loop.
+			return nil
+		}
+		return &mocks.ChannelMonitor{}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- mgr.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(built)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within 1s after context cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 2 {
+		t.Fatalf("expected the builder to be invoked for both Buzz-enabled personas, got %v", built)
+	}
+	if len(mgr.Monitors()) != 1 {
+		t.Fatalf("expected exactly 1 registered monitor (the nil-returning persona must be skipped), got %d", len(mgr.Monitors()))
+	}
+}
+
 // TestTeamManager_BotPanicIsRestarted verifies that a panicking bot is
 // restarted by runBotWithRestart.
 func TestTeamManager_BotPanicIsRestarted(t *testing.T) {

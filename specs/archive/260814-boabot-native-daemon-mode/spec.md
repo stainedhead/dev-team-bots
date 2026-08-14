@@ -88,6 +88,7 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 ## Breaking Changes
 
 - None expected to public config schema — `buzz:` block already exists per-bot in `config.yaml`; this generalizes wiring to honor it for N bots instead of 1. `cfg.Buzz` (process-wide) usage in `main.go` is replaced/extended — confirm no other caller depends on the single-identity path before removing it (research phase).
+- **Behavior change for existing deployments with `models.chat_provider` configured:** implementing this feature's `TaskPayload.Source` field also fixes a pre-existing dead-code bug in `execute_task.go`'s `isConversationalSource` check (`task.Source == "chat"` was never reachable — nothing ever set `Message.From`/`Task.Source` to `"chat"`). As a side effect, **operators with `models.chat_provider` configured will see it apply to chat-sourced tasks for the first time after this upgrade** — previously inert for every existing web-UI chat deployment, not just new Buzz ones. This can mean a different model, cost profile, or latency for chat-sourced tasks post-upgrade. See `docs/architectural-decision-record.md` (ADR-B028) and `user-docs/Claude-Adoption-Config.md`/`user-docs/OpenAI-Adoption-Config.md` for the `chat_provider` config detail; this note exists so the behavior change is visible from this changelog-relevant Breaking Changes section too, not just the ADR.
 
 ## Success Criteria and Acceptance Criteria
 

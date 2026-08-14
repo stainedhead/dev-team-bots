@@ -8,9 +8,9 @@ This is a Go monorepo containing three modules that together form the BaoBot coo
 
 | Directory | Purpose |
 |---|---|
-| `boabot/` | Agent runtime binary — shared container image deployed to ECS |
+| `boabot/` | Agent runtime binary — runs as a local single-process daemon, no AWS services required |
 | `boabotctl/` | Operator CLI — distributed to users via GitHub Releases |
-| `boabot-team/` | Bot personalities, configurations, and per-bot CDK infrastructure |
+| `boabot-team/` | Bot personalities and configurations |
 
 Refer to `PRODUCT.md` at the root for the full product specification.
 
@@ -78,11 +78,11 @@ GitHub Actions workflows live exclusively at `.github/workflows/` in the reposit
 
 | Workflow | Triggers on | Pipeline |
 |---|---|---|
-| `boabot.yml` | `boabot/**` | test → lint → build → containerise → CDK deploy (shared stack); on merge to `main`, also: release-please → release binary (macOS arm64) |
+| `boabot.yml` | `boabot/**` | test → lint → build; on merge to `main`, also: release-please → release binary (macOS arm64) |
 | `boabotctl.yml` | `boabotctl/**` | test → lint → build; release on tag `boabotctl/v*` |
-| `boabot-team.yml` | `boabot-team/**` | CDK test → CDK diff (PR) → CDK deploy (per-bot stack) |
+| `boabot-team.yml` | `boabot-team/**` | validate (YAML-lint `team.yaml` and bot configs) |
 
-Containerise and deploy steps run on merge to `main` only. PRs run test, lint, build, and CDK diff.
+`boabot` runs as a local single-process daemon (see `boabot/AGENTS.md`) — there is no container image, ECS deployment, or CDK infrastructure for it or for `boabot-team/`. Release-please and the binary release step run on merge to `main` only. PRs run test, lint, and build.
 
 ### boabot release automation
 

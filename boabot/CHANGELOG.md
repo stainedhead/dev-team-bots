@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.4.0...boabot/v0.4.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **acp:** auto-publish a turn's reply when the model never calls buzz messages send ([0683394](https://github.com/stainedhead/dev-team-bots/commit/068339431df45e37af70db925aba06913ffb67b6))
+* **acp:** auto-publish reply when model skips buzz messages send ([ee1ad4b](https://github.com/stainedhead/dev-team-bots/commit/ee1ad4b47b465f623cdb3293c8bcf5c584f78c4d))
+
 ## [0.4.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.3.0...boabot/v0.4.0) (2026-08-13)
 
 

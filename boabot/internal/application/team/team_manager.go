@@ -147,8 +147,52 @@ type TeamManager struct {
 	resolvedCLIRunner domain.CLIAgentRunner
 	resolvedCLITools  config.CLIToolsConfig
 
+	// buzzMonitorBuilder, when set via WithBuzzMonitorBuilder, is invoked
+	// once per Buzz-enabled team.yaml entry from Run() -- see
+	// BuzzMonitorBuilder's doc comment for why this indirection exists
+	// instead of main.go calling WithChannelMonitor directly.
+	buzzMonitorBuilder BuzzMonitorBuilder
+
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
+}
+
+// BuzzMonitorBuilder constructs a per-persona Buzz domain.ChannelMonitor
+// from that persona's own loaded config.Config, given the shared
+// Dispatcher/BoardStore the Buzz -> Dispatcher/DirectTaskStore/BoardStore
+// bridge needs (FR-005). Run() invokes it once per Buzz-enabled team.yaml
+// entry, after tm.sharedTaskStore/tm.sharedBoard exist and before any bot
+// goroutine starts -- constructing domain.ChannelMonitor instances any
+// later would race every bot's synchronous snapshot of tm.monitors (see
+// specs/260814-boabot-native-daemon-mode/implementation-notes.md).
+//
+// Returning nil skips that persona's monitor -- mirrors
+// buildBuzzMonitor's own "log and return nil" isolation pattern (FR-036
+// extended to N monitors), so one persona's bad/incomplete Buzz config
+// never blocks another persona's monitor, the orchestrator UI, or the rest
+// of the process.
+//
+// cmd/boabot/main.go owns the actual buzzinfra.Monitor construction and
+// supplies this function; this type only carries that construction step's
+// *signature* (domain/config/queue types only) so internal/application/team
+// stays free of an internal/infrastructure/buzz import, matching
+// WithChannelMonitor's own doc comment (FR-034).
+type BuzzMonitorBuilder func(
+	ctx context.Context,
+	entry BotEntry,
+	botCfg config.Config,
+	router *queue.Router,
+	dispatcher domain.ScheduledTaskDispatcher,
+	board domain.BoardStore,
+	shutdownFn func(context.Context) error,
+) domain.ChannelMonitor
+
+// WithBuzzMonitorBuilder registers the per-persona Buzz monitor factory
+// hook. Call this before Run(); Run() invokes it once per Buzz-enabled
+// team.yaml entry.
+func (tm *TeamManager) WithBuzzMonitorBuilder(b BuzzMonitorBuilder) *TeamManager {
+	tm.buzzMonitorBuilder = b
+	return tm
 }
 
 // dynamicBot holds the lifecycle handles for a pool-spawned tech-lead goroutine.
@@ -174,6 +218,19 @@ func resolveTaskOutcome(output string, success bool) (domain.DirectTaskStatus, d
 		return domain.DirectTaskStatusSucceeded, domain.WorkItemStatusDone
 	}
 	return domain.DirectTaskStatusErrored, domain.WorkItemStatusErrored
+}
+
+// boardTracksSource reports whether a DirectTask with this source has a
+// corresponding board item (ActiveTaskID-linked) whose status the shared
+// TaskResultHandler (startBot) should update on completion. Board-sourced
+// tasks always do (BoardDispatch pre-creates the item); Buzz-sourced tasks
+// do too, since BuzzTaskBridge (P2.2) creates a board item alongside every
+// Buzz-dispatched DirectTask (spec.md FR-005's "creates a corresponding
+// Kanban board item ... updates as the task progresses and reflects
+// completion when done"). Chat- and operator-sourced tasks have no board
+// item to update.
+func boardTracksSource(source domain.DirectTaskSource) bool {
+	return source == domain.DirectTaskSourceBoard || source == domain.DirectTaskSourceBuzz
 }
 
 // NewTeamManager constructs a TeamManager.  Call Run to start the team.
@@ -223,7 +280,7 @@ func forwardResultToMonitors(ctx context.Context, monitors []domain.ChannelMonit
 // then calls Shutdown.  It returns an error if the team file cannot be parsed
 // or if no bots could be started.
 func (tm *TeamManager) Run(ctx context.Context) error {
-	teamCfg, err := loadTeamConfig(tm.cfg.TeamFilePath)
+	teamCfg, err := LoadTeamConfig(tm.cfg.TeamFilePath)
 	if err != nil {
 		return fmt.Errorf("team: load team config: %w", err)
 	}
@@ -251,11 +308,22 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	// Pre-register all enabled bots with the Router so channels exist before
 	// any bot tries to send to another. Also snapshot the list so startBot can
 	// seed the orchestrator control plane with every team member.
+	//
+	// Lookup-before-Register (rather than an unconditional Register) makes
+	// this idempotent: cmd/boabot/main.go's Slack/Buzz wiring registers a
+	// bot's queue before calling Run(), and a bot's own slack.bot_name/
+	// buzz.bot_name is conventionally identical to its own team.yaml entry
+	// name -- an unconditional Register here would panic
+	// (Router.Register panics on a duplicate name) for that
+	// (default/common) configuration. See
+	// specs/260814-boabot-native-daemon-mode/implementation-notes.md.
 	for _, e := range teamCfg.Team {
 		if !e.Enabled {
 			continue
 		}
-		tm.router.Register(e.Name, 0)
+		if _, exists := tm.router.Lookup(e.Name); !exists {
+			tm.router.Register(e.Name, 0)
+		}
 		tm.teamEntries = append(tm.teamEntries, e)
 	}
 
@@ -271,6 +339,52 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 
 	// Store orchestratorName for use by pool spawn callbacks.
 	tm.orchestratorName = orchestratorName
+
+	// Wire per-persona Buzz monitors (spec.md FR-001/FR-005). Must happen
+	// here -- after the shared stores above exist, before any bot goroutine
+	// starts below -- see BuzzMonitorBuilder's doc comment for why.
+	if tm.buzzMonitorBuilder != nil {
+		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(tm.sharedTaskStore, tm.router.QueueFor(orchestratorName), orchestratorName)
+		// buzzBotNamesUsed tracks which buzz.bot_name values this loop has
+		// already claimed a monitor for. Two team.yaml personas whose own
+		// config.yaml both set the same buzz.bot_name (a misconfiguration,
+		// spec.md's "duplicate bot-name registration" edge case) would
+		// otherwise both resolve to the same router queue via
+		// buildBuzzMonitor's Lookup-before-Register logic -- silently
+		// sharing one queue between two distinct Buzz identities instead of
+		// failing loudly. Detecting it here, before the second persona's
+		// builder call, keeps that persona's failure isolated (logged,
+		// skipped) without panicking the process or affecting any other
+		// persona/bot.
+		buzzBotNamesUsed := make(map[string]bool)
+		for _, e := range teamCfg.Team {
+			if !e.Enabled {
+				continue
+			}
+			botCfgPath := filepath.Join(tm.cfg.BotsDir, e.Type, "config.yaml")
+			botCfg, cfgErr := config.Load(botCfgPath)
+			if cfgErr != nil {
+				slog.Error("buzz monitor: failed to load bot config for this persona; skipping its Buzz monitor (other personas/bots unaffected)",
+					"bot", e.Name, "err", cfgErr)
+				continue
+			}
+			if !botCfg.Buzz.Enabled {
+				continue
+			}
+			if buzzBotNamesUsed[botCfg.Buzz.BotName] {
+				slog.Error("buzz monitor: buzz.bot_name already claimed by an earlier persona in this team.yaml; refusing to activate a second Buzz identity for the same bot name (would silently share its queue) -- fix the duplicate bot_name in one persona's config.yaml",
+					"persona", e.Name, "buzz_bot_name", botCfg.Buzz.BotName)
+				continue
+			}
+			mon := tm.buzzMonitorBuilder(ctx, e, botCfg, tm.router, dispatcher, tm.sharedBoard, tm.Shutdown)
+			if mon == nil {
+				continue
+			}
+			tm.WithChannelMonitor(mon)
+			buzzBotNamesUsed[botCfg.Buzz.BotName] = true
+			slog.Info("buzz relay monitor configured", "bot", botCfg.Buzz.BotName, "relay_url", botCfg.Buzz.RelayURL, "persona", e.Name)
+		}
+	}
 
 	// Pre-resolve plugin store before launching goroutines (eliminates data race).
 	// Scan for the orchestrator entry and load its config to find the plugin install dir.
@@ -911,8 +1025,8 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 				task.Output = p.Output
 				_, _ = sharedTasks.Update(handlerCtx, task)
 
-				// If this was a board-triggered task, update the board item status.
-				if task.Source == domain.DirectTaskSourceBoard && tm.sharedBoard != nil {
+				// If this task has a corresponding board item, update its status.
+				if boardTracksSource(task.Source) && tm.sharedBoard != nil {
 					items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
 					if listErr == nil && len(items) > 0 {
 						item := items[0]
@@ -1083,7 +1197,7 @@ func (tm *TeamManager) isTechLeadRunning(_ context.Context, instanceName string)
 	}
 }
 
-func loadTeamConfig(path string) (TeamConfig, error) {
+func LoadTeamConfig(path string) (TeamConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return TeamConfig{}, fmt.Errorf("read %s: %w", path, err)

@@ -492,3 +492,38 @@ func (m *RegistryManager) FetchClaudePlugin(ctx context.Context, manifestURL str
 	}
 	return domain.PluginManifest{}, nil, nil
 }
+
+// --- BuzzTaskDispatcher ---
+
+type BuzzDispatchCall struct {
+	BotName     string
+	EventID     string
+	ThreadID    string
+	Instruction string
+}
+
+type BuzzTaskDispatcher struct {
+	DispatchFn func(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error)
+
+	mu    sync.Mutex
+	Calls []BuzzDispatchCall
+}
+
+func (m *BuzzTaskDispatcher) Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error) {
+	m.mu.Lock()
+	m.Calls = append(m.Calls, BuzzDispatchCall{BotName: botName, EventID: eventID, ThreadID: threadID, Instruction: instruction})
+	fn := m.DispatchFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, botName, eventID, threadID, instruction)
+	}
+	return domain.BuzzDispatchResult{}, nil
+}
+
+func (m *BuzzTaskDispatcher) GetCalls() []BuzzDispatchCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]BuzzDispatchCall, len(m.Calls))
+	copy(out, m.Calls)
+	return out
+}

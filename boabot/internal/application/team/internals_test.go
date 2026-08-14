@@ -59,7 +59,7 @@ func TestLoadTeamConfig_InvalidYAML(t *testing.T) {
 	if err := os.WriteFile(badYAML, []byte("team: [\ninvalid"), 0600); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
-	_, err := loadTeamConfig(badYAML)
+	_, err := LoadTeamConfig(badYAML)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML, got nil")
 	}
@@ -77,7 +77,7 @@ func TestLoadTeamConfig_ValidYAML(t *testing.T) {
 	if err := os.WriteFile(p, []byte(yamlContent), 0600); err != nil {
 		t.Fatalf("write team.yaml: %v", err)
 	}
-	tc, err := loadTeamConfig(p)
+	tc, err := LoadTeamConfig(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,6 +140,34 @@ func TestResolveTaskOutcome(t *testing.T) {
 			}
 			if gotBoard != tc.wantBoard {
 				t.Errorf("board status: got %q, want %q", gotBoard, tc.wantBoard)
+			}
+		})
+	}
+}
+
+// ── boardTracksSource ─────────────────────────────────────────────────────────
+
+// TestBoardTracksSource verifies which DirectTaskSource values have a
+// corresponding board item whose status the shared TaskResultHandler
+// updates on completion (startBot's inline closure, team_manager.go).
+// Board-sourced tasks always do (BoardDispatch); Buzz-sourced tasks now do
+// too, since BuzzTaskBridge (P2.2) creates a board item alongside every
+// Buzz-dispatched DirectTask (FR-005's "updates as the task progresses ...
+// reflects completion"). Chat/operator-sourced tasks have no board item.
+func TestBoardTracksSource(t *testing.T) {
+	tests := []struct {
+		source domain.DirectTaskSource
+		want   bool
+	}{
+		{domain.DirectTaskSourceBoard, true},
+		{domain.DirectTaskSourceBuzz, true},
+		{domain.DirectTaskSourceChat, false},
+		{domain.DirectTaskSourceOperator, false},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.source), func(t *testing.T) {
+			if got := boardTracksSource(tc.source); got != tc.want {
+				t.Errorf("boardTracksSource(%q) = %v, want %v", tc.source, got, tc.want)
 			}
 		})
 	}

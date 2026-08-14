@@ -177,6 +177,17 @@ type Monitor struct {
 	shutdown ShutdownFunc
 	logger   *slog.Logger
 
+	// taskDispatcher, when set via WithTaskDispatcher, routes dispatch()
+	// through the orchestrator's Dispatcher/DirectTaskStore/BoardStore
+	// bridge (domain.BuzzTaskDispatcher, backed by
+	// internal/application/orchestrator.BuzzTaskBridge in production)
+	// instead of building/sending the task message directly. nil preserves
+	// the pre-existing direct queue.Send behaviour unchanged -- production
+	// wiring (cmd/boabot/main.go) always sets this, so the direct-queue
+	// path only remains live for tests that predate the bridge and any
+	// caller that intentionally omits it.
+	taskDispatcher domain.BuzzTaskDispatcher
+
 	newTicker func(time.Duration) ticker
 
 	mu      sync.Mutex
@@ -210,6 +221,15 @@ func WithShutdownFunc(fn ShutdownFunc) MonitorOption {
 // WithMonitorLogger overrides Monitor's logger (defaults to slog.Default()).
 func WithMonitorLogger(l *slog.Logger) MonitorOption {
 	return func(m *Monitor) { m.logger = l }
+}
+
+// WithTaskDispatcher wires dispatch() through a domain.BuzzTaskDispatcher
+// bridge (P2.2's replacement of the direct queue.Send/Worker.Execute path)
+// instead of building/sending the task message directly. See the
+// taskDispatcher field's doc comment for why this is an option rather than
+// a required constructor parameter.
+func WithTaskDispatcher(td domain.BuzzTaskDispatcher) MonitorOption {
+	return func(m *Monitor) { m.taskDispatcher = td }
 }
 
 // withTicker overrides the ticker constructor used by the presence (F14)
@@ -381,7 +401,10 @@ func (m *Monitor) handleShutdownCommand(ctx context.Context, evt domain.Event) {
 // dispatch implements F11 (mint task ID, enqueue) with F8's ordinary
 // author gate, F6's root-event resolution, F7's screening on the
 // instruction text, F13's structured logging, and F16's typing-indicator
-// kick-off.
+// kick-off. When a BuzzTaskDispatcher is wired (WithTaskDispatcher), it
+// routes through that bridge (P2.2) instead of building/sending the task
+// message directly; otherwise it falls back to the pre-existing direct
+// queue.Send behaviour.
 func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.Event) {
 	text := strings.TrimSpace(evt.Content)
 	if text == "" {
@@ -409,6 +432,17 @@ func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.E
 	root := rootEventID(evt)
 	instruction := m.screen("message_body", text)
 
+	if m.taskDispatcher != nil {
+		m.dispatchViaBridge(ctx, channelUUID, root, evt, instruction)
+		return
+	}
+	m.dispatchDirect(ctx, channelUUID, root, evt, instruction)
+}
+
+// dispatchDirect is the pre-existing direct queue.Send/Worker.Execute
+// dispatch path (P1.0's trace target), preserved as the fallback for when
+// no BuzzTaskDispatcher is wired.
+func (m *Monitor) dispatchDirect(ctx context.Context, channelUUID, root string, evt domain.Event, instruction string) {
 	taskID := uuid.New().String()
 	payload := domain.TaskPayload{TaskID: taskID, Instruction: instruction}
 	payloadBytes, err := json.Marshal(payload)
@@ -431,6 +465,52 @@ func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.E
 		return
 	}
 
+	m.awaitResult(ctx, taskID, channelUUID, root)
+
+	m.logger.Info("buzz monitor: dispatched task",
+		"task_id", taskID, "agent_pubkey", m.cfg.AgentPubKeyHex, "relay_url", m.cfg.RelayURL,
+		"channel", channelUUID, "event_id", evt.ID)
+}
+
+// dispatchViaBridge routes an inbound mention through the
+// domain.BuzzTaskDispatcher bridge (P2.2), replacing the direct
+// queue.Send/Worker.Execute call dispatchDirect makes. The bridge decides
+// immediate-vs-scheduled dispatch (reusing ChatTaskManager's NL-scheduling
+// flow), creates the DirectTask/board item, and reports back what the
+// monitor should do next: publish an immediate text reply (a confirmation
+// prompt, cancellation ack, or scheduled-task ack), await the dispatched
+// task's own result, both, or neither (a relay-replay duplicate).
+func (m *Monitor) dispatchViaBridge(ctx context.Context, channelUUID, root string, evt domain.Event, instruction string) {
+	result, err := m.taskDispatcher.Dispatch(ctx, m.cfg.BotName, evt.ID, channelUUID, instruction)
+	if err != nil {
+		m.logger.Error("buzz monitor: task dispatcher bridge failed",
+			"err", err, "channel", channelUUID, "event_id", evt.ID)
+		return
+	}
+	if result.Duplicate {
+		m.logger.Info("buzz monitor: duplicate event, skipping re-dispatch",
+			"channel", channelUUID, "event_id", evt.ID)
+		return
+	}
+
+	if result.Reply != "" {
+		_ = m.publishReply(ctx, channelUUID, root, result.Reply) // logged internally on failure
+	}
+
+	if result.TaskID != "" && result.AwaitResult {
+		m.awaitResult(ctx, result.TaskID, channelUUID, root)
+	}
+
+	m.logger.Info("buzz monitor: dispatched task via bridge",
+		"task_id", result.TaskID, "agent_pubkey", m.cfg.AgentPubKeyHex, "relay_url", m.cfg.RelayURL,
+		"channel", channelUUID, "event_id", evt.ID, "await_result", result.AwaitResult)
+}
+
+// awaitResult registers taskID in the pending map and starts F16's
+// typing-indicator loop, so a later HandleResult call for this taskID
+// publishes a threaded reply -- shared by both the direct and bridge
+// dispatch paths.
+func (m *Monitor) awaitResult(ctx context.Context, taskID, channelUUID, root string) {
 	typingDone := make(chan struct{})
 	m.mu.Lock()
 	m.pending[taskID] = &pendingEntry{
@@ -439,11 +519,30 @@ func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.E
 	}
 	m.mu.Unlock()
 
-	m.logger.Info("buzz monitor: dispatched task",
-		"task_id", taskID, "agent_pubkey", m.cfg.AgentPubKeyHex, "relay_url", m.cfg.RelayURL,
-		"channel", channelUUID, "event_id", evt.ID)
-
 	go m.typingLoop(ctx, channelUUID, typingDone)
+}
+
+// publishReply publishes content as a threaded kind:9 reply into
+// channelUUID, rooted at root, and returns any publish error (logged by the
+// caller with its own context -- e.g. HandleResult's FR-032 task_id-tagged
+// success log). Shared by HandleResult (F12, an eventual task result) and
+// dispatchViaBridge (an immediate bridge-produced Reply, e.g. a scheduling
+// confirmation prompt) so both use identical event tagging.
+func (m *Monitor) publishReply(ctx context.Context, channelUUID, root, content string) error {
+	reply := domain.Event{
+		Kind: kindChannelMessage,
+		Tags: [][]string{
+			{"h", channelUUID},
+			{"e", root, "", "root"},
+		},
+		Content: content,
+	}
+	if err := m.relay.Publish(ctx, reply); err != nil {
+		m.logger.Warn("buzz monitor: publish reply failed",
+			"channel", channelUUID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // HandleResult implements domain.ChannelMonitor / F12. Unmatched task IDs
@@ -474,18 +573,10 @@ func (m *Monitor) HandleResult(ctx context.Context, p domain.TaskResultPayload) 
 		output = "(no output)"
 	}
 
-	reply := domain.Event{
-		Kind: kindChannelMessage,
-		Tags: [][]string{
-			{"h", entry.target.channelUUID},
-			{"e", entry.target.rootEventID, "", "root"},
-		},
-		Content: output,
-	}
-
-	if err := m.relay.Publish(ctx, reply); err != nil {
-		m.logger.Warn("buzz monitor: publish reply failed",
-			"task_id", p.TaskID, "channel", entry.target.channelUUID, "err", err)
+	if err := m.publishReply(ctx, entry.target.channelUUID, entry.target.rootEventID, output); err != nil {
+		// publishReply already logged the failure; add the task_id this
+		// call site alone knows, for FR-032 traceability.
+		m.logger.Warn("buzz monitor: task result publish failed", "task_id", p.TaskID)
 		return
 	}
 

@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-3/9 tasks complete: P1.0 (traced), P2.1 (`DirectTaskSourceBuzz` + provider check), P2.2 (`BuzzTaskBridge` use case). P1.1/P1.2 (main.go/team_manager.go wiring) in progress next.
+9/9 implementation tasks complete (P1.0 through P3.2). P4.1 (provision two personas' real `buzz_private_key` secrets and verify against a live Buzz relay) is explicitly out of scope for this implementation pass per the orchestrator's instructions — it is an operator/live-demo action requiring real secrets, not code.
 
 ## Phase 1 — Per-bot Buzz wiring
 

@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/mocks"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bus"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 )
@@ -40,17 +44,27 @@ func writeTeamYAML(t *testing.T, dir string, entries []team.BotEntryForTest) str
 
 func newTestManager(t *testing.T, teamFilePath string) (*team.TeamManager, *queue.Router, *bus.Bus) {
 	t.Helper()
+	mgr, r, b, _ := newTestManagerWithBotsDir(t, teamFilePath, t.TempDir())
+	return mgr, r, b
+}
+
+// newTestManagerWithBotsDir is like newTestManager but lets the caller
+// supply (and know) the BotsDir, for tests that need to write real
+// <botsDir>/<type>/config.yaml fixtures (e.g. the Buzz monitor builder
+// loop, which calls config.Load directly inside Run()).
+func newTestManagerWithBotsDir(t *testing.T, teamFilePath, botsDir string) (*team.TeamManager, *queue.Router, *bus.Bus, string) {
+	t.Helper()
 	r := queue.NewRouter()
 	b := bus.New()
 	cfg := team.ManagerConfig{
 		TeamFilePath:    teamFilePath,
-		BotsDir:         t.TempDir(),
+		BotsDir:         botsDir,
 		MemoryRoot:      t.TempDir(),
 		RestartDelay:    10 * time.Millisecond,
 		MaxRestartDelay: 50 * time.Millisecond,
 	}
 	mgr := team.NewTeamManager(cfg, r, b)
-	return mgr, r, b
+	return mgr, r, b, botsDir
 }
 
 // TestTeamManager_NoEnabledBots verifies that Run returns an error when
@@ -127,6 +141,274 @@ func TestTeamManager_CleanShutdown(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Run did not return within 1s after context cancel")
+	}
+}
+
+// TestTeamManager_Run_PreRegisteredBotName_NoDuplicatePanic verifies that
+// Run()'s pre-registration loop tolerates a bot name that is already
+// registered on the Router before Run() is called -- mirroring
+// cmd/boabot/main.go's Slack/Buzz wiring, which registers a bot's queue
+// before mgr.Run(ctx) executes. Router.Register panics on a duplicate name;
+// without this fix, any Buzz/Slack-enabled bot that is also an enabled
+// team.yaml member (the conventional/default setup -- see
+// specs/260814-boabot-native-daemon-mode/implementation-notes.md) would
+// crash the whole process at startup instead of starting cleanly.
+func TestTeamManager_Run_PreRegisteredBotName_NoDuplicatePanic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := writeTeamYAML(t, dir, []team.BotEntryForTest{
+		{Name: "architect", Type: "architect", Enabled: true, Orchestrator: true},
+	})
+
+	mgr, r, _ := newTestManager(t, teamFile)
+	// Simulate main.go's pre-Run() Buzz/Slack wiring already having
+	// registered this bot's queue before Run() is called.
+	r.Register("architect", 0)
+
+	team.SetBotRunner(mgr, func(ctx context.Context, _ team.BotEntryForTest, _ string) error {
+		<-ctx.Done()
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- mgr.Run(ctx) }()
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within 1s after context cancel")
+	}
+}
+
+// writeBotConfig writes a minimal <botsDir>/<botType>/config.yaml with an
+// optional buzz: block, for exercising TeamManager's per-persona Buzz
+// monitor builder loop.
+func writeBotConfig(t *testing.T, botsDir, botType string, buzzEnabled bool, buzzBotName string) {
+	t.Helper()
+	dir := filepath.Join(botsDir, botType)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir bot config dir: %v", err)
+	}
+	content := fmt.Sprintf("bot:\n  name: %s\n  type: %s\n", botType, botType)
+	if buzzEnabled {
+		content += fmt.Sprintf("buzz:\n  enabled: true\n  bot_name: %s\n  relay_url: wss://relay.example.com\n", buzzBotName)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write bot config.yaml: %v", err)
+	}
+}
+
+// TestTeamManager_BuzzMonitorBuilder_InvokedPerBuzzEnabledPersona verifies
+// P1.1's acceptance criterion: one buzzinfra.Monitor (represented here by a
+// fake domain.ChannelMonitor, since team_manager.go must stay free of an
+// internal/infrastructure/buzz import) is constructed per Buzz-enabled
+// team.yaml persona, and NOT for a persona with no buzz: block.
+func TestTeamManager_BuzzMonitorBuilder_InvokedPerBuzzEnabledPersona(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := writeTeamYAML(t, dir, []team.BotEntryForTest{
+		{Name: "orchestrator", Type: "orchestrator", Enabled: true, Orchestrator: true},
+		{Name: "architect", Type: "architect", Enabled: true},
+		{Name: "implementer", Type: "implementer", Enabled: true}, // no buzz: block
+	})
+
+	botsDir := t.TempDir()
+	mgr, _, _, _ := newTestManagerWithBotsDir(t, teamFile, botsDir)
+	writeBotConfig(t, botsDir, "orchestrator", false, "")
+	writeBotConfig(t, botsDir, "architect", true, "architect")
+	writeBotConfig(t, botsDir, "implementer", false, "")
+
+	team.SetBotRunner(mgr, func(ctx context.Context, _ team.BotEntryForTest, _ string) error {
+		<-ctx.Done()
+		return nil
+	})
+
+	var built []string
+	var mu sync.Mutex
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+		mu.Lock()
+		built = append(built, botCfg.Buzz.BotName)
+		mu.Unlock()
+		return &mocks.ChannelMonitor{}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- mgr.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(built)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within 1s after context cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 1 || built[0] != "architect" {
+		t.Fatalf("expected exactly one Buzz monitor built for %q, got %v", "architect", built)
+	}
+}
+
+// TestTeamManager_BuzzMonitorBuilder_DuplicateBotName_IsolatedNotPanic
+// verifies spec.md's "Duplicate bot-name registration" edge case: two
+// personas whose own config.yaml both set the same buzz.bot_name must not
+// panic the process (Router.Register panics on a duplicate name) -- the
+// second persona's Buzz monitor is skipped (logged), the first persona's
+// monitor and the rest of the process are unaffected.
+func TestTeamManager_BuzzMonitorBuilder_DuplicateBotName_IsolatedNotPanic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := writeTeamYAML(t, dir, []team.BotEntryForTest{
+		{Name: "orchestrator", Type: "orchestrator", Enabled: true, Orchestrator: true},
+		{Name: "architect", Type: "architect", Enabled: true},
+		{Name: "architect2", Type: "architect2", Enabled: true},
+	})
+
+	botsDir := t.TempDir()
+	mgr, _, _, _ := newTestManagerWithBotsDir(t, teamFile, botsDir)
+	writeBotConfig(t, botsDir, "orchestrator", false, "")
+	// Both personas' own config.yaml claim the same buzz.bot_name.
+	writeBotConfig(t, botsDir, "architect", true, "shared-name")
+	writeBotConfig(t, botsDir, "architect2", true, "shared-name")
+
+	team.SetBotRunner(mgr, func(ctx context.Context, _ team.BotEntryForTest, _ string) error {
+		<-ctx.Done()
+		return nil
+	})
+
+	var built []string
+	var mu sync.Mutex
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+		mu.Lock()
+		built = append(built, entry.Name)
+		mu.Unlock()
+		return &mocks.ChannelMonitor{}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("expected duplicate buzz.bot_name to be isolated (logged, skipped), not panic: %v", r)
+			}
+		}()
+		go func() { runDone <- mgr.Run(ctx) }()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(built)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within 1s after context cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 1 {
+		t.Fatalf("expected exactly 1 Buzz monitor built (the second duplicate must be skipped), got %v", built)
+	}
+}
+
+// TestTeamManager_BuzzMonitorBuilder_OnePersonaConfigLoadFails_OthersUnaffected
+// verifies the "incomplete per-persona Buzz config" edge case at the loop
+// level: one persona's bot config.yaml failing to load must not prevent
+// another Buzz-enabled persona's monitor from being built.
+func TestTeamManager_BuzzMonitorBuilder_OnePersonaConfigLoadFails_OthersUnaffected(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	teamFile := writeTeamYAML(t, dir, []team.BotEntryForTest{
+		{Name: "orchestrator", Type: "orchestrator", Enabled: true, Orchestrator: true},
+		{Name: "architect", Type: "architect", Enabled: true},
+		{Name: "broken", Type: "broken", Enabled: true},
+	})
+
+	botsDir := t.TempDir()
+	mgr, _, _, _ := newTestManagerWithBotsDir(t, teamFile, botsDir)
+	writeBotConfig(t, botsDir, "orchestrator", false, "")
+	writeBotConfig(t, botsDir, "architect", true, "architect")
+	// "broken" bot's config.yaml is intentionally never written -- config.Load fails.
+
+	team.SetBotRunner(mgr, func(ctx context.Context, _ team.BotEntryForTest, _ string) error {
+		<-ctx.Done()
+		return nil
+	})
+
+	var built []string
+	var mu sync.Mutex
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+		mu.Lock()
+		built = append(built, entry.Name)
+		mu.Unlock()
+		return &mocks.ChannelMonitor{}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- mgr.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(built)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Errorf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within 1s after context cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 1 || built[0] != "architect" {
+		t.Fatalf("expected the architect persona's monitor to build despite broken's config.Load failure, got %v", built)
 	}
 }
 

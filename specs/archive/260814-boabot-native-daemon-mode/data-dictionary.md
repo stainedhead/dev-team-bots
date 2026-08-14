@@ -12,6 +12,7 @@ Defines the data structures, types, and schemas this feature introduces or modif
 ## Value Objects
 
 - `DirectTaskSource` (existing enum, `internal/domain/direct_task.go:9-17`) — three values today: `DirectTaskSourceChat = "chat"`, `DirectTaskSourceOperator = "operator"`, `DirectTaskSourceBoard = "board"`. **Adding `DirectTaskSourceBuzz = "buzz"`** — confirmed additive; no exhaustive switch to update, only the `execute_task.go:100` provider-selection check (see Architectural Decisions).
+- `TaskPayload.Source` (new field, `internal/domain/message.go:78-90`, added retroactively to this dictionary per the independent code review's FR-108 item 4 finding) — `Source string \`json:"source,omitempty"\`` on the existing `TaskPayload` struct. When set, carries the originating `DirectTaskSource` value (e.g. `"chat"`, `"buzz"`) of the `DirectTask` this payload was built from. Empty string (the zero value, via `omitempty`) preserves the pre-existing behaviour of `RunAgentUseCase.handleTask` falling back to `Message.From` to resolve `domain.Task.Source` — `Message.From` alone is insufficient because it carries the *sending* bot's own identity (the dispatcher's name), not the task's origin channel, which is what `execute_task.go`'s `isConversationalSource`/`chat_provider` check needs. Backward-compatible: `domain.Task.Source` has exactly one other read site in the codebase (`execute_task.go`'s `isConversationalSource`), confirmed via grep.
 
 ## Interfaces
 

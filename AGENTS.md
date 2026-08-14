@@ -36,7 +36,7 @@ No production code is written without a failing test first. This applies to bug 
 
 When implementing review fixes (dev-flow Step 9), every finding in the review PRD must have a corresponding commit before the step is marked complete. P0 findings that remain open block the PR. Before closing Step 9, check each finding off explicitly against the commit log — do not rely on memory.
 
-**Coverage target: 90% or above on Domain and Application layers.** Coverage is measured on packages matching `internal/domain/...` and `internal/application/...`, excluding `mocks/` subdirectories. `cmd/`, `mocks/`, and `config/` packages are excluded from the threshold — they contain wiring or generated code with no meaningful unit-test surface. Do not reduce coverage when adding code.
+**Coverage target: 90% or above on Domain and Application layers.** This is an aggregate gate, not a per-package minimum: coverage is measured as one combined total across every package matching `internal/domain/...` and `internal/application/...`, excluding `mocks/` subdirectories — matching exactly what each module's CI `Coverage check` step computes (a single `go tool cover -func` total over one `-coverprofile` spanning those packages). `cmd/`, `mocks/`, and `config/` packages are excluded from the threshold — they contain wiring or generated code with no meaningful unit-test surface. An individual package below 90% is not on its own a gate failure as long as the aggregate clears 90%; the hard rule that always applies per-package is: do not reduce coverage when adding code.
 
 ## Clean Architecture
 

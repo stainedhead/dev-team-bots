@@ -180,4 +180,4 @@ models:
       model_id: "llama3.2"
 ```
 
-`chat_provider` overrides `default` for tasks sourced from the chat interface (Slack DMs, web UI chat, direct API chat calls) and from a Buzz channel `@mention`. This lets you run a fast local model for conversational interaction while keeping a capable cloud model for background tasks and board work.
+`chat_provider` overrides `default` for tasks sourced from the chat interface (web UI chat, direct API chat calls) and from a Buzz channel `@mention`. Slack is not currently included: Slack's dispatch path never tags a task with a chat/Buzz source, so `chat_provider` does not apply to Slack-originated tasks today. This lets you run a fast local model for conversational interaction while keeping a capable cloud model for background tasks and board work.

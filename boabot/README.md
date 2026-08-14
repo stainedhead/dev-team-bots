@@ -111,7 +111,7 @@ Shared infrastructure (ECS cluster, ALB, RDS, SNS, DynamoDB, ECR) is defined in 
 
 ## Package Coverage and Size
 
-Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config/`). Target: ≥ 90% per package.
+Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config/`). **The 90% target is an aggregate gate, not a per-package minimum**: CI's `boabot.yml` Coverage-check step computes one combined total across every package below (`go tool cover -func` on a single `-coverprofile` spanning `internal/domain/...` + `internal/application/...`) and checks that one number against 90% — currently 91.3%. Individual packages below 90% in the table (e.g. `internal/application/team` at 78.9%, dragged down by large pre-existing, mostly-untested functions like `startBot`) are not, on their own, a gate failure — AGENTS.md's actual hard rule is "do not reduce coverage when adding code" to any package, not that every package individually clears 90%.
 
 | Package | LOC | Coverage |
 |---|---|---|
@@ -126,7 +126,7 @@ Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config
 | `internal/application/eta` | 30 | 100% |
 | `internal/application/metrics` | 66 | 100% |
 | `internal/application/notifications` | 181 | 94.8% |
-| `internal/application/orchestrator` | 938 | 95.1% |
+| `internal/application/orchestrator` | 938 | 95.2% |
 | `internal/application/plugin` | 256 | 93.1% |
 | `internal/application/pool` | 259 | 97.8% |
 | `internal/application/rebalancing` | 74 | 100% |
@@ -134,7 +134,7 @@ Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config
 | `internal/application/scheduling` | 129 | 91.3% |
 | `internal/application/screening` | 37 | 100% |
 | `internal/application/subteam` | 328 | 91.6% |
-| `internal/application/team` | 1401 | 78.9% |
+| `internal/application/team` | 1401 | 79.1% |
 | `internal/application/workflow` | 393 | 98.9% |
 
 Run `go test -race -coverprofile=coverage.out ./internal/domain/... ./internal/application/... && go tool cover -func=coverage.out` to reproduce.

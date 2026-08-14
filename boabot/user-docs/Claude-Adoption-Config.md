@@ -80,7 +80,7 @@ models:
       model_id: claude-opus-4-7
 ```
 
-`chat_provider` overrides `default` for tasks sourced from the chat interface (Slack DMs, web UI chat, direct API chat calls) **and** from a Buzz channel `@mention`. Use a faster/cheaper model there and reserve `default` for background tasks and board work.
+`chat_provider` overrides `default` for tasks sourced from the chat interface (web UI chat, direct API chat calls) **and** from a Buzz channel `@mention`. Slack is not currently included: Slack's dispatch path never tags a task with a chat/Buzz source, so `chat_provider` does not apply to Slack-originated tasks today. Use a faster/cheaper model there and reserve `default` for background tasks and board work.
 
 ---
 

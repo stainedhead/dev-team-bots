@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-4/10 tasks complete (all P1: T-FR101, T-FR102, T-FR103, T-FR104).
+10/10 tasks complete.
 
 ## Phase 1 — P1 fixes (must close before done)
 

@@ -1,94 +1,185 @@
-# Code Review PRD: Boabot Native Daemon Mode (Multi-Agent Buzz Support)
+# Review PRD: Boabot Native Daemon Mode — Multi-Agent Buzz Support
 
 **Reviewed branch:** `worktree-boabot-native-multi-agent-buzz`
-**Reviewed against:** `origin/main` @ `904a732` (Merge PR #34) — note: the local `main` ref in this worktree is stale (`e1aa9a0`); using it as the diff base incorrectly pulls in three already-released, unrelated commits (the ACP fallback-publish fix, the `-agent`/`-bots-dir` flags, and boabot 0.4.0/0.4.1 CHANGELOG entries). This review uses the correct base, `904a732`, matching the feature's actual commit range `162f28a`..`800958e`.
-**Reviewer:** automated code review (dev-flow Step 5)
-**Date:** 2026-08-14
+**Base:** `origin/main` @ `904a732` (boabot v0.4.1)
+**Commits reviewed:** `76a7df0`..`800958e` (9 commits)
+**Spec:** `specs/260814-boabot-native-daemon-mode/`
+
+> **Note on diff scope:** the local `main` ref in this worktree was stale (pointed at `e1aa9a0`, well behind `origin/main`). Diffing against it would have incorrectly pulled in ~570 unrelated lines from an already-merged, already-released PR (#33, the ACP fallback-publish fix, shipped in v0.4.1). This review uses the corrected diff against `origin/main` (`904a732`), matching exactly the 9 commits and file list this feature actually comprises.
 
 ## Executive Summary
 
-This is a well-executed feature. The implementation is honest about its own trade-offs — `implementation-notes.md` documents real deviations from the original architecture sketch with concrete reasoning, and every claim checked during this review (the pre-existing `-race` crash in `internal/infrastructure/buzz`, the `internal/application/team` infra-import precedent, the `router.Register` double-registration fix, the DM non-goal boundary) held up under independent verification: `go build`, `go vet`, `golangci-lint run`, and `gofmt -l` are all clean; `go test ./...` is fully green; `go test -race ./...` fails in exactly one package (`internal/infrastructure/buzz`), and that failure was independently reproduced on base commit `262aba0` in an isolated worktree, confirming it is pre-existing and unrelated to this feature; the new concurrency test exercises real `sync.RWMutex`-protected stores under `-race` and passes cleanly. The `router.Register` panic fix is correct, well-isolated, and covered by dedicated regression tests. Coverage numbers cited in `README.md` were independently recomputed and match exactly.
+This is a well-executed, disciplined piece of work, and every specific claim this review was asked to scrutinize held up under independent, hands-on verification rather than being taken on faith. The `router.Register` double-registration fix is correct and covered by dedicated regression tests. The `TaskPayload.Source` deviation is safe, backward-compatible, and its side effect (chat-sourced tasks finally getting `chatProvider`) is real and deliberate. Clean Architecture boundaries hold — `internal/application/team`'s infrastructure import list is byte-for-byte identical to the pre-feature baseline, and the new `BuzzTaskDispatcher` seam is correctly defined in `domain` and implemented in `application`, keeping `internal/infrastructure/buzz.Monitor`'s own imports domain-only. The Buzz DM non-goal boundary is respected (zero touches to `trigger.go`, no DM/gift-wrap/kind-1059 references anywhere in the diff). No secret value is ever logged. Concurrency correctness for the feature's actual new risk area — per-persona dispatch cross-talk — is backed by a real `-race` test against genuine `sync.RWMutex`-protected stores, not mocks, and it passes.
 
-That said, this is not a rubber stamp. Two P1 issues undercut stated guarantees: the relay-replay dedup mechanism in `BuzzTaskBridge` marks a Nostr event ID as "seen" *before* confirming the dispatch actually succeeded, meaning a transient dispatch failure followed by a relay reconnect/replay will cause that instruction to be silently and permanently dropped — misreported as a harmless duplicate rather than retried — and no test exercises this path. Separately, the exact edge case spec.md calls out by name ("Bot has `buzz.enabled: true` but incomplete config... fails in isolation") is untested at the one place it's actually wired into production (`TeamManager.Run()`'s builder loop) — confirmed via a 0%-covered branch, not an assumption. A third finding flags an undocumented, in-scope-adjacent production behavior change: fixing the `task.Source` dead-code bug makes `chat_provider` apply retroactively to every existing chat-sourced deployment, not just the new Buzz path, and this isn't called out anywhere a release-notes reader would see it. The remaining findings are minor (a byte-vs-rune truncation bug in board-item titles, on a fully untested branch; a small amount of stale/dead exported API; a pre-existing coverage gap in `internal/application/team` that this feature adds to without closing).
+The claimed pre-existing `-race` crash in `internal/infrastructure/buzz` deserves a more precise framing than the implementation notes give it: it's real (independently reproduced here, identically, on both `HEAD` and the pre-feature base commit `262aba0`), but it is **already fully mitigated at the CI level** — `.github/workflows/boabot.yml` has invoked `go test -race -gcflags=all=-d=checkptr=0 ./...` since a prior spec cycle, specifically to work around this exact upstream `fiatjaf.com/nostr` bug. Run with that flag (verified directly), the entire module — including `internal/infrastructure/buzz` — passes `-race` with zero failures, and the domain+application aggregate coverage gate `boabot.yml` actually enforces (`go tool cover -func ... | grep total`, one number across every package under `internal/domain/...`+`internal/application/...`) measures 91.2%, clearing the 90% threshold. This is not what `implementation-notes.md` item #11 says, though — it claims a concurrency test placed inside `internal/infrastructure/buzz` "would be unable to run under `-race` at all," which is false for this repo's actual CI invocation. The test-placement decision itself (testing `BuzzTaskBridge.Dispatch` concurrency directly rather than through the real `Monitor`/relay stack) remains architecturally sound on its own merits; only the stated justification is wrong.
 
-## Findings
+Four real issues found, none of them P0. Two are correctness bugs with zero test coverage on the exact branch that would have caught them: `BuzzTaskBridge`'s relay-replay dedup marks a Nostr event ID "seen" *before* the dispatch it's guarding actually succeeds, so a transient dispatch failure followed by a relay reconnect/replay silently and permanently drops the user's instruction — misreported in the logs as a harmless duplicate-skip, not a lost task. `buzzBoardTitle`'s title truncation slices by byte offset, not rune offset, corrupting UTF-8 for any Buzz instruction whose 80-byte mark falls mid-rune (reproduced empirically, not just inferred from the missing test). The other two are a real integration-point test gap (the exact edge case `spec.md` names by name — "incomplete Buzz config fails in isolation" — is untested at the only place it's actually wired into production) and an undocumented behavior change for existing deployments (the `chat_provider` dead-code fix makes that setting live for every current chat-sourced deployment, not just new Buzz ones, with no Breaking-Changes/changelog-visible callout). The remaining findings are documentation-hygiene and minor-completeness items. **Overall assessment: Approve with minor comments.** The four P1s should be closed before this is considered done; none block the PR on their own.
 
-### FR-101 (P1): Relay-replay dedup marks an event "seen" before its dispatch succeeds, permanently losing instructions on transient failure
-
-**Location:** `boabot/internal/application/orchestrator/buzz_task_bridge.go`, `Dispatch()` (calls `markSeenIfDuplicate` at the top of the method, before `chatMgr.DetectAndHandle` or `dispatcher.DispatchWithSchedule` is even attempted) and `markSeenIfDuplicate()` itself.
-
-**Problem:** `markSeenIfDuplicate(eventID)` records the event ID as seen unconditionally, on the very first call, regardless of whether the subsequent dispatch attempt (via `ChatTaskManager.DetectAndHandle` or `dispatcher.DispatchWithSchedule`) succeeds or fails. If that attempt returns an error — a transient failure in the local task store, a context cancellation, anything — `Dispatch` returns the error and `Monitor.dispatchViaBridge` logs it (`"buzz monitor: task dispatcher bridge failed"`) and gives up; there is no retry. Per spec.md's own "Relay reconnect / message replay" edge case, a relay reconnect is expected to redeliver recently-seen events. When that redelivery happens for this event ID, `markSeenIfDuplicate` will report it as `Duplicate: true` — because it really was marked seen — and `Monitor` will log `"buzz monitor: duplicate event, skipping re-dispatch"` at `Info` level and drop it. The user's original instruction is now permanently lost, silently, with a log trail that actively misdescribes what happened (it looks like a harmless duplicate-skip, not a lost task). This directly undermines the FR-005/FR-006 guarantee that a qualifying Buzz mention reliably becomes a visible task.
-
-**Evidence:** `TestBuzzTaskBridge_Dispatch_DispatcherError_Propagates` (`buzz_task_bridge_test.go`) confirms the error-propagation half of this but never issues a second `Dispatch` call with the same event ID afterward to check whether the failed attempt is later treated as a duplicate. No test in the suite exercises "dispatch fails, then the same event ID is redelivered."
-
-**Acceptance criterion:** Dedup state is only recorded once the underlying dispatch (or `ChatTaskManager.DetectAndHandle` handling) has actually succeeded — e.g. mark-seen moves to after a successful `DispatchWithSchedule`/handled-with-no-error return, or a failed attempt explicitly un-marks the event ID before returning the error. A new regression test dispatches an event ID that fails, then redispatches the identical event ID and asserts it is *not* reported as `Duplicate` and is retried.
+**Findings: 0 P0 / 4 P1 / 6 P2**
 
 ---
 
-### FR-102 (P1): The named edge case "Buzz-enabled persona with incomplete config fails in isolation" is untested at its actual production integration point
+## FR-101 — Relay-replay dedup marks an event "seen" before its dispatch succeeds, permanently losing instructions on transient failure
 
-**Location:** `boabot/internal/application/team/team_manager.go`, `Run()`'s Buzz-monitor-builder loop, specifically the `if mon == nil { continue }` branch (currently uncovered — confirmed via `go tool cover -func`, not asserted).
+**Priority: P1**
 
-**Problem:** spec.md's Edge Cases section names this scenario explicitly: *"Bot has `buzz.enabled: true` but incomplete config (missing relay URL, missing/unresolvable `buzz_private_key`): that persona's monitor construction fails in isolation — logged, does not prevent other personas' monitors or the orchestrator UI from starting."* The actual production code path for this is: `TeamManager.Run()` calls `tm.buzzMonitorBuilder(...)`, which in production is `main.go`'s closure around `buildBuzzMonitor` — and if `buildBuzzMonitor` returns `nil` (its documented behavior for a bad/missing key), `Run()`'s loop must `continue` without disturbing any other persona. This exact branch has 0% test coverage. The three new `TestTeamManager_BuzzMonitorBuilder_*` tests all supply a builder mock that unconditionally returns `&mocks.ChannelMonitor{}` — none of them return `nil` to simulate a builder failure. The isolation behavior *is* tested at a lower layer (`main_test.go`'s pre-existing `TestBuildBuzzMonitor_KeypairLoadFailure` etc., confirming `buildBuzzMonitor` itself returns `nil`), but the specific integration point spec.md calls out by name — "does not prevent other personas' monitors... from starting" in the actual `Run()` loop — has never been exercised by a test.
+**Location:** `boabot/internal/application/orchestrator/buzz_task_bridge.go`, `Dispatch()` (calls `markSeenIfDuplicate` before `chatMgr.DetectAndHandle`/`dispatcher.DispatchWithSchedule` is even attempted) and `markSeenIfDuplicate()` itself.
 
-**Acceptance criterion:** Add a test where `WithBuzzMonitorBuilder`'s mock returns `nil` for one Buzz-enabled persona and a real `&mocks.ChannelMonitor{}` for another, asserting the `nil`-returning persona is skipped without affecting the other persona's monitor or `Run()`'s overall success. `go tool cover -func` should show the `mon == nil` branch at 100%.
+**Problem:** `markSeenIfDuplicate(eventID)` records the event ID as seen unconditionally on first call, regardless of whether the dispatch attempt that follows succeeds or fails:
+
+```go
+func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error) {
+	if eventID != "" && b.markSeenIfDuplicate(eventID) {   // marks seen unconditionally
+		return domain.BuzzDispatchResult{Duplicate: true}, nil
+	}
+	// ... DetectAndHandle / DispatchWithSchedule can still fail below ...
+```
+
+If the subsequent `ChatTaskManager.DetectAndHandle` or `dispatcher.DispatchWithSchedule` call returns an error — a transient local-store hiccup, a context cancellation, anything — `Dispatch` returns the error, `Monitor.dispatchViaBridge` logs `"buzz monitor: task dispatcher bridge failed"`, and there is no retry. Per `spec.md`'s own "Relay reconnect / message replay" edge case, a relay reconnect is expected to redeliver recently-seen events — that's the exact scenario this dedup mechanism exists for. When that redelivery happens for this event ID, `markSeenIfDuplicate` reports `Duplicate: true` (because it genuinely was marked seen), `Monitor` logs `"buzz monitor: duplicate event, skipping re-dispatch"` at `Info` level, and the user's original instruction is now permanently lost — silently, with a log trail that actively misdescribes what happened as a harmless duplicate-skip rather than a dropped task.
+
+**Evidence:** `TestBuzzTaskBridge_Dispatch_DispatcherError_Propagates` confirms the error-propagation half but never issues a second `Dispatch` with the same event ID afterward to check whether the failed attempt is later mistaken for a duplicate. No test in the suite exercises "dispatch fails, then the same event ID is redelivered."
+
+**Acceptance criterion:** Dedup state is only recorded once the underlying dispatch (or `ChatTaskManager`-handled response) has actually succeeded — e.g. move the mark-seen call to after a successful `DispatchWithSchedule`/handled-with-no-error return, or explicitly un-mark the event ID before returning an error. A new regression test dispatches an event ID that fails, then redispatches the identical event ID, and asserts it is *not* reported as `Duplicate` and is retried.
 
 ---
 
-### FR-103 (P1): `chat_provider` silently becomes live for existing chat-sourced deployments, and this isn't called out as a behavior change anywhere a release-notes reader would see it
+## FR-102 — `buzzBoardTitle` truncates by byte index, not rune index, corrupting UTF-8
 
-**Location:** `boabot/internal/application/execute_task.go` (`isConversationalSource`), `boabot/internal/domain/message.go` (`TaskPayload.Source`), `boabot/internal/infrastructure/local/orchestrator/task_dispatcher.go` (`sendMessage`), `boabot/internal/application/run_agent.go` (`handleTask`).
-
-**Problem:** `implementation-notes.md` (finding #4 under "Additional findings") documents, honestly and in detail, that `execute_task.go:100`'s `task.Source == "chat"` check has been dead code since it was written — nothing ever set `Message.From == "chat"`, so no chat-sourced task has ever actually used a configured `models.chat_provider`. Fixing this (via the new `TaskPayload.Source` field) is necessary to make the Buzz-equivalent check reachable, per architecture.md's decision. But the fix's blast radius is not scoped to Buzz: it also activates `chat_provider` for the *existing*, *already-shipped* web-UI/Slack chat path, for every current operator who has `models.chat_provider` configured and has been unknowingly getting `models.default` instead. This is a real production behavior change — potentially a different model, different cost profile, different latency — for deployments that have nothing to do with this feature. It is documented in `docs/architectural-decision-record.md` (ADR-B028, item 4) and in `user-docs/Claude-Adoption-Config.md`/`OpenAI-Adoption-Config.md`, and is mentioned in the `d771f75` commit body — but spec.md's "Breaking Changes" section (which explicitly discusses config-schema compatibility) says nothing about it, and there is no user-facing changelog-visible callout an operator upgrading `boabot` would actually encounter before their chat behavior silently changes.
-
-**Acceptance criterion:** spec.md's Breaking Changes section (or an equivalent, prominent, changelog-visible note) explicitly states: "operators with `models.chat_provider` configured will see it apply to chat-sourced tasks for the first time after this upgrade — previously inert." This is a documentation-only fix; no code change required.
-
----
-
-### FR-104 (P2): `buzzBoardTitle`'s truncation slices by byte index, not rune index, and the branch is completely untested
+**Priority: P1**
 
 **Location:** `boabot/internal/application/orchestrator/buzz_task_bridge.go`, `buzzBoardTitle()`.
 
-**Problem:** `title[:boardItemTitleMaxLen]` slices the Go string by byte offset. For an instruction whose first 80 bytes end in the middle of a multi-byte UTF-8 rune (any non-ASCII text — accented characters, CJK, emoji, all plausible in a chat-originated Buzz message), this produces an invalid/corrupted UTF-8 tail on the board item's title before the appended `…`. `go tool cover -func` confirms this branch (`len(title) > boardItemTitleMaxLen`) has 0% coverage — no existing test exercises an instruction longer than 80 characters, ASCII or otherwise.
+**Problem:**
 
-**Acceptance criterion:** Truncate on rune boundaries (e.g. `[]rune(title)` slicing, or `utf8.RuneCountInString` + a rune-safe truncate helper). Add a test with a >80-character instruction containing multi-byte runes (e.g. emoji or accented text) straddling the truncation point, asserting the result is valid UTF-8 and does not end mid-rune.
+```go
+if len(title) > boardItemTitleMaxLen {
+    title = strings.TrimSpace(title[:boardItemTitleMaxLen]) + "…"
+}
+```
+
+`title[:80]` is a byte offset, not a rune offset. Reproduced directly:
+
+```go
+instr := strings.Repeat("a", 78) + "日本語のテキストです"
+title := instr[:80]
+// result ends: ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\xe6\x97…
+// utf8.ValidString(title) == false
+```
+
+Any Buzz instruction with multi-byte characters (emoji, non-Latin scripts — entirely plausible on a chat-native relay) whose 80-byte boundary falls mid-rune produces an invalid UTF-8 string, which becomes the persisted `WorkItem.Title` rendered in the orchestrator's Kanban board. This is real, user-visible data corruption for non-ASCII-heavy Buzz conversations, not a hypothetical edge case, and there is zero test coverage on the truncation branch at all — `buzzBoardTitle` measures 66.7% coverage (the lowest of any new function in this file), and no test in `buzz_task_bridge_test.go` exercises an instruction longer than 80 characters or an empty one.
+
+**Acceptance criterion:** Truncate on rune boundaries (`[]rune(title)` slicing, or `utf8.RuneCountInString` + a rune-safe truncate helper). New tests cover: (a) an instruction whose 80-byte mark falls mid-rune, asserting `utf8.ValidString(...)` on the result; (b) the empty-instruction fallback (`"Buzz task"`); (c) ASCII-only truncation is unchanged. `go tool cover -func` reports `buzzBoardTitle` at 100%.
 
 ---
 
-### FR-105 (P2): `LoadTeamConfig` was exported for a purpose it no longer serves
+## FR-103 — The edge case `spec.md` names by name ("incomplete Buzz config fails in isolation") is untested at its real production integration point
 
-**Location:** `boabot/internal/application/team/team_manager.go` (`loadTeamConfig` → `LoadTeamConfig`).
+**Priority: P1**
 
-**Problem:** architecture.md's stated rationale for exporting this function is "`main.go` doesn't duplicate YAML parsing" — implying `main.go` would call it directly. Per implementation-notes.md's own documented deviation #3, the design changed: the whole per-persona loop moved inside `TeamManager.Run()` instead, and `main.go` never ends up calling `LoadTeamConfig` at all (confirmed by grep — its only callers are `team_manager.go` itself and `internals_test.go`). The export is now unnecessary public API relative to the reason given for it; it should either be un-exported again or the ADR/architecture doc corrected to state the real reason (if any) it needs to stay exported.
+**Location:** `boabot/internal/application/team/team_manager.go`, `Run()`'s Buzz-monitor-builder loop, the `if mon == nil { continue }` branch.
 
-**Acceptance criterion:** Either revert `LoadTeamConfig` to unexported `loadTeamConfig` (and its test back to package-internal), or update `architecture.md`/ADR-B028 to reflect why it's actually exported. Pick one; either is a small, low-risk cleanup.
+**Problem:** `spec.md`'s Edge Cases section names this scenario explicitly: *"Bot has `buzz.enabled: true` but incomplete config... that persona's monitor construction fails in isolation — logged, does not prevent other personas' monitors or the orchestrator UI from starting."* The actual production code path is: `TeamManager.Run()` calls `tm.buzzMonitorBuilder(...)` (in production, `main.go`'s closure around `buildBuzzMonitor`), and if it returns `nil` (its documented behavior for a bad/missing key), `Run()`'s loop must `continue` without disturbing any other persona. Confirmed directly via the coverage profile (`go tool cover` raw output for `team_manager.go:397.18,398.13` — the `continue` statement's line — shows **0** hit count): this exact branch has never been exercised by a test. The three `TestTeamManager_BuzzMonitorBuilder_*` tests all supply a builder mock that unconditionally returns `&mocks.ChannelMonitor{}`; none return `nil` to simulate a builder failure. The isolation behavior *is* tested at the lower `buildBuzzMonitor` layer (`main_test.go`'s `TestBuildBuzzMonitor_KeypairLoadFailure` etc.), but the specific integration point `spec.md` calls out by name — the actual `Run()` loop not disturbing other personas — has never been exercised.
+
+**Acceptance criterion:** Add a test where `WithBuzzMonitorBuilder`'s mock returns `nil` for one Buzz-enabled persona and a real `&mocks.ChannelMonitor{}` for another, asserting the `nil`-returning persona is skipped without affecting the other persona's monitor or `Run()`'s overall success. `go tool cover -func` shows the `mon == nil` branch at 100%.
 
 ---
 
-### FR-106 (P2): `internal/application/team` remains well below AGENTS.md's 90% coverage target, and this feature adds to it without closing the gap
+## FR-104 — `chat_provider` becomes live for existing chat-sourced deployments with no Breaking-Changes/changelog-visible disclosure
 
-**Location:** `boabot/internal/application/team/team_manager.go`.
+**Priority: P1**
 
-**Problem:** AGENTS.md requires "Coverage target: 90% or above on Domain and Application layers." `internal/application/team` measured at 78.9% (independently recomputed via `go test -coverprofile` — matches `README.md`'s cited number exactly), up marginally from 77.8% pre-feature. This is not a regression — AGENTS.md's actual hard rule is "do not reduce coverage when adding code," which is satisfied — but this feature adds ~143 net lines to the single largest, least-covered application-layer file in the codebase (`Run()` itself is at 84.9%, `startBot` at 59.7%) without materially closing the gap to the stated 90% target. This is a pre-existing condition this PR is not obligated to fix, but it's worth tracking separately so it doesn't keep silently absorbing new logic at a below-target coverage level.
+**Location:** `boabot/internal/application/execute_task.go` (`isConversationalSource`), `boabot/internal/domain/message.go` (`TaskPayload.Source`), `boabot/internal/infrastructure/local/orchestrator/task_dispatcher.go` (`sendMessage`), `boabot/internal/application/run_agent.go` (`handleTask`).
 
-**Acceptance criterion:** No fix required for this PR to merge. File a separate, non-blocking follow-up to raise `internal/application/team` coverage (particularly `startBot`, which is both the largest uncovered surface and pre-existing) toward the 90% target.
+**Problem:** `implementation-notes.md` documents, honestly and in detail, that `execute_task.go:100`'s `task.Source == "chat"` check has been dead code since it was written — nothing ever set `Message.From == "chat"`, so no chat-sourced task has ever actually used a configured `models.chat_provider`. Fixing this (via the new `TaskPayload.Source` field, verified correct and safe by this review) is necessary to make the Buzz-equivalent check reachable. But the fix's blast radius is not scoped to Buzz: it also activates `chat_provider` for the *existing*, already-shipped web-UI chat path, for every current operator who has `models.chat_provider` configured and has been unknowingly getting `models.default` instead. This is a real production behavior change — potentially a different model, cost profile, or latency — for deployments that have nothing to do with this feature. It's documented in `docs/architectural-decision-record.md` (ADR-B028) and two adoption-config docs, but `spec.md`'s "Breaking Changes" section (which explicitly discusses config-schema compatibility) says nothing about it, and there is no changelog-visible callout an operator upgrading `boabot` would actually see before their chat behavior silently changes.
 
-## Verified Claims (no finding — confirmed accurate)
+**Acceptance criterion:** `spec.md`'s Breaking Changes section (or an equivalent changelog-visible note) states explicitly: "operators with `models.chat_provider` configured will see it apply to chat-sourced tasks for the first time after this upgrade — previously inert." Documentation-only; no code change required.
 
-For transparency, the following claims from `implementation-notes.md` were independently checked, not taken on faith, and confirmed true:
+---
 
-- **`router.Register` double-registration fix**: correct and covered by dedicated regression tests (`TestTeamManager_Run_PreRegisteredBotName_NoDuplicatePanic`, `TestRouter_Lookup_Registered`, `TestRouter_Lookup_Unregistered`, `TestTeamManager_BuzzMonitorBuilder_DuplicateBotName_IsolatedNotPanic`). `Router.Lookup` is correctly `RLock`-protected and race-safe.
-- **`TaskPayload.Source` reachability fix**: confirmed correct via `TestRunAgent_Poll_TaskMessage_PayloadSourcePreferredOverMessageFrom` and `TestLocalTaskDispatcher_Dispatch_MessagePayloadCarriesSource` — does not break any existing `Message.From`-only producer (empty `Source` falls back correctly). See FR-103 above for the separate documentation concern about its side effect.
-- **Pre-existing `-race` failure in `internal/infrastructure/buzz`**: independently reproduced on both the feature branch and, in an isolated temporary `git worktree` at base commit `262aba0`, with byte-for-byte identical `checkptr` crash output (`fiatjaf.com/nostr`'s `writeJSONString`, triggered via `TestE3_NIPOAAuthTagIncludedOnAuthEvent`). Confirmed pre-existing and unrelated to this feature. `go test -race ./...` across the rest of the module (58 packages) passes cleanly, including the new `TestBuzzTaskBridge_ConcurrentMultiPersonaDispatch_NoCrossTalk` concurrency test.
-- **`internal/application/team`'s pre-existing infra imports**: confirmed via `git show 904a732:...team_manager.go` — the import list (including `internal/infrastructure/http`, `local/queue`, `local/orchestrator`, etc.) is byte-identical to base `main`. Not a new Clean Architecture violation; the new `internal/application/orchestrator` code (`buzz_dispatch.go`, `buzz_task_bridge.go`) has zero infrastructure imports outside test files.
-- **No `buzz_private_key` (or any secret) logged**: grepped every `slog`/logger call touched by this feature; none reference key material.
-- **Buzz DM non-goal boundary respected**: no code changes touch NIP-17/kind-1059/gift-wrap paths; only doc mentions confirming DM remains unimplemented.
-- **Coverage numbers in `README.md`**: recomputed independently via `go test -coverprofile` and match exactly (`internal/domain` 94.9%, `internal/application` 99.0%, `internal/application/orchestrator` 95.1%, `internal/application/team` 78.9%).
-- **Quality gates**: `go build ./...`, `go vet ./...`, `golangci-lint run` (0 issues), `gofmt -l .` (no output), `go test ./...` (all green) all independently reproduced clean.
+## FR-105 — `implementation-notes.md`'s stated reason for testing Buzz concurrency outside `internal/infrastructure/buzz` is factually inaccurate
+
+**Priority: P2**
+
+**Problem:** `implementation-notes.md` item #11 states a concurrency test "inside `internal/infrastructure/buzz` itself would be unable to run under `-race` at all." This is false for this repository's actual CI configuration: `.github/workflows/boabot.yml` runs `go test -race -gcflags=all=-d=checkptr=0 ./...` — a documented workaround (with an inline comment citing the exact upstream `fiatjaf.com/nostr` bug) that predates this feature by a full spec cycle (`specs/260804-boabot-buzz-support`). Verified directly: with that flag, `go test -race -gcflags=all=-d=checkptr=0 ./internal/infrastructure/buzz/...` and the whole module (`./...`) both pass with zero failures. The bare `go test -race` crash the implementation notes reproduced is real (independently reproduced here too, identically, on base commit `262aba0`) — but only for the bare invocation, not the project's actual, already-established CI invocation. The test-placement choice itself (testing `BuzzTaskBridge.Dispatch` directly, isolating the concurrency guarantee from relay/JSON-serialization noise) remains defensible on its own architectural merits — only the stated justification for it is wrong, and should be corrected so a future reader doesn't conclude `internal/infrastructure/buzz` categorically can't be race-tested (it can; CI already proves it every run).
+
+**Acceptance criterion:** `implementation-notes.md` item #11 is corrected to state the accurate reason (e.g. "isolates the guarantee from relay-layer noise," or an acknowledgment that CI's `-gcflags=all=-d=checkptr=0` already avoids the crash and the test could live in either place). No code change required.
+
+---
+
+## FR-106 — Coverage-gate framing: `internal/application/team`'s 78.9% is fine against CI's actual (aggregate) gate, but reads as a violation against README's per-package table
+
+**Priority: P2**
+
+**Problem:** `internal/application/team` measures 78.9% (up from a pre-feature 77.8% — not a regression; AGENTS.md's actual hard rule, "do not reduce coverage when adding code," is satisfied). Read against `README.md`'s per-package coverage table, this looks like it's failing AGENTS.md's stated "90% or above on Domain and Application layers" target. It isn't, in the sense CI actually enforces: `boabot.yml`'s Coverage-check step computes **one aggregate number** across every package matching `internal/domain/...` + `internal/application/...` (excluding `mocks/`) and checks that single total against 90% — verified directly at 91.2%, which clears the gate. This feature's own additions to `team_manager.go` are well-covered in isolation (`WithBuzzMonitorBuilder`, `chatMessageThreadID`, `boardTracksSource`, `LoadTeamConfig` all 100%; `Run()` itself 84.9%) — the package's low aggregate is dragged down by large, pre-existing, mostly-untested functions this feature only added a few lines to (`startBot` at 59.7%, `Run` at 84.9%).
+
+**Acceptance criterion:** Either (a) file a non-blocking follow-up to raise `startBot`/`Run` coverage toward 90% (`internal/application/team` is the single largest gap in the domain+application aggregate), or (b) clarify AGENTS.md/README's coverage framing to state the bar is an aggregate across domain+application packages, not a strict per-package minimum, so this doesn't misread as a violation on every future PR touching `team_manager.go`.
+
+---
+
+## FR-107 — `LoadTeamConfig` was exported for a purpose the final design no longer needs
+
+**Priority: P2**
+
+**Problem:** `architecture.md`'s stated rationale for exporting `loadTeamConfig` → `LoadTeamConfig` is "`main.go` doesn't duplicate YAML parsing" — implying `main.go` would call it directly. Per `implementation-notes.md`'s own documented deviation #3, the design changed: the per-persona Buzz-monitor loop moved inside `TeamManager.Run()` instead, and `main.go` never ends up calling `LoadTeamConfig` at all. Confirmed by grep: its only non-test caller is `team_manager.go` calling its own now-exported function. The export is now unnecessary public API relative to the reason given for it.
+
+**Acceptance criterion:** Either revert to unexported `loadTeamConfig` (and its test back to package-internal), or update `architecture.md`/ADR-B028 to state the real reason it needs to stay exported. Either is a small, low-risk cleanup.
+
+---
+
+## FR-108 — `spec.md`/`data-dictionary.md` were not kept current with implementation-time deviations
+
+**Priority: P2**
+
+**Problem:** Four distinct places where the planning docs now read as inaccurate relative to what shipped, none individually severe but collectively a "living document" hygiene gap the spec workflow (AGENTS.md: "specs are living documents, not written once") calls out as a rule:
+
+1. All nine Acceptance Criteria checkboxes in `spec.md` (lines 94–103) remain unchecked despite `status.md` declaring Phase 5 "Complete." Several are demonstrably satisfied by shipped tests (e.g. no-cross-talk, `boabot -acp` still building); others are explicitly deferred to a live Buzz relay session (`tasks.md` P4.1, out of scope for this pass). Nothing distinguishes the two categories.
+2. `spec.md`'s FR-008 ("A Buzz request can update or cancel a previously-created task... immediate or scheduled") overstates the shipped capability: there is no in-place task mutation at all, and cancellation only ever applies to a not-yet-confirmed pending intent — an already-dispatched or running task can't be touched from Buzz. This is honestly disclosed in `implementation-notes.md` item 8 and the getting-started guide, but `spec.md`'s own FR-008 text was never revised.
+3. `spec.md`'s "Scope of Changes" states "No files need to change in `internal/infrastructure/buzz/`... its constructor already supports being called multiple times with distinct identities." In practice `monitor.go` received a substantial, well-justified change (+108/-12: `WithTaskDispatcher`, `dispatchViaBridge`/`dispatchDirect`, `publishReply` extraction) — architecturally sound, but not called out as a deviation from this specific claim the way the other four implementation-time deviations are.
+4. `data-dictionary.md` documents the new `DirectTaskSourceBuzz` enum value but has no entry for the new `TaskPayload.Source` field — `implementation-notes.md`'s own "Deviations from Plan" section flags this gap explicitly but it was never backfilled.
+
+**Acceptance criterion:** (1) Each AC checkbox in `spec.md` is checked with a test reference, or left unchecked with a one-line reason (e.g. "requires live Buzz relay session, see tasks.md P4.1"). (2) FR-008's text in `spec.md` is reworded to state the actual shipped scope (or gets a "Known Limitation" callout). (3) `implementation-notes.md`'s "Deviations from Plan" list gains a line acknowledging the `monitor.go`/`buildBuzzMonitor`-signature deviation from the "Scope of Changes" claim. (4) `data-dictionary.md` gains a `TaskPayload.Source` entry matching its existing entries' level of detail. Documentation-only; no code change required.
+
+---
+
+## FR-109 — `chat_provider` adoption docs still inaccurately list Slack DMs
+
+**Priority: P2**
+
+**Problem:** This branch edits the `chat_provider` doc line in both `user-docs/Claude-Adoption-Config.md` and `user-docs/OpenAI-Adoption-Config.md`, changing it to: "`chat_provider` overrides `default` for tasks sourced from the chat interface (Slack DMs, web UI chat, direct API chat calls) **and** from a Buzz channel `@mention`." The "Slack DMs" clause is inaccurate and was inaccurate before this PR too: Slack's dispatch path (`internal/infrastructure/slack/monitor.go`, untouched by this branch) sends its `domain.TaskPayload` directly via `queue.Send`, never setting `TaskPayload.Source` — so `task.Source` is never `"chat"` for a Slack-originated task, even after this branch's fix makes the check reachable for web-UI chat and Buzz. This isn't a regression this branch introduced, but the branch did edit this exact line without correcting the pre-existing inaccuracy it carries.
+
+**Acceptance criterion:** The `chat_provider` doc line in both files is corrected to list only the sources that actually resolve to `task.Source == "chat"`/`"buzz"` today (web UI chat, direct API chat calls, Buzz `@mention`) — Slack DMs removed, or a separate tracking item opened if Slack is meant to eventually route through the same `Source`-tagging path.
+
+---
+
+## FR-110 — `BuzzTaskBridge.markSeenIfDuplicate` does a full map scan under lock on every dispatch
+
+**Priority: P2**
+
+**Problem:** `markSeenIfDuplicate` iterates the entire `seenEvts` map to evict expired entries on *every* call, while holding `b.mu` — the same mutex that serializes all of that persona's dispatch calls. At the default 10-minute TTL and realistic Buzz mention volume this isn't a practical problem today, but per-dispatch lock hold time grows linearly with distinct events seen in the last TTL window, and it does this on every single message, not periodically.
+
+**Acceptance criterion:** Either accept as-is with a comment noting the bound is intentional given expected Buzz mention volume, or move eviction to a periodic sweep (e.g. every N calls, or on a ticker) instead of every call. Not required to close this PR.
+
+---
+
+## Verification Notes (independently reproduced, not taken on faith)
+
+- **Clean Architecture:** `internal/application/team/team_manager.go`'s infrastructure import list is identical between base `904a732` and `HEAD` (`git show 904a732:...team_manager.go` diffed byte-for-byte against `HEAD`'s import block) — zero new infra imports added. `grep -rn "infrastructure/buzz" internal/application/` finds only comments, never an import.
+- **`router.Register` double-registration fix:** correct and tested — `TestBuildBuzzMonitor_QueueAlreadyRegistered_DoesNotDoubleRegister`, `TestRouter_Lookup_Registered`/`_Unregistered`, `TestTeamManager_BuzzMonitorBuilder_DuplicateBotName_IsolatedNotPanic` all exercise the actual `panic`-avoidance path, not just the happy path.
+- **`TaskPayload.Source`:** `domain.Task.Source` has exactly one other read site in the codebase (`execute_task.go`'s `isConversationalSource`) — grepped and confirmed. Backward-compatible (empty `Source` falls back to pre-existing `Message.From` behavior).
+- **`-race` crash in `internal/infrastructure/buzz`:** reproduced on `go1.26.0 darwin/arm64` — identical `fatal error: checkptr: pointer arithmetic result points to invalid allocation` in `fiatjaf.com/nostr.writeJSONString` (`event.go:245`) on both `HEAD` and an isolated worktree of base commit `262aba0`. **With CI's actual flag** (`-gcflags=all=-d=checkptr=0`), the crash does not occur anywhere in the module — verified directly, `go test -race -gcflags=all=-d=checkptr=0 ./...` is fully green, 72 packages, zero failures. See FR-105.
+- **Coverage:** `go test -race -gcflags=all=-d=checkptr=0 -coverprofile=... ./internal/domain/... ./internal/application/...` (CI's exact command) measures 91.2% aggregate, clearing the 90% gate `boabot.yml` enforces. Per-package numbers match `README.md`'s table exactly: `internal/domain` 94.9%, `internal/application` 99.0%, `internal/application/orchestrator` 95.1%, `internal/application/team` 78.9%.
+- **Quality gates:** `go build ./...`, `go vet ./...` (0 warnings), `golangci-lint run` (0 issues), `gofmt -l .` (0 files), `go test ./...` (all green), `go test -race -gcflags=all=-d=checkptr=0 ./...` (all green) — all reproduced directly.
+- **DM non-goal:** zero diff to `internal/infrastructure/buzz/trigger.go`; no occurrence of `1059`, `giftwrap`/`gift-wrap`, or DM-handling logic anywhere in the branch's diff.
+- **Secrets:** `buzz_private_key`/`buzz_api_token`/`buzz_auth_tag` resolution is unchanged, pre-existing logic, correctly namespaced per `botCfg.Buzz.BotName`, invoked once per persona instead of once globally. No secret value reaches a log call anywhere in the diff.
+- **`techLeadPool.Deallocate` on a never-`Allocate`d Buzz board item:** verified harmless by reading `pool.Deallocate` directly — the not-found case returns an error before any mutation of `p.entries`; the call site only `slog.Warn`s.
+- **Two minor, optional completeness notes, not full findings:** `main.go`'s actual `WithBuzzMonitorBuilder` closure (the real production glue combining `ChatTaskManager`+`BuzzTaskBridge`+`buildBuzzMonitor`) has no end-to-end test of its own — `cmd/` is excluded from AGENTS.md's coverage gate, and each piece is unit-tested separately, but a parameter-order mistake between two same-typed strings (`botsDir`, `memoryRoot`) would go undetected by either side's unit tests; manually verified correct by inspection. Separately, no test exercises concurrent `Dispatch` calls *within* one persona across multiple Buzz channels/threads (only cross-persona concurrency is `-race`-tested) — by inspection this is safe (`ChatTaskManager.pendingMap` is `sync.Map`; `BuzzTaskBridge.seenEvts` is `sync.Mutex`-protected), and the whole module's `-race` run is clean, so this is a coverage-completeness note, not a suspected bug.
+
+---
 
 ## Implementation Guidance for Fixes
 
-- **Use TDD for every fix.** Each finding above starts from a failing test that reproduces the problem (a redelivered event ID after a failed dispatch; a `nil`-returning `BuzzMonitorBuilder`; a multi-byte truncation boundary) before any production code changes.
-- **Conduct a brief code review after each fix before moving to the next.** Don't batch all six findings into one uninspected commit — review FR-101's fix before starting FR-102, and so on.
-- **Use agent teammates and git worktrees for parallel fix workstreams if there are multiple independent fixes.** FR-101 (bridge dedup), FR-102 (test gap), FR-104 (truncation), and FR-105 (dead export) touch disjoint code and can be fixed in parallel worktrees; FR-103 is documentation-only and can proceed independently of all of them. FR-106 is a non-blocking follow-up, not part of this PR's fix set.
-- **P0 items block the PR from being considered mergeable.** There are no P0 findings in this review — the P1 items (FR-101, FR-102, FR-103) should be fixed before this is considered done, but none are correctness-breaking blockers on their own merit as this PRD is written. If the team's bar for "done" requires P1 closure before merge, treat FR-101/FR-102/FR-103 as the mergeability gate instead.
+- **Use TDD for every fix.** Each finding above starts with a failing test that reproduces the problem — a redelivered event ID after a failed dispatch (FR-101), a multi-byte truncation boundary (FR-102), a `nil`-returning `BuzzMonitorBuilder` (FR-103) — before any production code changes. This applies to test-only additions too: write the test, confirm it exercises the previously-uncovered branch, then leave production code as-is if it's already correct (e.g. FR-103 once written may reveal the `continue` logic needs no change at all).
+- **Conduct a brief code review after each fix, before moving to the next.** Don't batch all ten findings into one uninspected commit — land, review, then proceed. Confirm `go fmt`, `go vet`, `golangci-lint run`, and `go test -race -gcflags=all=-d=checkptr=0 ./...` are clean for each affected package before moving on.
+- **Use agent teammates and git worktrees for parallel fix workstreams.** FR-101 (bridge dedup) and FR-102 (title truncation) touch the same file but different functions and can proceed in parallel; FR-103 (test gap) is fully independent; FR-104, FR-105, FR-106, FR-107, FR-108, FR-109 are documentation-only and independent of every code fix and each other — farm them out to separate worktrees/agents rather than serializing.
+- **P0 items block the PR from being considered mergeable.** There are no P0 findings in this review. FR-101 through FR-104 (P1) should be closed before this is considered done, per dev-flow Step 9's rule that every review finding gets a corresponding commit — but none of them are correctness/security/AC-breaking blockers severe enough to prevent merge on their own if the team's timeline requires otherwise. FR-105 through FR-110 (P2) are recommended, not required.
+- Before closing dev-flow Step 9, check each of the ten findings above off explicitly against the commit log — do not rely on memory (AGENTS.md's TDD section).

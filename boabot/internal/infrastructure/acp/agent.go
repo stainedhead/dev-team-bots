@@ -71,6 +71,11 @@ type Agent struct {
 
 	maxSessions int
 
+	// publisher is the fallback-publish safety net (turn.go) used when a
+	// turn produces real output but the model never called the buzz CLI
+	// itself to publish it.
+	publisher Publisher
+
 	mu           sync.Mutex
 	sessions     map[sdk.SessionId]*session
 	sessionOrder []sdk.SessionId // insertion order, for FIFO eviction once maxSessions is exceeded
@@ -95,6 +100,13 @@ func WithMaxSessions(n int) Option {
 	return func(a *Agent) { a.maxSessions = n }
 }
 
+// WithPublisher overrides the default cliPublisher -- mainly useful for
+// tests, but also lets a deployment substitute a different publish
+// mechanism if it ever needs to.
+func WithPublisher(p Publisher) Option {
+	return func(a *Agent) { a.publisher = p }
+}
+
 // New constructs an Agent backed by the Worker workerFactory.New() returns.
 // workDir is applied to every domain.Task built from a session/prompt call,
 // matching the persona's configured work directory.
@@ -104,6 +116,7 @@ func New(workerFactory domain.WorkerFactory, workDir string, opts ...Option) *Ag
 		workDir:           workDir,
 		keepAliveInterval: defaultKeepAliveInterval,
 		maxSessions:       defaultMaxSessions,
+		publisher:         cliPublisher{},
 		sessions:          make(map[sdk.SessionId]*session),
 	}
 	for _, opt := range opts {

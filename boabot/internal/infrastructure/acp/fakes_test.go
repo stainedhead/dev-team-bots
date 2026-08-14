@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -51,4 +52,39 @@ func (f *fakeWorkerFactory) New() domain.Worker {
 		f.worker = &fakeWorker{}
 	}
 	return f.worker
+}
+
+// fakePublisher records Publish calls so tests can assert on fallback-publish
+// behavior without shelling out to a real buzz CLI.
+type fakePublisher struct {
+	mu    sync.Mutex
+	err   error
+	calls []publishCall
+}
+
+type publishCall struct {
+	channelID string
+	content   string
+}
+
+func (f *fakePublisher) Publish(_ context.Context, channelID, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, publishCall{channelID: channelID, content: content})
+	return f.err
+}
+
+func (f *fakePublisher) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func (f *fakePublisher) last() publishCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return publishCall{}
+	}
+	return f.calls[len(f.calls)-1]
 }

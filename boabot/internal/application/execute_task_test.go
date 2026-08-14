@@ -231,6 +231,53 @@ func TestExecuteTask_ToolLoop_SingleToolCall(t *testing.T) {
 	if callCount != 2 {
 		t.Errorf("expected 2 provider calls (tool + final), got %d", callCount)
 	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "read_file" {
+		t.Errorf("expected result.ToolCalls to contain the executed read_file call, got %+v", result.ToolCalls)
+	}
+}
+
+func TestExecuteTask_ToolLoop_TracksAllExecutedToolCallsAcrossRounds(t *testing.T) {
+	calls := 0
+	provider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, req domain.InvokeRequest) (domain.InvokeResponse, error) {
+			calls++
+			switch calls {
+			case 1:
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c1", Name: "write_file", Args: map[string]any{"path": "/tmp/a.txt"}}},
+					StopReason: "tool_calls",
+				}, nil
+			case 2:
+				return domain.InvokeResponse{
+					ToolCalls:  []domain.ToolCall{{ID: "c2", Name: "read_file", Args: map[string]any{"path": "/tmp/a.txt"}}},
+					StopReason: "tool_calls",
+				}, nil
+			default:
+				return domain.InvokeResponse{Content: "all done", StopReason: "stop"}, nil
+			}
+		},
+	}
+	mcp := &mocks.MCPClient{
+		ListToolsFn: func(_ context.Context) ([]domain.MCPTool, error) {
+			return []domain.MCPTool{{Name: "write_file"}, {Name: "read_file"}}, nil
+		},
+		CallToolFn: func(_ context.Context, _ string, _ map[string]any) (domain.MCPToolResult, error) {
+			return domain.MCPToolResult{Content: []domain.MCPContent{{Type: "text", Text: "ok"}}}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(provider, mcp, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	result, err := uc.Execute(context.Background(), domain.Task{ID: "t-tool-rounds", Instruction: "do it"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tracked tool calls across both rounds, got %d: %+v", len(result.ToolCalls), result.ToolCalls)
+	}
+	if result.ToolCalls[0].Name != "write_file" || result.ToolCalls[1].Name != "read_file" {
+		t.Errorf("expected tracked calls in execution order [write_file, read_file], got [%s, %s]",
+			result.ToolCalls[0].Name, result.ToolCalls[1].Name)
+	}
 }
 
 func TestExecuteTask_ToolLoop_MultipleRounds(t *testing.T) {

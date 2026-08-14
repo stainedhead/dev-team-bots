@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/screening"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
@@ -150,14 +151,12 @@ func run(ctx context.Context, cfg config.Config) error {
 	mgr := team.NewTeamManager(managerCfg, router, b)
 
 	// Wire the Slack Socket Mode monitor when all three credentials are present.
-	slackBotName := ""
 	if cfg.Slack.BotToken != "" && cfg.Slack.AppToken != "" && cfg.Slack.BotName != "" {
 		// Ensure the target bot's queue is registered before we try to obtain it.
 		// (All enabled bots are registered inside mgr.Run, but the monitor needs
 		// a queue reference at construction time — we register it here so the
 		// router has it before Run is called.)
 		router.Register(cfg.Slack.BotName, 0)
-		slackBotName = cfg.Slack.BotName
 		slackMon := slackinfra.New(slackinfra.Config{
 			BotToken: cfg.Slack.BotToken,
 			AppToken: cfg.Slack.AppToken,
@@ -167,14 +166,33 @@ func run(ctx context.Context, cfg config.Config) error {
 		slog.Info("slack socket mode monitor configured", "bot", cfg.Slack.BotName)
 	}
 
-	// Wire the Buzz (Nostr relay) monitor. buildBuzzMonitor's own first
-	// statement is "if !cfg.Buzz.Enabled { return nil }" -- the single
-	// early guard that keeps every Buzz/Nostr code path, including secret
-	// resolution, from executing at all when Buzz is disabled (FR-036).
-	if buzzMon := buildBuzzMonitor(ctx, cfg, store, router, slackBotName == cfg.Buzz.BotName && slackBotName != "", managerCfg.BotsDir, managerCfg.MemoryRoot, mgr.Shutdown); buzzMon != nil {
-		mgr.WithChannelMonitor(buzzMon)
-		slog.Info("buzz relay monitor configured", "bot", cfg.Buzz.BotName, "relay_url", cfg.Buzz.RelayURL)
-	}
+	// Wire Buzz (Nostr relay) monitors: one per Buzz-enabled team.yaml
+	// persona (FR-001/FR-003), not the single process-wide cfg.Buzz block
+	// this used to be. The actual per-persona loop lives in
+	// TeamManager.Run() (not here) because the Dispatcher/BoardStore the
+	// Buzz -> Dispatcher/DirectTaskStore/BoardStore bridge needs (P2.2)
+	// don't exist until Run() creates its shared stores -- this closure is
+	// only the infrastructure-construction step (buildBuzzMonitor), called
+	// back by Run() at the right time with the dependencies only it has.
+	// See specs/260814-boabot-native-daemon-mode/implementation-notes.md.
+	mgr.WithBuzzMonitorBuilder(func(
+		buildCtx context.Context,
+		entry team.BotEntry,
+		botCfg config.Config,
+		r *queue.Router,
+		dispatcher domain.ScheduledTaskDispatcher,
+		board domain.BoardStore,
+		shutdownFn func(context.Context) error,
+	) domain.ChannelMonitor {
+		chatMgr := apporchestrator.NewChatTaskManager(dispatcher)
+		bridge := apporchestrator.NewBuzzTaskBridge(dispatcher, board, chatMgr)
+		// A persona's own bot_name may collide with Slack's configured bot
+		// name (an operator pointing both channels at the same bot);
+		// buildBuzzMonitor's router.Lookup-before-Register handles that
+		// (and the Run()-side team-entry pre-registration) uniformly now,
+		// so no queueAlreadyRegistered flag is needed here.
+		return buildBuzzMonitor(buildCtx, botCfg, store, r, managerCfg.BotsDir, managerCfg.MemoryRoot, shutdownFn, bridge)
+	})
 
 	return mgr.Run(ctx)
 }
@@ -189,11 +207,22 @@ func run(ctx context.Context, cfg config.Config) error {
 // everything's present" pattern above -- so Slack, every other bot, and the
 // rest of the process start completely unaffected.
 //
-// queueAlreadyRegistered is true when the Slack wiring block above already
-// called router.Register for the same bot name (an operator pointing both
-// channels at one bot): router.Register panics on a duplicate name, so
-// buildBuzzMonitor must not call it again in that case.
-func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.SecretStore, router *queue.Router, queueAlreadyRegistered bool, botsDir, memoryRoot string, shutdownFn buzzinfra.ShutdownFunc) *buzzinfra.Monitor {
+// Registration is idempotent via router.Lookup: whether the bot's queue was
+// already registered by the Slack wiring block above (an operator pointing
+// both channels at one bot), by an earlier persona sharing this bot name, or
+// by TeamManager.Run()'s own team-entry pre-registration (the conventional
+// case once a persona's own team.yaml entry name matches its buzz.bot_name),
+// buildBuzzMonitor reuses the existing queue instead of calling
+// router.Register again -- Register panics on a duplicate name, which would
+// otherwise crash the whole process rather than just skipping Buzz for one
+// persona.
+//
+// td, when non-nil, is wired as the Monitor's BuzzTaskDispatcher bridge
+// (internal/application/orchestrator.BuzzTaskBridge in production) so
+// dispatched tasks flow through Dispatcher/DirectTaskStore/BoardStore
+// instead of the direct queue.Send fallback (see monitor.go's
+// WithTaskDispatcher option doc comment).
+func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.SecretStore, router *queue.Router, botsDir, memoryRoot string, shutdownFn buzzinfra.ShutdownFunc, td domain.BuzzTaskDispatcher) *buzzinfra.Monitor {
 	bc := cfg.Buzz
 	if !bc.Enabled {
 		return nil
@@ -248,8 +277,9 @@ func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.Secre
 
 	rc := buzzinfra.NewRelayClient(bc.RelayURL, sk, opts...)
 
-	if !queueAlreadyRegistered {
-		router.Register(bc.BotName, 0)
+	q, alreadyRegistered := router.Lookup(bc.BotName)
+	if !alreadyRegistered {
+		q = router.Register(bc.BotName, 0)
 	}
 
 	// AcquireLock's O_CREATE|O_EXCL (via Monitor.Start) needs memoryRoot to
@@ -279,10 +309,15 @@ func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.Secre
 
 	screener := screening.NewScreenContentUseCase(infraScreening.NewRegexScreener())
 
-	return buzzinfra.NewMonitor(rc, monCfg, router.QueueFor(bc.BotName), screener,
+	monOpts := []buzzinfra.MonitorOption{
 		buzzinfra.WithShutdownFunc(shutdownFn),
 		buzzinfra.WithMonitorLogger(slog.Default()),
-	)
+	}
+	if td != nil {
+		monOpts = append(monOpts, buzzinfra.WithTaskDispatcher(td))
+	}
+
+	return buzzinfra.NewMonitor(rc, monCfg, q, screener, monOpts...)
 }
 
 // readBotDescription best-effort reads botsDir/<botType>/AGENTS.md and

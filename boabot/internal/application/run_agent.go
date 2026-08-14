@@ -155,12 +155,23 @@ func (u *RunAgentUseCase) handleTask(ctx context.Context, rm domain.ReceivedMess
 		return
 	}
 
+	// Prefer the payload's own Source (the task's origin DirectTaskSource,
+	// e.g. "chat"/"buzz") over Message.From, which carries the *sending*
+	// bot identity (the dispatcher's own name) rather than the task's
+	// origin channel -- see implementation-notes.md's P1.0 findings.  Empty
+	// Source (every producer that predates this field) falls back to the
+	// pre-existing Message.From-based behaviour unchanged.
+	source := string(rm.Message.From)
+	if p.Source != "" {
+		source = p.Source
+	}
+
 	worker := u.workerFactory.New()
 	result, err := worker.Execute(ctx, domain.Task{
 		ID:          p.TaskID,
 		BoardItemID: p.BoardItemID,
 		Instruction: p.Instruction,
-		Source:      string(rm.Message.From),
+		Source:      source,
 		WorkDir:     p.WorkDir,
 	})
 	if err != nil {

@@ -294,6 +294,55 @@ func TestRouter_QueueForUnregisteredPanics(t *testing.T) {
 	r.QueueFor("nobody") // should panic
 }
 
+// TestRouter_Lookup_Registered verifies that Lookup returns the existing
+// Queue (and does not panic/register a new one) for an already-registered
+// bot name -- the non-panicking existence check the multi-persona Buzz
+// monitor loop (team_manager.go) needs to avoid a duplicate-registration
+// panic (see specs/260814-boabot-native-daemon-mode/implementation-notes.md).
+func TestRouter_Lookup_Registered(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+	r.Register("alice", 10)
+
+	q, ok := r.Lookup("alice")
+	if !ok {
+		t.Fatal("expected Lookup to report the bot as registered")
+	}
+	if q == nil {
+		t.Fatal("expected a non-nil Queue for a registered bot")
+	}
+
+	// The returned Queue must be backed by the same underlying channel as
+	// the one Register created -- a message sent to "alice" must be
+	// receivable through it.
+	msg := newMsg("lookup-1", "bob", "alice")
+	if err := q.Send(context.Background(), "alice", msg); err != nil {
+		t.Fatalf("Send via Lookup queue: %v", err)
+	}
+	msgs, err := q.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive via Lookup queue: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Message.ID != "lookup-1" {
+		t.Errorf("expected message lookup-1, got %v", msgs)
+	}
+}
+
+// TestRouter_Lookup_Unregistered verifies that Lookup reports false (not a
+// panic) for a bot name that has never been registered.
+func TestRouter_Lookup_Unregistered(t *testing.T) {
+	t.Parallel()
+	r := queue.NewRouter()
+
+	q, ok := r.Lookup("nobody")
+	if ok {
+		t.Fatal("expected Lookup to report the bot as not registered")
+	}
+	if q != nil {
+		t.Error("expected a nil Queue for an unregistered bot")
+	}
+}
+
 // TestRouter_SendTo verifies that Router.SendTo delivers a message directly.
 func TestRouter_SendTo(t *testing.T) {
 	t.Parallel()

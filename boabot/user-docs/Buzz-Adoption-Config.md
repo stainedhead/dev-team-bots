@@ -11,6 +11,14 @@
 
 Not yet supported (see the PRD's Phasing section): NIP-17 gift-wrapped DMs and DM-triggered tasks, NIP-50 search, NIP-CW channel-window paging, NIP-AP persona publication, NIP-AM turn metrics, NIP-AE engram publication, and git-on-Nostr (NIP-GS/NIP-34/NIP-MP).
 
+### Multiple personas, one process
+
+Native daemon mode wires one Buzz identity **per Buzz-enabled `team.yaml` persona** — not one process-wide identity. Any number of enabled `team.yaml` entries can each carry their own `buzz:` block (Step 2, below) in their own `bots/<type>/config.yaml`, and each gets its own relay connection, own signed keypair, and own `@mention` responses, all running as goroutines inside the one `boabot` process that also serves the orchestrator web UI/API/board. This is what makes true multi-agent Buzz conversations possible: mentioning persona A in a channel dispatches only to persona A; mentioning persona B dispatches only to persona B; both can be active in the same channel at once without cross-talk, and a Buzz-dispatched task from either shows up live in the orchestrator's Tasks list and Kanban board (tagged with the correct `bot_name`), not just in the Buzz conversation itself.
+
+Provision **each** persona's own `buzz_private_key` separately (Step 3 below, once per persona: `boabotctl secret set buzz_private_key --bot <persona-name>`) — the secret is already namespaced by `bot_name`, so this "just works" the same way per-bot Slack tokens do. There is no additional per-process configuration: every enabled, Buzz-configured persona activates independently and in isolation from every other bot's Buzz status (a bad or missing key for one persona is logged and skipped; it never prevents another persona's monitor, the orchestrator UI, or the rest of the process from starting — the same failure-isolation guarantee a single-identity setup already had).
+
+**One caveat:** each persona's `buzz.bot_name` must be unique across the team. Two personas whose own `config.yaml` accidentally set the same `buzz.bot_name` is treated as a misconfiguration — the second persona's Buzz monitor is refused (logged, not started) rather than silently sharing the first persona's relay connection/queue.
+
 ---
 
 ## Step 1 — Generate an identity (keypair)
@@ -144,3 +152,4 @@ The reply appears threaded under `alice`'s original message in any Buzz client, 
 - **Budget and autonomy**: Buzz-dispatched tasks go through the exact same `MessageQueue` → worker harness path as every other channel — the existing per-bot `BudgetTracker` caps and calibrated-autonomy gates apply with no Buzz-specific bypass.
 - **Process-singleton protection**: a second boabot process started against the same private key refuses to attach its Buzz monitor (logging why) rather than producing duplicate replies or a duplicate presence identity — see `docs/technical-details.md`'s "Buzz (Nostr) Channel Monitor" section.
 - **One bot per relay identity**: `bot_name` routes all Buzz messages received on that keypair's identity to a single named bot, matching Slack's `bot_name` model.
+- **No live reply for a recurring task's later runs**: an immediate `@mention` gets a threaded `kind:9` reply in the channel when it's dispatched (and when the task completes). A request parsed as recurring or far-future scheduled (see `user-docs/orchestrator.md` for how natural-language scheduling is interpreted) only gets that live in-channel reply for its initial confirmation — its second, third, ... Nth execution runs later via the scheduler outside of any single Buzz message, so there is nothing in the channel to reply into. Every execution's result still lands in the orchestrator's Tasks UI (and the Kanban board, for the initial dispatch) — check there for recurring-task history, not the Buzz channel. This matches the web UI chat path's own behavior; it is not a Buzz-specific limitation.

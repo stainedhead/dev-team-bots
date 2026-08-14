@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -186,6 +187,37 @@ func TestLocalTaskDispatcher_Dispatch_MessageContainsInstruction(t *testing.T) {
 		t.Errorf("expected From=orchestrator, got %q", sent[0].msg.From)
 	}
 	_ = task
+}
+
+// TestLocalTaskDispatcher_Dispatch_MessagePayloadCarriesSource verifies that
+// sendMessage's TaskPayload.Source carries the DirectTask's own
+// DirectTaskSource -- not the dispatcher's selfName -- so
+// RunAgentUseCase.handleTask can resolve domain.Task.Source correctly (see
+// boabot/specs/260814-boabot-native-daemon-mode/implementation-notes.md's
+// P1.0 findings on the Message.From-vs-DirectTaskSource gap).
+func TestLocalTaskDispatcher_Dispatch_MessagePayloadCarriesSource(t *testing.T) {
+	t.Parallel()
+	store := orchestrator.NewInMemoryDirectTaskStore("")
+	q := &mockQueue{}
+	dispatcher := orchestrator.NewLocalTaskDispatcher(store, q, "orchestrator")
+	ctx := context.Background()
+
+	_, err := dispatcher.Dispatch(ctx, "dev-1", "do the thing", nil, domain.DirectTaskSourceBuzz, "", "")
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	sent := q.getSent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	var payload domain.TaskPayload
+	if err := json.Unmarshal(sent[0].msg.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Source != string(domain.DirectTaskSourceBuzz) {
+		t.Fatalf("expected payload.Source %q, got %q", domain.DirectTaskSourceBuzz, payload.Source)
+	}
 }
 
 func TestLocalTaskDispatcher_Dispatch_StoreIsUpdated(t *testing.T) {

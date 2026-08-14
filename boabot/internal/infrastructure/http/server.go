@@ -1714,7 +1714,7 @@ func (s *Server) handleChatSend(w http.ResponseWriter, r *http.Request) {
 
 	// Check for task-management intent before forwarding to the bot.
 	if ctm := s.cfg.ChatTaskManager; ctm != nil {
-		chatResp, handled, handleErr := ctm.DetectAndHandle(ctx, threadID, req.Content)
+		chatResp, handled, _, handleErr := ctm.DetectAndHandle(ctx, threadID, req.Content, domain.DirectTaskSourceChat)
 		if handleErr != nil {
 			writeInternalError(w, "chat task manager", handleErr)
 			return

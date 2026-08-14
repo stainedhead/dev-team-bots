@@ -1,145 +1,133 @@
 # Dev-Flow Process Analysis
 
-**Feature:** boabot-acp-stdio-harness-support
-**Spec directory:** specs/archive/260813-boabot-acp-stdio-harness-support (implementation), specs/archive/260813-boabot-acp-stdio-harness-support-auto-review (review-fix cycle)
-**Report generated:** 2026-08-13
+**Feature:** Boabot Native Daemon Mode — Multi-Agent Buzz Support
+**Spec directory:** specs/archive/260814-boabot-native-daemon-mode/ (+ specs/archive/260814-boabot-native-daemon-mode-auto-review/)
+**Report generated:** 2026-08-14
 
 ---
 
 ## 1. Executive Summary
 
-Built `internal/infrastructure/acp/`, a thin adapter implementing `github.com/coder/acp-go-sdk`'s `acp.Agent` interface over BaoBot's existing `domain.Worker`, so a single BaoBot persona can be registered as a `buzz-acp` custom harness (Agent Client Protocol over stdio) — an alternative, lighter-weight distribution path to the already-merged native Buzz `ChannelMonitor` integration. Includes a real end-to-end integration test against the compiled binary, a new ADR (ADR-B026) explaining why this doesn't contradict the earlier ADR-B020 rejection of running native Buzz support under `buzz-acp`, and a full 9-finding independent-review fix cycle (including a reproduced, then fixed, data race).
+Extended `boabot`'s native daemon mode from a single, process-wide Buzz identity to one Buzz identity + `ChannelMonitor` per `boabot-team` persona, all running in one shared process with one orchestrator UI. Buzz-dispatched work, which previously bypassed the orchestrator entirely (straight to `Worker.Execute`), now creates a real `DirectTask` and Kanban board item, visible live and tagged per persona. Recurring/scheduled Buzz requests reuse the existing NL-scheduling flow. Buzz DM support was explicitly raised mid-run and scoped out as a documented Non-Goal.
 
-**Total runtime:** ~1h 13m, first commit to last (`ddc40f0` at 11:18:40 to `828f4ba` at 12:31:13, 2026-08-13, all timestamps local -04:00 per `git log`). This spans PRD authoring through the review-fix cycle's final quality pass — everything through Step 10 of the 12-step flow at the time of this report (Steps 11-12 are in progress/pending).
-
-**Overall assessment:** Fast, and — notably — the process caught its own real bugs twice: once via the independent code-review step (Step 4) finding a genuine, reproduced data race that the implementer's own tests had missed, and once via the implementer independently re-verifying (twice) a documentation claim about `domain.BudgetTracker` that turned out to be wrong in a subtler way than first corrected. Both are exactly the kind of defect a single-pass implementation-without-review would very plausibly have shipped.
+**Total runtime:** ~1h 45m (first dev-flow commit `76a7df0` at 15:40:40-04:00 to the Step 11 completion commit `84ef378` at 17:25:49-04:00, per git log — Steps 12–14 add additional time beyond this report's generation).
+**Overall assessment:** Clean, uninterrupted 11-of-14-steps run with no failed steps, no rework loops, and 0 P0 findings surviving code review. The only mid-run deviation was a real concurrency bug (FR-101) caught by an advisor review during Step 9, fixed the same step with a dedicated concurrency regression test — a genuine quality catch, not a process failure.
 
 ---
 
 ## 2. Step-by-Step Timing
 
-Git commit timestamps are authoritative (per this report's own instructions) and override the hand-recorded times in `DEV-FLOW-STATUS.md`, which were written progressively as approximations, not measured precisely.
+(Source: `DEV-FLOW-STATUS.md`, cross-checked against git commit timestamps — both sources agree within normal write-then-commit lag of a few minutes per step, no discrepancy worth flagging.)
 
-| Step | Name | Start (first commit) | End (last commit) | Runtime (min) | Key Outputs |
+| Step | Name | Start (UTC) | End (UTC) | Runtime (min) | Key Outputs |
 |---|---|---|---|---|---|
-| 0 (pre-flow) | PRD authoring, spec creation, research, architecture, task breakdown | `ddc40f0` 11:18:40 | `1bbd55e` 11:25:22 | ~7 | PRD, spec.md, research.md (confirmed `coder/acp-go-sdk` exists + `buzz-acp`'s real protocol via `strings`), architecture.md, tasks.md (T1-T8) |
-| 1 | Verify Spec Initialized | — | `8295bc4` 11:26:22 | <1 | Confirmed all 8 phase files present |
-| 2 | Implement Product (T1-T8) | `0215672` 11:26:46 | `1fd209c` 12:04:14 | ~38 | `internal/infrastructure/acp/` (agent/session/turn + tests), `cmd/boabot/acp.go`, `-acp` flag, real subprocess integration test, mid-flight FR-005 correction (twice) |
-| 3 | Documentation and User Docs | (folded into Step 2's last commit) | `1fd209c` 12:04:14 | ~0 (done alongside T8) | ADR-B026, technical-details.md, product docs, README, `user-docs/ACP-Harness-Adoption-Config.md` |
-| 4 | Code and Design Review | `49caf6c` 12:04:56 | `9b9399d` 12:13:41 | ~8.75 | Independent reviewer (fresh, non-fork agent) found 1 reproduced data race, 2 more P0s, 3 P1s, 3 P2s |
-| 5 | Prepare Review PRD | `9b9399d` (base) | `466d706` 12:14:41 | ~1 | Self-review against standard PRD dimensions; added a missing open question and agent-teammate guidance |
-| 6 | Archive Original Spec | `92a8b4b` 12:15:07 | `890b1f6` 12:15:11 | ~0.1 | `specs/archive/260813-boabot-acp-stdio-harness-support/` |
-| 7 | Spec Review Fixes | `a87ab59` 12:15:20 | `f8a1b12` 12:16:47 | ~1.5 | `specs/260813-boabot-acp-stdio-harness-support-auto-review/` (9 findings → 8 tasks, P0-P2) |
-| 8 | Implement Review Fixes | `888010d` 12:17:04 | `0b17565` 12:28:54 | ~11.8 | RT1 (race fix via `turnMu`), RT2 (logging), RT3 (RulesTracker), RT4 (resolved as RT1 side effect), RT5 (real `CloseSession` + bounded map), RT6 (`go mod tidy`), RT7 (CI wiring), RT8 (stdin-EOF test) |
-| 9 | Archive Fixes Spec | `18e8bf7` 12:29:02 | `521e520` 12:29:10 | ~0.1 | `specs/archive/260813-boabot-acp-stdio-harness-support-auto-review/` |
-| 10 | Final Quality Pass | `d052343` 12:29:18 | `828f4ba` 12:31:13 | ~2 | Full `-race` suite (with the documented `checkptr` workaround), 91.0% domain/application coverage, lint clean |
-| 11 | Process Analysis Report | in progress | — | — | This document |
-| 12 | Open Pull Request | pending | — | — | — |
+| 1 | Create Spec from PRD | 19:35:43 | 19:40:30 | 5 | `specs/260814-boabot-native-daemon-mode/` created, 8 phase files + PRD moved in |
+| 2 | Review Spec | 19:40:30 | 19:46:50 | 6 | 4 of 5 open research questions resolved via live codebase research; Edge Cases section added; verdict: implementation-ready |
+| 3 | Implement Product | 19:46:50 | 20:32:04 | 45 | 9 code tasks (P1.0–P3.2) implemented TDD-first, 3 commits, full test suite green |
+| 4 | Documentation and User Docs | 20:32:04 | 20:40:24 | 8 | README/docs/user-docs updated, new getting-started guide created |
+| 5 | Code and Design Review | 20:40:24 | 20:59:42 | 19 | 10 findings (0 P0/4 P1/6 P2), every claim independently reproduced, not asserted |
+| 6 | Prepare Review PRD | 20:59:42 | 21:00:47 | 1 | Review PRD validated; embedded open decisions consolidated with recommendations |
+| 7 | Archive Original Spec | 21:00:47 | 21:01:20 | 1 | Original spec moved to `specs/archive/` |
+| 8 | Spec Review Fixes | 21:01:20 | 21:03:17 | 2 | Fix-spec created from review PRD, 8 phase files populated |
+| 9 | Implement Review Fixes | 21:03:17 | 21:23:33 | 20 | All 10 findings closed, 4 commits, including an advisor-caught concurrency-race hardening |
+| 10 | Archive Fixes Spec | 21:23:33 | 21:24:00 | 1 | Fix-spec moved to `specs/archive/` |
+| 11 | Final Quality Pass | 21:24:00 | 21:25:26 | 1 | Independent re-verification: lint 0 issues, `-race` suite green, coverage 91.3% |
 
 **Notable observations:**
-- Step 2 (38 min) is the dominant cost, as expected for the actual TDD implementation of a new package plus a real subprocess integration test — but it includes real research-in-the-loop (reading the ACP SDK's source directly, not just `go doc`, and reading `team_manager.go`'s `startBot` to get construction primitives exactly right) that a pure "write code" estimate wouldn't capture.
-- Step 2 also includes a genuine mid-flight correction, twice: a first implementation attempt (not separately tracked in this git history — it ran into a harness isolation issue and produced no commits) discovered `domain.BudgetTracker` doesn't exist as `boabot/AGENTS.md` describes it; a second pass then discovered *that* correction was itself over-broad (`internal/domain/cost`/`internal/application/cost` DO exist, just unwired) and fixed it again. Both corrections are visible as separate commits (`8a90210`, `c7d736a`).
-- Step 4's independent review (8.75 min) is disproportionately valuable relative to its cost: it found a data race that took under 9 minutes to identify but would have shipped a real production concurrency bug if skipped.
-- Steps 5, 6, 7, 9 are all near-instantaneous — they're process/bookkeeping steps (self-review, `git mv`, spec-directory scaffolding), not implementation work, and the timing reflects that correctly.
+- Step 3 (Implementation, 45 min) and Step 9 (Review Fixes, 20 min) dominate runtime, as expected — they're the only steps writing production Go code under TDD.
+- Step 5 (Code Review, 19 min) is disproportionately long relative to its output size because it was explicitly instructed to independently reproduce every claim (race conditions, coverage numbers, architecture-boundary checks) rather than assert them — that discipline is a deliberate time/rigor tradeoff, not inefficiency.
+- No step was retried or failed. The one substantive mid-course correction (FR-101's concurrency hardening) happened *within* Step 9's single pass, not as a separate retry step.
+- Steps 6, 7, 10, 11 (1 minute each) reflect that this dev-flow's orchestrator did the review/archival work directly (already having full context from prior steps) rather than delegating to a fresh sub-agent, which would have re-incurred context-loading overhead for genuinely small tasks.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits on `feat/boabot-acp-stdio-harness` vs. `main`:** 36
-**Files changed:** 41 (+2,684 / -78 lines, per `git diff main...HEAD --shortstat`)
-
-Full commit list (chronological, local time):
+**Total commits (Steps 1–11):** 21
 
 | Commit | Timestamp | Message |
 |---|---|---|
-| `ddc40f0` | 2026-08-13T11:18:40-04:00 | docs(spec): PRD and spec for BaoBot ACP stdio harness support |
-| `1bbd55e` | 2026-08-13T11:25:22-04:00 | docs(spec): complete research, architecture, and task breakdown for ACP harness |
-| `8295bc4` | 2026-08-13T11:26:22-04:00 | chore: start dev-flow implementation for boabot-acp-stdio-harness-support |
-| `0215672` | 2026-08-13T11:26:46-04:00 | chore: Step 2 (Implement Product) started |
-| `8a90210` | 2026-08-13T11:38:07-04:00 | docs(spec): correct FR-005 — domain.BudgetTracker doesn't exist |
-| `0e085d7` | 2026-08-13T11:42:54-04:00 | refactor(team): export NewLocalProviderFactory, add acp-go-sdk dep |
-| `58752ec` | 2026-08-13T11:48:25-04:00 | feat(acp): implement ACP Agent adapter over the existing Worker (T2-T6) |
-| `7285a9e` | 2026-08-13T11:53:04-04:00 | feat(cmd): wire boabot -acp mode into main.go (T1) |
-| `6af9e61` | 2026-08-13T11:53:59-04:00 | docs(spec): update status.md and implementation-notes.md for T1-T6 |
-| `28971a1` | 2026-08-13T11:58:07-04:00 | test(acp): real end-to-end integration test against the compiled binary (T7) |
-| `c7d736a` | 2026-08-13T12:00:27-04:00 | docs(spec): correct an over-broad FR-005 claim about budget enforcement |
-| `1e7d6bc` | 2026-08-13T12:01:35-04:00 | docs(spec): the buzz checkptr issue is ADR-B020's already-documented one, not new |
-| `1fd209c` | 2026-08-13T12:04:14-04:00 | docs(boabot): document the ACP stdio harness mode (T8) |
-| `8191032` | 2026-08-13T12:04:41-04:00 | docs(spec): mark Phase 5 (Implementation) complete, 8/8 tasks |
-| `49caf6c` | 2026-08-13T12:04:56-04:00 | chore: Steps 2-3 complete, Step 4 (Code and Design Review) started |
-| `9b9399d` | 2026-08-13T12:13:41-04:00 | docs: Step 4 code review PRD (auto-review) — 3 P0, 3 P1, 3 P2 findings |
-| `466d706` | 2026-08-13T12:14:41-04:00 | docs: Step 5 — resolve review-PRD gaps (open question, agent-teammate guidance) |
-| `92a8b4b` | 2026-08-13T12:15:07-04:00 | docs(spec): mark Phase 6 (Completion & Archival) complete |
-| `890b1f6` | 2026-08-13T12:15:11-04:00 | chore: archive specs/260813-boabot-acp-stdio-harness-support (Step 6) |
-| `a87ab59` | 2026-08-13T12:15:20-04:00 | chore: Step 6 complete, Step 7 (Spec Review Fixes) started |
-| `f8a1b12` | 2026-08-13T12:16:47-04:00 | docs(spec): Step 7 — spec directory for auto-review fixes (9 tasks, P0-P2) |
-| `888010d` | 2026-08-13T12:17:04-04:00 | chore: Step 7 complete, Step 8 (Implement Review Fixes) started |
-| `7907a68` | 2026-08-13T12:18:54-04:00 | fix(acp): serialize turn execution to fix a reproduced data race (RT1/FR-001) |
-| `f0d5f04` | 2026-08-13T12:19:39-04:00 | test(acp): prove RT4/FR-005 (session-cancel re-entrancy) resolved by turnMu |
-| `d7767ed` | 2026-08-13T12:21:34-04:00 | feat(acp): add turn-level logging; make the doc's log-line claim real (RT2/FR-002/FR-003) |
-| `33c2ed4` | 2026-08-13T12:21:50-04:00 | docs(spec): update review-fixes status — P0s + RT4 done (4/8) |
-| `a5e2040` | 2026-08-13T12:23:26-04:00 | feat(acp): wire RulesTracker to match native mode's construction (RT3/FR-004) |
-| `7e0703b` | 2026-08-13T12:26:11-04:00 | feat(acp): real CloseSession + bounded session map (RT5/FR-006) |
-| `c5b8432` | 2026-08-13T12:26:36-04:00 | chore(deps): go mod tidy — coder/acp-go-sdk is a direct dependency (RT6/FR-007) |
-| `176a10b` | 2026-08-13T12:27:11-04:00 | ci(boabot): run the ACP integration test in CI (RT7/FR-008) |
-| `1d7792c` | 2026-08-13T12:28:09-04:00 | test(acp): prove clean exit on stdin EOF at the binary level (RT8/FR-009) |
-| `0b17565` | 2026-08-13T12:28:54-04:00 | docs(spec): Step 8 complete — all 8 review fixes (9 findings) done |
-| `18e8bf7` | 2026-08-13T12:29:02-04:00 | chore: Step 8 complete, Step 9 (Archive Fixes Spec) started |
-| `521e520` | 2026-08-13T12:29:10-04:00 | chore: archive specs/260813-boabot-acp-stdio-harness-support-auto-review (Step 9) |
-| `d052343` | 2026-08-13T12:29:18-04:00 | chore: Step 9 complete, Step 10 (Final Quality Pass) started |
-| `828f4ba` | 2026-08-13T12:31:13-04:00 | chore: Step 10 (Final Quality Pass) complete — stable |
+| `76a7df0` | 2026-08-14T15:40:40-04:00 | docs: create spec from boabot-native-daemon-mode PRD (dev-flow Step 1) |
+| `262aba0` | 2026-08-14T15:46:59-04:00 | docs: resolve spec review gaps with concrete codebase research (dev-flow Step 2) |
+| `d771f75` | 2026-08-14T16:08:15-04:00 | feat(boabot): add Buzz->Dispatcher bridge use case (P1.0, P2.1, P2.2) |
+| `793699b` | 2026-08-14T16:26:16-04:00 | feat(boabot): per-persona Buzz monitor wiring through the Dispatcher bridge (P1.1, P1.2, P2.3, P3.1, P3.2) |
+| `441dc36` | 2026-08-14T16:31:04-04:00 | fix(boabot): stop leaking Buzz channel UUIDs into the shared chat feed |
+| `4184f0f` | 2026-08-14T16:32:09-04:00 | docs: update dev-flow dashboard — Step 3 complete, Step 4 starting |
+| `f664fc3` | 2026-08-14T16:40:05-04:00 | docs(boabot): document multi-agent Buzz support (Step 4) |
+| `800958e` | 2026-08-14T16:40:30-04:00 | docs: update dev-flow dashboard — Step 4 complete, Step 5 starting |
+| `f2efdfb` | 2026-08-14T16:50:58-04:00 | docs: add automated code review PRD for boabot-native-daemon-mode (dev-flow Step 5) |
+| `bdac516` | 2026-08-14T16:58:18-04:00 | docs: finalize automated code review PRD for boabot-native-daemon-mode (dev-flow Step 5) |
+| `f6e6fbd` | 2026-08-14T16:59:49-04:00 | docs: update dev-flow dashboard — Step 5 complete, Step 6 starting |
+| `31b7b1b` | 2026-08-14T17:00:44-04:00 | docs: finalize review PRD with explicit open-decision recommendations (dev-flow Step 6) |
+| `77d0160` | 2026-08-14T17:01:17-04:00 | chore: archive original boabot-native-daemon-mode spec (dev-flow Step 7) |
+| `5bce0ad` | 2026-08-14T17:03:29-04:00 | docs: create spec for review-fix implementation (dev-flow Step 8) |
+| `1ea7119` | 2026-08-14T17:09:42-04:00 | fix(boabot): close P1 review findings — dedup, UTF-8 truncation, nil-monitor coverage, chat_provider disclosure |
+| `43ddd31` | 2026-08-14T17:15:47-04:00 | fix(boabot): harden FR-101 dedup against concurrent replay; close FR-107/FR-110 |
+| `69c673a` | 2026-08-14T17:20:22-04:00 | docs(boabot): close remaining P2 review findings — FR-105, FR-106, FR-108, FR-109 |
+| `287e3cf` | 2026-08-14T17:22:48-04:00 | docs(boabot): fix invalid checkbox syntax and stale LOC caught by post-completion review |
+| `68eb696` | 2026-08-14T17:23:39-04:00 | docs: update dev-flow dashboard — Step 9 complete, Step 10 starting |
+| `0d89691` | 2026-08-14T17:23:57-04:00 | chore: archive review-fixes spec (dev-flow Step 10) |
+| `84ef378` | 2026-08-14T17:25:49-04:00 | docs: update dev-flow dashboard — Step 11 final quality pass complete |
 
-All commits pushed to `origin/feat/boabot-acp-stdio-harness` incrementally throughout the run. PR: opened in Step 12 (see the PR itself for its URL).
+All 21 commits pushed to `worktree-boabot-native-multi-agent-buzz` immediately after creation (no batched/delayed pushes). No PR opened yet — that is dev-flow Step 14, not yet run at the time of this report.
 
 ---
 
 ## 4. Spec vs. Implementation Comparison
 
+The original PRD/spec (`specs/archive/260814-boabot-native-daemon-mode/spec.md`) had no numeric time estimates (Timeline and Milestones section was marked `[TBD]`), so this section compares planned *scope* against actual *scope*, not planned vs. actual duration.
+
 | Phase | Planned (spec) | Actual (git log) | Difference | Notes |
 |---|---|---|---|---|
-| Research | Confirm Go ACP SDK exists, confirm `buzz-acp`'s real protocol | ~7 min, via `strings` on the real binary + reading the SDK's actual source | On plan | Both open questions resolved with concrete evidence, not assumption |
-| Architecture | Thin adapter, no domain changes | Matched exactly | On plan | `internal/infrastructure/acp` imports only `domain` + the SDK — verified by the independent reviewer too |
-| Implementation (T1-T8) | 8 tasks | 8 tasks, ~38 min | On plan, but with 2 unplanned mid-flight spec corrections | FR-005 was corrected twice as real budget-enforcement code was discovered mid-implementation, not anticipated at architecture time |
-| Testing | Unit tests per task, real-binary integration test for T7 | Delivered, plus a `//go:build integration` test tag decision (not in the original plan, but consistent with repo convention) | On plan | T7 explicitly could not exercise the real `buzz-acp` binary (no dry-run mode, requires a live relay) — scoped down to the real *compiled boabot* binary instead, documented as a deliberate tradeoff |
-| Review-fix cycle | Not part of the original spec — added after independent review | 9 findings, 8 tasks, ~11.8 min | Unplanned but expected (dev-flow's own Steps 4-9 exist for exactly this) | All P0/P1/P2 items closed before Step 10; none deferred |
+| Research | 5 open questions (RQ1–RQ5) | 4 resolved concretely, 1 (RQ5, persona pick) correctly left as an operator decision, not a blocker | On scope | Research phase folded into Step 2 rather than a separate step — matches the dev-flow's actual 14-step shape, not a deviation |
+| Architecture | Sketch-level (`architecture.md` placeholders) | Concrete decisions recorded (DirectTaskSourceBuzz, TeamManager.WithBuzzMonitorBuilder hook, etc.) | On scope, exceeded detail | Architecture firmed up during Step 2 (before implementation), which is why Step 3 had no design churn |
+| Implementation | 9 tasks (P1.0–P3.2) | All 9 completed; P4.1 (live-relay demo verification) correctly deferred as an operator action, not code | On scope | 3 commits, matches the planned Phase 1→2→3 task grouping in `tasks.md` |
+| Review Fixes | Not originally planned (emerges from Step 5) | 10 findings, all 10 closed (4 P1 + 6 P2, including one optional P2 accepted-as-is with documentation) | Added scope (expected — this is what Steps 5–10 exist for) | One finding (FR-101) required a second iteration within Step 9 after an advisor review caught a logical race the first fix's TDD test didn't exercise |
+| Testing | Not separately planned; folded into TDD per-task | `-race` suite, concurrency-specific regression test for FR-101, coverage held at 91.3% aggregate (up from 77.8%→78.9% pre-feature baseline in the one below-90% package, not a regression) | On scope | No dedicated "testing phase" — TDD discipline meant tests shipped with each task, consistent with AGENTS.md |
 
-**Phases skipped:** None.
-**Phases added:** The entire review-fix cycle (Steps 4-9) — not a deviation, this is dev-flow's designed self-correction mechanism, and it worked as intended (caught a real bug).
+**Phases skipped:** None. **Phases added:** The FR-101 concurrency-hardening iteration within Step 9 (not a separate dev-flow step, but a real sub-iteration worth noting for future estimation).
 
 ---
 
 ## 5. Token / Message Usage
 
-Exact token counts are not captured by this session's tooling. Rough qualitative estimate based on step complexity:
-- Orchestrator (this session): the majority of turns — most implementation, all fix work, and all process-management steps ran in the main conversation directly rather than via sub-agents, after an early sub-agent attempt hit a harness isolation limitation (a pinned sub-agent's working directory matched the target worktree but the isolation flag wasn't set, and the harness's own `EnterWorktree` call refused to re-enter a path already equal to the current working directory — a real gap in the isolation tooling for this specific pre-existing-worktree scenario, not a flaw in this dev-flow run's execution).
-- Two sub-agent calls were used successfully: the independent code review (Step 4, a fresh non-fork agent, ~48 tool calls per its own report) and earlier research (ACP protocol/SDK investigation, a fork, ~9 tool calls).
-- Given the harness isolation issue forced most implementation work into the main conversation rather than parallelized sub-agents, this run's total token usage is almost certainly higher than a run where sub-agent delegation worked cleanly throughout — a process cost worth flagging for future runs in this same repo/worktree configuration.
+Exact token counts unavailable at the orchestrator level for this report, but sub-agent usage was logged per task-notification and is summarized here as a rough proxy for effort distribution:
+
+| Step | Sub-agent(s) | Approx. tokens (sub-agent) | Tool calls |
+|---|---|---|---|
+| 2 (research portion) | 1 research agent | ~44k | 10 |
+| 2 (research portion) | 1 research agent | ~66k | 32 |
+| 3 | 1 implementation agent | ~457k | 286 |
+| 4 | 1 documentation agent | ~142k | 59 |
+| 5 | 1 review agent | ~280k | 115 |
+| 9 | 1 implementation agent | ~249k | 159 |
+
+Orchestrator-level (this session's) token usage is not separately instrumented in this report. Step 3 and Step 5 are the two largest sub-agent consumers, consistent with their being the most substantive (writing 3 commits of production Go code) and most rigorous (independently reproducing every review claim) steps respectively.
 
 ---
 
 ## 6. Process Observations
 
 ### What worked well
-- **The independent-review step earned its cost.** Step 4's fresh-context reviewer found a real, reproducible data race that the implementer's own extensive test suite (12 tests, all passing, `-race`-clean) had not caught — because no test exercised concurrent sessions on one `Agent`, which is exactly the scenario the architecture's own design (multi-session, long-lived, pooled processes) implies is possible. This is the single clearest value-add in the whole run.
-- **TDD caught bugs during implementation, not just at review.** Writing `go test -race` for the keep-alive mechanism surfaced an ordering bug (the keep-alive goroutine could outlive `Prompt`'s return) before it ever reached review — a second, independent line of defense.
-- **Verifying claims instead of trusting them, twice over.** The `domain.BudgetTracker` finding was corrected once during implementation, then corrected *again* when a broader grep revealed the first correction was itself incomplete. The independent reviewer then verified both claims a third time, independently, and found them accurate. This repeated-verification pattern is exactly what caught a subtle, easy-to-miss inaccuracy that would otherwise have shipped in permanent documentation (an ADR).
-- **Real subprocess integration testing, not just mocks.** T7 and the review-fix cycle's RT8 both build and drive the actual compiled binary rather than testing only in-process fakes — this is what let RT8 turn "very likely correct" (the reviewer's own words about the stdin-EOF behavior) into "verified correct."
+- Delegating each dev-flow step to a fresh, well-briefed sub-agent (rather than doing everything in one continuous context) kept each step's output verifiable independently — the orchestrator re-ran build/vet/lint/test/coverage checks after every implementation step rather than trusting sub-agent self-reports, and every check passed, confirming the delegation model worked rather than just appearing to.
+- The code review (Step 5) was explicitly instructed to independently reproduce claims rather than trust the implementation report — this caught real, verifiable-in-detail issues (byte-vs-rune truncation, dead-code-turned-live provider check) that a less rigorous review would likely have missed or under-specified.
+- TDD discipline held throughout: every code fix in Step 9 started with a failing test, and one of those tests (FR-101's) was itself later found insufficient (didn't cover the concurrent case) and extended — a good example of TDD as an iterative discipline, not a one-shot checkbox.
+- A user question mid-run ("are we also listening to DM channels?") was treated as a real scope question, investigated against the actual codebase rather than answered from assumption, and resolved as an explicit, documented Non-Goal rather than silently ignored or silently expanded into scope.
 
 ### What caused delays or rework
-- **Sub-agent isolation limitation.** An early attempt to delegate implementation to a sub-agent failed twice: first because the sub-agent narrated instead of acting (a coordination/prompt-clarity problem, fixed by a corrective message), then because of a genuine harness limitation — a sub-agent whose working directory already matched the target git worktree could not satisfy the isolation precondition, and neither could the coordinator itself (`EnterWorktree` refuses to "enter" a path that's already the cwd). This forced a shift to direct implementation in the main conversation, which likely increased total token cost even though it didn't block progress.
-- **Two rounds of correction on the same finding (FR-005/budget enforcement).** Not wasted effort exactly — each correction was itself grep-verified and accurate at the time — but it's a sign that "no such interface exists" claims deserve a broader search (not just the specific name mentioned in stale documentation) before being stated as fact the first time.
+- FR-101 (Buzz relay-replay dedup) required a second implementation pass within Step 9: the first TDD fix passed its own sequential regression test but was vulnerable to a concurrent-duplicate race that only surfaced under an advisor review, not under `-race` (a logical/TOCTOU race, not a data race, so `go test -race` couldn't have caught it either way). This added time to Step 9 but produced a materially more correct fix, including a new concurrency-specific test.
+- Minor documentation drift accumulated during Step 3/4 (stale line-count numbers, an invalid markdown checkbox) that required a small follow-up commit (`287e3cf`) during Step 9 to correct — caught by a post-completion advisor pass rather than the original writing pass.
 
 ### Recommendations for future runs
-- When working in a pre-existing worktree (not one created via this session's own `EnterWorktree` call), expect sub-agent delegation for file-writing work to be unreliable, and default to direct implementation rather than losing time to isolation-error retries.
-- When a "does X exist in this codebase" finding is used to justify scoping something out, grep broadly (by concept/behavior, not just by the exact name a stale doc uses) before writing it into permanent documentation like an ADR.
+- For any finding involving concurrent/shared state (like FR-101's dedup mechanism), explicitly require both a sequential TDD regression test *and* a concurrent-actors test in the acceptance criteria up front, rather than relying on a later advisor pass to catch the gap — this would have caught the TOCTOU issue in the first implementation pass instead of the second.
+- Consider having Step 4 (Documentation) run a numeric self-check (line counts, coverage percentages cited in prose) against a freshly-run `go test -coverprofile` at write time, rather than relying on Step 9's cleanup commit to catch drift — the gap here was small but avoidable.
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration:** 2-3 days for an experienced Go engineer unfamiliar with the ACP protocol — roughly: 0.5 day reading the ACP spec and the `buzz-acp` binary's actual behavior (most engineers wouldn't think to `strings` a bundled binary to verify the CLI's real protocol coverage rather than trusting docs), 1 day implementing and unit-testing the adapter with the concurrency edge cases this feature actually has, 0.5 day writing a real subprocess integration test rather than settling for pure mocks, 0.5-1 day for a human code review round-trip (scheduling, review turnaround, addressing comments) equivalent to this run's Steps 4-9.
+**Estimated manual duration:** 2–4 working days for a senior Go engineer, assuming: reading and internalizing the existing `buildBuzzMonitor`/`TeamManager`/`DirectTaskStore`/`ChatTaskManager` code (half a day), writing the per-persona wiring and bridge use case with TDD (1–1.5 days), writing/updating documentation (2–3 hours), and a human code review cycle with at least one round of fixes (half a day to a day, accounting for review turnaround latency, not just fix-writing time). This estimate excludes design/product discussion time before the PRD existed, and excludes any live-relay manual verification (Step 3's P4.1, still pending an operator).
 
-**Actual automated runtime:** ~1h 13m, first commit to last, through Step 10.
+**Actual automated runtime:** ~1h 45m for Steps 1–11 (spec creation through final quality pass), continuous, no waiting on human review turnaround between steps.
 
-**Efficiency gain:** Roughly 25-40x on wall-clock time for the engineering work itself, with the important caveat that this compares to a *careful* manual estimate that includes writing the same depth of tests and the same rigor of independent review this run actually performed — not a rushed, unreviewed implementation. The comparison basis assumes a human engineer with Go and Clean Architecture familiarity but no prior ACP exposure, working focused (not counting context-switching, meetings, or multi-day review latency a real team would add on top of the 2-3 day estimate above).
+**Efficiency gain:** Roughly 10–20x wall-clock compression versus the manual estimate, driven overwhelmingly by the elimination of human review-turnaround latency between the implementation and review-fix cycle (Steps 5–9 ran back-to-back in ~45 minutes total here, versus what would typically be at least a half-day-to-day round trip with a human reviewer's availability as the bottleneck). This is a rough, qualitative estimate — the automated run's rigor (independent re-verification at each step, reproduced-not-asserted review claims) is comparable to or exceeds a careful manual process, not a shortcut taken to hit the faster number.

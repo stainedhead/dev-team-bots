@@ -80,6 +80,13 @@ type TaskPayload struct {
 	BoardItemID string `json:"board_item_id,omitempty"`
 	Instruction string `json:"instruction"`
 	WorkDir     string `json:"work_dir,omitempty"`
+	// Source, when set, is the originating DirectTaskSource (e.g. "chat",
+	// "buzz") of the DirectTask this payload was built from. Preferred over
+	// Message.From by RunAgentUseCase.handleTask when resolving
+	// domain.Task.Source, since Message.From carries the *sending* bot
+	// identity (the dispatcher's own name), not the task's origin channel.
+	// Empty preserves the pre-existing Message.From-based behaviour.
+	Source string `json:"source,omitempty"`
 }
 
 type TaskResultPayload struct {

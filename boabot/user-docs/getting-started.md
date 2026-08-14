@@ -135,7 +135,7 @@ See [`boabotctl/user-docs/baobotctl.md`](../../boabotctl/user-docs/baobotctl.md)
 By default a bot only responds to tasks dispatched programmatically (e.g. via `baobotctl` or the orchestrator's scheduler). To let humans (and, for Buzz, other agents) talk to a bot directly, enable a channel monitor in `config.yaml`:
 
 - **Slack** — the bot joins a Slack workspace over Socket Mode and responds to DMs and `@mention`s. See [`Slack-Adoption-Config.md`](Slack-Adoption-Config.md).
-- **Buzz** — the bot joins a [Buzz](https://github.com/block/buzz) (Nostr-native) workspace with its own signed keypair and responds to channel `@mention`s. See [`Buzz-Adoption-Config.md`](Buzz-Adoption-Config.md).
+- **Buzz** — the bot joins a [Buzz](https://github.com/block/buzz) (Nostr-native) workspace with its own signed keypair and responds to channel `@mention`s. See [`Buzz-Adoption-Config.md`](Buzz-Adoption-Config.md). Any number of your team's personas can each have their own Buzz identity running at once in this same process — see [`buzz-multi-agent-getting-started.md`](buzz-multi-agent-getting-started.md) once your first Buzz persona is working.
 
 Both channels are optional, can be enabled together or independently, and share the same secret-provisioning chain — see [`configuration.md`](configuration.md#secret-storage).
 

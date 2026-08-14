@@ -11,6 +11,16 @@ import (
 
 const maxToolIterations = 50
 
+// isConversationalSource reports whether source identifies a task that
+// originated from a live, conversational channel (web-UI chat or Buzz),
+// which should get the dedicated chatProvider (when configured) rather than
+// the default provider -- see execute_task.go:100's provider-selection
+// check. Board- and operator-sourced tasks are not conversational and are
+// left on the default provider.
+func isConversationalSource(source string) bool {
+	return source == string(domain.DirectTaskSourceChat) || source == string(domain.DirectTaskSourceBuzz)
+}
+
 type ExecuteTaskUseCase struct {
 	provider     domain.ModelProvider
 	chatProvider domain.ModelProvider // used for chat-source tasks; nil falls back to provider
@@ -97,7 +107,7 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 	}
 
 	provider := u.provider
-	if task.Source == "chat" && u.chatProvider != nil {
+	if isConversationalSource(task.Source) && u.chatProvider != nil {
 		provider = u.chatProvider
 	}
 

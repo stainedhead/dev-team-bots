@@ -50,6 +50,22 @@ func (r *Router) Register(botName string, bufferSize int) *Queue {
 	return &Queue{router: r, name: botName, ch: ch}
 }
 
+// Lookup returns the Queue for botName and true if it is already
+// registered, or (nil, false) if it is not -- a non-panicking alternative
+// to QueueFor/Register, used where a caller needs to check registration
+// status without risking Register's duplicate-name panic (e.g. wiring
+// multiple channel monitors, possibly across multiple personas, that may
+// legitimately share a bot name).
+func (r *Router) Lookup(botName string) (*Queue, bool) {
+	r.mu.RLock()
+	ch, ok := r.channels[botName]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	return &Queue{router: r, name: botName, ch: ch}, true
+}
+
 // QueueFor returns the Queue for an already-registered bot.
 // Panics if botName has not been registered yet.
 func (r *Router) QueueFor(botName string) *Queue {

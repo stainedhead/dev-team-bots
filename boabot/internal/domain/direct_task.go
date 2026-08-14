@@ -15,6 +15,12 @@ const (
 	DirectTaskSourceOperator DirectTaskSource = "operator"
 	// DirectTaskSourceBoard means the task was triggered by a board item.
 	DirectTaskSourceBoard DirectTaskSource = "board"
+	// DirectTaskSourceBuzz means the task was triggered by a Buzz (Nostr
+	// relay) channel mention, via the Buzz -> Dispatcher/DirectTaskStore/
+	// BoardStore bridge (see BuzzTaskDispatcher). Kept distinct from
+	// DirectTaskSourceChat so the UI and logs can trace multi-agent Buzz
+	// activity per-agent instead of lumping it in with web-UI chat.
+	DirectTaskSourceBuzz DirectTaskSource = "buzz"
 )
 
 // DirectTask represents an out-of-band task assigned directly to a bot by an operator.

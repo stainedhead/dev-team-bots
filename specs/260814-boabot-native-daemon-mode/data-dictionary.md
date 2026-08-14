@@ -11,14 +11,16 @@ Defines the data structures, types, and schemas this feature introduces or modif
 
 ## Value Objects
 
-- `DirectTaskSource` (existing enum, `internal/domain`) — candidate for a new `DirectTaskSourceBuzz` value (see Research Question 1). [TBD pending research]
+- `DirectTaskSource` (existing enum, `internal/domain/direct_task.go:9-17`) — three values today: `DirectTaskSourceChat = "chat"`, `DirectTaskSourceOperator = "operator"`, `DirectTaskSourceBoard = "board"`. **Adding `DirectTaskSourceBuzz = "buzz"`** — confirmed additive; no exhaustive switch to update, only the `execute_task.go:100` provider-selection check (see Architectural Decisions).
 
 ## Interfaces
 
-- `buzzinfra.Monitor` / `ChannelMonitor` (existing) — factory currently constructs one process-wide instance; extended to be called once per Buzz-enabled persona.
-- `Dispatcher` (existing, `internal/application`) — Buzz path will call into this the same way the web-UI chat path does.
-- `DirectTaskStore` (existing) — no interface change expected; concurrency safety under multi-monitor writes to be verified (Research Question 3).
-- `SecretStore` (existing) — resolves `buzz_private_key` per bot; already supports per-bot secrets via `boabotctl secret set --bot <name>`.
+- `buzzinfra.Monitor` / `ChannelMonitor` (existing, `internal/infrastructure/buzz/monitor.go`) — factory (`buildBuzzMonitor`, `main.go:196-266`) currently constructs one process-wide instance from `run()` (`main.go:174`); extended to be called once per Buzz-enabled persona in a loop. No signature change to `buildBuzzMonitor`; no singleton state found in the package (per-identity lock file at `buzz/lock.go`, keyed by pubkey — already multi-identity safe).
+- `Dispatcher` (existing, `internal/application`) — Buzz path will call `DispatchWithSchedule` the same way `ChatTaskManager` does today (`chat_task_manager.go:60-90`).
+- `DirectTaskStore` (existing, `internal/infrastructure/local/orchestrator/direct_task_store.go`) — no interface change; confirmed thread-safe via `sync.RWMutex` (`direct_task_store.go:22-26`), atomic persist via temp-file + `os.Rename`.
+- `BoardStore` (existing, `internal/infrastructure/local/orchestrator/board.go:26-27`) — same `sync.RWMutex` pattern as `DirectTaskStore`; confirmed thread-safe.
+- `SecretStore` (existing) — resolves `buzz_private_key` per bot via `buzzinfra.LoadKeypair(ctx, store, bc.BotName)` (`main.go:206`); already namespaced per bot name, supports per-bot secrets via `boabotctl secret set --bot <name>`.
+- `TeamManager.WithChannelMonitor(...)` (`team_manager.go:208`) — appends to a slice; already called multiple times today (Slack + Buzz), confirmed safe to call once per Buzz-enabled persona.
 
 ## Enumerations
 

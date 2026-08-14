@@ -17,7 +17,7 @@ TDD (Red → Green → Refactor) throughout, per AGENTS.md. Clean Architecture b
 
 ## Critical Path
 
-Per-bot monitor factory (FR-001/002/003) → Buzz→DirectTask/Board bridge (FR-005/006) → schedule bridge (FR-007/008) → multi-persona no-cross-talk verification (FR-004) run in parallel where possible once the bridge exists.
+P1.0 (trace current dispatch path) → P1.1/P1.2 (per-bot monitor loop + team-entry loading, parallelizable) → P2.1 (`DirectTaskSourceBuzz`) → P2.2 (bridge use case) → P2.3 (no-cross-talk verification) → P3.1/P3.2 (scheduling reuse, parallelizable with P2.3) → P4.1 (secret provisioning + live demo verification). See `tasks.md` for full breakdown.
 
 ## Testing Strategy
 

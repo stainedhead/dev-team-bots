@@ -40,13 +40,21 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 
 **FR-004:** Multiple Buzz-enabled personas can independently join and respond within the same Buzz channel/thread, each under its own identity, without cross-talk (persona A's mention dispatches only to persona A).
 
-**FR-005:** When any Buzz-enabled persona's `ChannelMonitor` dispatches a task, it is represented as a real `DirectTask` (via the same `Dispatcher`/`DirectTaskStore` path the orchestrator's own web-UI chat interface uses, likely a new `DirectTaskSourceBuzz` or reuse of `DirectTaskSourceChat`) **and** creates a corresponding Kanban board item — both visible in the UI, both updating as the task progresses and completing when it finishes, for every active persona, concurrently.
+**FR-005:** When any Buzz-enabled persona's `ChannelMonitor` dispatches a task, it is represented as a real `DirectTask` tagged `DirectTaskSourceBuzz` (via the same `Dispatcher`/`DirectTaskStore` path the orchestrator's own web-UI chat interface uses) **and** creates a corresponding Kanban board item — both visible in the UI, both updating as the task progresses and completing when it finishes, for every active persona, concurrently.
 
 **FR-006:** Concurrent activity from multiple personas' `ChannelMonitor`s does not block, drop, or cross-interleave UI updates — persona A's task/board update completes and renders correctly regardless of how many other personas are dispatching at the same time.
 
 **FR-007:** A Buzz request phrased as a recurring/scheduled instruction (e.g. "run this every day at 9am") creates a real `Schedule`/`RecurrenceRule`-backed task via `DispatchWithSchedule`, not just one-off immediate execution.
 
 **FR-008:** A Buzz request can update or cancel a previously-created task (immediate or scheduled), reflected in the Tasks UI.
+
+## Edge Cases
+
+- **Duplicate bot-name registration:** `team.yaml` misconfigured with two entries resolving to the same `bot_name` — must fail loudly at startup for that persona (or be rejected at config-load time), not panic the whole process via `router.Register`. Regression test required.
+- **Bot has `buzz.enabled: true` but incomplete config** (missing relay URL, missing/unresolvable `buzz_private_key`): that persona's monitor construction fails in isolation — logged, does not prevent other personas' monitors or the orchestrator UI from starting (covered by the Reliability NFR, but called out explicitly here as a startup-time case distinct from a post-start connection drop).
+- **Relay reconnect / message replay:** if a persona's monitor reconnects after a drop and the relay redelivers recently-seen events, a Buzz-triggered dispatch must not be double-created as a duplicate `DirectTask`/board item. Needs a dedup check (e.g. by Nostr event ID) in the new bridge use case — flagged as a task-breakdown item, not yet designed.
+- **Schedule cancel racing with in-flight execution:** a Buzz "cancel that" request arriving while the corresponding scheduled task is already executing — behavior must match whatever the existing web-UI chat cancel path already does for the same race (reuse, don't redesign).
+- **Malformed/empty Buzz message body reaching the scheduling parser:** `ParseScheduleNL` receiving text it can't parse as a schedule must fall back to immediate/plain dispatch (or a clarifying response), not error out the whole message-handling path — mirrors existing `ChatTaskManager.DetectAndHandle` behavior, to be confirmed reused as-is.
 
 ## Non-Functional Requirements
 
@@ -67,9 +75,15 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 
 ## Scope of Changes
 
-- Files to create: TBD during Step 3 research (bridge/adapter files for DirectTask + Board wiring from Buzz dispatch).
-- Files to modify: `boabot/cmd/boabot/main.go` (Buzz wiring loop), `internal/infrastructure/buzzinfra/*` (per-bot monitor factory), `boabot-team/*/config.yaml` for any persona chosen for the demo (`buzz:` block + secret provisioning), `team.yaml` if persona enablement flags need updating.
-- Dependencies: existing `Dispatcher`, `DirectTaskStore`, `BoardStore`, `SecretStore`/`boabotctl secret`, Buzz relay (`wss://feral-sysd.communities.buzz.xyz`).
+- Files to create: new application-layer use case for the Buzz → `Dispatcher`/`DirectTaskStore`/`BoardStore` bridge (exact package/filename TBD at task breakdown — likely `boabot/internal/application/orchestrator/` alongside `chat_task_manager.go`, following its pattern).
+- Files to modify:
+  - `boabot/cmd/boabot/main.go` — replace the single `buildBuzzMonitor` call (`main.go:174`) with a loop over Buzz-enabled `team.yaml` entries.
+  - `boabot/internal/application/team_manager.go` — expose team-entry loading (currently unexported `loadTeamConfig`, `team_manager.go:1086`) for reuse by `main.go`'s loop.
+  - `boabot/internal/domain/direct_task.go` — add `DirectTaskSourceBuzz` constant (`direct_task.go:9-17`).
+  - `boabot/internal/application/execute_task.go` — extend the provider-selection check at `execute_task.go:100` to treat `DirectTaskSourceBuzz` like `DirectTaskSourceChat`.
+  - `boabot-team/bots/{architect,tech-lead}/config.yaml` — no wiring change needed (both already have a working `buzz:` block); secret provisioning only.
+- No files need to change in `internal/infrastructure/buzz/` (the monitor/relay client package) itself — its constructor already supports being called multiple times with distinct identities.
+- Dependencies: existing `Dispatcher`, `DirectTaskStore`, `BoardStore`, `SecretStore`/`boabotctl secret`, Buzz relay (`wss://feral-sysd.communities.buzz.xyz`), `ChatTaskManager`/`ParseScheduleNL` (reused, not modified).
 
 ## Breaking Changes
 
@@ -98,9 +112,10 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 | `boabotctl secret set` / OS keystore | Dependency | Required to provision each persona's `buzz_private_key` before its monitor can start. | Document provisioning step in user-docs; verify manually before demo. |
 | Existing `DirectTaskStore`/`Dispatcher`/`BoardStore` | Dependency | This work extends, not replaces, existing infrastructure. | Reuse existing interfaces; no new stores. |
 | Concurrent relay connections per machine | Risk | Multiple personas each opening their own relay connection from one process is unverified at scale beyond a couple of bots. | Test with 2+ personas; document any relay-side limits found. |
-| `tasks.json`/board-store JSON files | Risk | Both are single shared JSON-file-backed stores — concurrent writes from multiple personas' monitors need verification for race safety. | `-race` test coverage for concurrent dispatch; add locking if a race is found. |
-| Natural-language → `Schedule`/`RecurrenceRule` parsing | Risk | Relies on the model correctly translating "every day at 9am" into a structured schedule via tool call — same class of risk as ADR-B027. | Validate against a fixed set of phrasing test cases during implementation. |
-| Second demo persona selection & secret provisioning | Team dependency | Repo owner/operator must pick the second Buzz-enabled persona and provision its secret before multi-agent acceptance criteria can be executed. | Resolve during Research phase — see Open Questions in research.md. |
+| `tasks.json`/board-store JSON files | ~~Risk~~ Confirmed safe | Both `DirectTaskStore` and `BoardStore` already use `sync.RWMutex` with atomic temp-file+rename persistence (confirmed via code research, see `data-dictionary.md`) — no race under concurrent multi-persona dispatch. | Add `-race` test coverage to lock in the guarantee; no store-level code change needed. |
+| Natural-language → `Schedule`/`RecurrenceRule` parsing | Risk | `ParseScheduleNL` is an existing regex/heuristic parser (not an LLM tool call, per `chat_task_manager.go:295`) being reused for Buzz phrasing — it may not handle Buzz-specific phrasing as well as chat phrasing. | Validate against a fixed set of phrasing test cases during implementation; same class of risk as ADR-B027 if extended to a tool-call design later. |
+| Second demo persona selection & secret provisioning | Team dependency | Narrowed by research: `orchestrator`, `architect`, and `tech-lead` already have working `buzz:` config blocks — no new config-wiring needed. Repo owner/operator still needs to pick which 2 to actually provision `buzz_private_key` for and use in the demo. | Operator decision — does not block implementation; either choice (architect or tech-lead) follows the identical wiring path. |
+| Duplicate bot-name registration | Risk (newly identified) | `router.Register` panics on a duplicate bot-name registration (`queue/queue.go:39`) — the new per-persona loop must dedup registered names the same way today's single-call path already does via `queueAlreadyRegistered`. | Reuse the existing dedup pattern in the loop; add a regression test for a misconfigured `team.yaml` with a duplicate bot name. |
 
 **One-time cutover step (not an ongoing risk):** The existing ACP-managed "Boa" agent registration in Buzz Desktop must be manually stopped once native mode is verified working, so it doesn't keep responding alongside the new native-mode identity.
 

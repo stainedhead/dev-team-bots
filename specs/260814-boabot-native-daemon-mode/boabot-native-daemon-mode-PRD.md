@@ -24,6 +24,7 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 - Not actively removing ACP mode from the codebase as part of this work — it simply won't be the active integration path for any persona once this ships; full removal, if ever wanted, is a separate future cleanup PRD.
 - Not adding new orchestrator UI screens or widgets — the Kanban board and Tasks list already exist; this only makes them populate from Buzz-triggered work.
 - Not building a general "board/task item per inbound message" feature for every `ChannelMonitor` type (e.g. Slack) — scoped specifically to the Buzz path.
+- Not implementing Buzz DM (direct message) listening — today neither native mode nor ACP mode subscribes to or processes DM events (native mode's `ChannelMonitor` only handles NIP-29 group/channel messages, kind 9; DM support via NIP-17 gift-wrap, kind 1059, is explicitly flagged as deferred in the existing code, `trigger.go:7`). This PRD is scoped to channel/group @-mention multi-agent dispatch only; DM listening is a separate, future PRD (its own trigger classification, decrypt path, and dispatch wiring).
 
 ## Functional Requirements
 
@@ -35,9 +36,9 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 
 **FR-004:** Multiple Buzz-enabled personas can independently join and respond within the same Buzz channel/thread, each under its own identity, without cross-talk (persona A's mention dispatches only to persona A).
 
-**FR-005:** When any Buzz-enabled persona's `ChannelMonitor` dispatches a task, it is represented as a real `DirectTask` (via the same `Dispatcher`/`DirectTaskStore` path the orchestrator's own web-UI chat interface uses, likely a new `DirectTaskSourceBuzz` or reuse of `DirectTaskSourceChat`) **and** creates a corresponding Kanban board item — both visible in the UI, both updating as the task progresses and completing when it finishes.
+**FR-005:** When any Buzz-enabled persona's `ChannelMonitor` dispatches a task, it is represented as a real `DirectTask` (via the same `Dispatcher`/`DirectTaskStore` path the orchestrator's own web-UI chat interface uses, likely a new `DirectTaskSourceBuzz` or reuse of `DirectTaskSourceChat`) **and** creates a corresponding Kanban board item — both visible in the UI, both updating as the task progresses and completing when it finishes, for every active persona, concurrently.
 
-**FR-006:** The orchestrator UI reflects all of the above live — board items and tasks appear/update as Buzz conversations happen, for every active persona, concurrently.
+**FR-006:** Concurrent activity from multiple personas' `ChannelMonitor`s does not block, drop, or cross-interleave UI updates — persona A's task/board update completes and renders correctly regardless of how many other personas are dispatching at the same time.
 
 **FR-007:** A Buzz request phrased as a recurring/scheduled instruction (e.g. "run this every day at 9am") creates a real `Schedule`/`RecurrenceRule`-backed task via `DispatchWithSchedule`, not just one-off immediate execution.
 
@@ -73,6 +74,7 @@ For a demo showing the orchestrator UI live-updating in response to Buzz-sent co
 | Concurrent relay connections per machine | Risk | Multiple personas each opening their own relay connection from one process is unverified at any scale beyond a couple of bots — could hit relay-side limits. |
 | `tasks.json`/board-store JSON files | Risk | Both are single shared JSON-file-backed stores (`NewInMemoryDirectTaskStore` and the board equivalent) — concurrent writes from multiple personas' monitors dispatching simultaneously need verification for race safety during implementation. |
 | Natural-language → `Schedule`/`RecurrenceRule` parsing | Risk | Same class of risk as the fallback-publish issue fixed in `internal/infrastructure/acp` (ADR-B027) — relies on the model correctly translating a phrase like "every day at 9am" into a structured schedule via a tool call; not guaranteed by wiring alone. |
+| Second demo persona selection & secret provisioning | Team dependency | Repo owner/operator must pick the second Buzz-enabled persona and run `boabotctl secret set buzz_private_key --bot <name>` for each persona before any multi-agent acceptance criterion (AC #2, #3) can be executed. See Open Questions. |
 
 **One-time cutover step (not an ongoing risk):** The existing ACP-managed "Boa" agent registration in Buzz Desktop must be manually stopped once native mode is verified working, so it doesn't keep responding alongside the new native-mode identity. This is a single manual action taken once at cutover, not a recurring operational concern.
 

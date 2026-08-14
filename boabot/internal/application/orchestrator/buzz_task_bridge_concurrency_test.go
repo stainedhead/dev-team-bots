@@ -124,3 +124,60 @@ func TestBuzzTaskBridge_ConcurrentMultiPersonaDispatch_NoCrossTalk(t *testing.T)
 		t.Errorf("expected %d board items per persona, got %+v (cross-talk?)", perPersonaDispatches, boardCounts)
 	}
 }
+
+// TestBuzzTaskBridge_ConcurrentDispatch_SameEventID_ExactlyOneProceeds is an
+// FR-101 follow-up: checkAndMarkSeen's check-and-set must be atomic under
+// one lock acquisition, not two separate calls, so that two goroutines
+// calling Dispatch with the IDENTICAL event ID concurrently cannot both
+// observe "not a duplicate" and both dispatch. Only one may proceed; the
+// other must be reported Duplicate. Run with -race.
+func TestBuzzTaskBridge_ConcurrentDispatch_SameEventID_ExactlyOneProceeds(t *testing.T) {
+	router := queue.NewRouter()
+	router.Register("architect", 0)
+	router.Register("orchestrator", 0)
+
+	store := orchestratorlocal.NewInMemoryDirectTaskStore("")
+	board := orchestratorlocal.NewInMemoryBoardStore("")
+	dispatcher := orchestratorlocal.NewLocalTaskDispatcher(store, router.QueueFor("orchestrator"), "orchestrator")
+	bridge := orchestrator.NewBuzzTaskBridge(dispatcher, board, orchestrator.NewChatTaskManager(dispatcher))
+
+	const concurrent = 20
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var duplicates, dispatched int
+
+	wg.Add(concurrent)
+	for i := 0; i < concurrent; i++ {
+		go func() {
+			defer wg.Done()
+			result, err := bridge.Dispatch(context.Background(), "architect", "evt-same", "chan-1", "review the PR")
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if result.Duplicate {
+				duplicates++
+			} else {
+				dispatched++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if dispatched != 1 {
+		t.Fatalf("expected exactly 1 goroutine to actually dispatch, got %d", dispatched)
+	}
+	if duplicates != concurrent-1 {
+		t.Fatalf("expected %d goroutines to be reported Duplicate, got %d", concurrent-1, duplicates)
+	}
+
+	all, err := store.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected exactly 1 DirectTask created for the shared event ID, got %d", len(all))
+	}
+}

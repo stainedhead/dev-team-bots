@@ -59,7 +59,7 @@ func TestLoadTeamConfig_InvalidYAML(t *testing.T) {
 	if err := os.WriteFile(badYAML, []byte("team: [\ninvalid"), 0600); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
-	_, err := LoadTeamConfig(badYAML)
+	_, err := loadTeamConfig(badYAML)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML, got nil")
 	}
@@ -77,7 +77,7 @@ func TestLoadTeamConfig_ValidYAML(t *testing.T) {
 	if err := os.WriteFile(p, []byte(yamlContent), 0600); err != nil {
 		t.Fatalf("write team.yaml: %v", err)
 	}
-	tc, err := LoadTeamConfig(p)
+	tc, err := loadTeamConfig(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

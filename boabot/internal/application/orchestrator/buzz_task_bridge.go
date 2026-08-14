@@ -66,7 +66,13 @@ func NewBuzzTaskBridgeWithDedupTTL(dispatcher domain.ScheduledTaskDispatcher, bo
 
 // Dispatch implements domain.BuzzTaskDispatcher.
 func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error) {
-	if eventID != "" && b.isDuplicateEvent(eventID) {
+	// checkAndMarkSeen is an atomic check-and-set: it marks eventID seen as
+	// part of the same locked operation that checks it, so two concurrent
+	// Dispatch calls for the identical event ID cannot both proceed (FR-101).
+	// If the dispatch that follows fails, unmarkEvent below undoes the mark
+	// so a later relay reconnect/replay of the same event ID is retried, not
+	// misreported as a harmless duplicate and silently dropped.
+	if eventID != "" && b.checkAndMarkSeen(eventID) {
 		return domain.BuzzDispatchResult{Duplicate: true}, nil
 	}
 
@@ -78,10 +84,7 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 	if b.chatMgr != nil {
 		resp, handled, task, err := b.chatMgr.DetectAndHandle(ctx, threadID, instruction, domain.DirectTaskSourceBuzz)
 		if err != nil {
-			// Dedup state must only be recorded once the dispatch actually
-			// succeeds (FR-101): do NOT mark eventID seen here, so a relay
-			// reconnect/replay of this same event is retried, not silently
-			// dropped as a false "duplicate".
+			b.unmarkEvent(eventID)
 			return domain.BuzzDispatchResult{}, fmt.Errorf("buzz task bridge: schedule detection: %w", err)
 		}
 		if handled {
@@ -91,7 +94,6 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 				result.AwaitResult = task.Status == domain.DirectTaskStatusRunning
 				b.createBoardItem(ctx, botName, instruction, *task)
 			}
-			b.markEventSeen(eventID)
 			return result, nil
 		}
 	}
@@ -101,14 +103,14 @@ func (b *BuzzTaskBridge) Dispatch(ctx context.Context, botName, eventID, threadI
 	task, err := b.dispatcher.DispatchWithSchedule(ctx, botName, instruction,
 		domain.Schedule{Mode: domain.ScheduleModeASAP}, domain.DirectTaskSourceBuzz, threadID, "", "")
 	if err != nil {
-		// See the FR-101 comment above: a failed dispatch must not mark
-		// eventID as seen, or a later relay replay of the identical event
-		// would be misreported as a harmless duplicate and the instruction
+		// See the FR-101 comment above: a failed dispatch must un-mark
+		// eventID, or a later relay replay of the identical event would be
+		// misreported as a harmless duplicate and the instruction
 		// permanently lost.
+		b.unmarkEvent(eventID)
 		return domain.BuzzDispatchResult{}, fmt.Errorf("buzz task bridge: dispatch: %w", err)
 	}
 	b.createBoardItem(ctx, botName, instruction, task)
-	b.markEventSeen(eventID)
 
 	return domain.BuzzDispatchResult{
 		TaskID:      task.ID,
@@ -143,12 +145,28 @@ func (b *BuzzTaskBridge) createBoardItem(ctx context.Context, botName, instructi
 	}
 }
 
-// isDuplicateEvent reports whether eventID was already marked seen within
-// the dedup TTL, without marking it itself (FR-101: dedup state must only be
-// recorded once a dispatch actually succeeds -- see markEventSeen). Also
-// lazily evicts expired entries on every call so the map does not grow
-// unbounded across a long-running process.
-func (b *BuzzTaskBridge) isDuplicateEvent(eventID string) bool {
+// checkAndMarkSeen reports whether eventID was already seen within the
+// dedup TTL; if not, it marks eventID seen now, in the same locked
+// operation, and returns false. Keeping the check and the mark atomic under
+// one lock acquisition (rather than two separate calls) is what makes this
+// dedup safe against two concurrent Dispatch calls for the identical event
+// ID -- only one of them can ever observe "not seen" and proceed. Callers
+// that go on to fail their dispatch must call unmarkEvent (FR-101), so a
+// later relay reconnect/replay of the same event ID is retried rather than
+// misreported as a harmless duplicate. Also lazily evicts expired entries on
+// every call so the map does not grow unbounded across a long-running
+// process.
+//
+// FR-110: this eviction sweep scans the entire seenEvts map under b.mu on
+// every single Dispatch call, so per-dispatch lock hold time grows linearly
+// with the number of distinct events seen within the last dedupTTL window.
+// Accepted as-is deliberately: at the default TTL (defaultEventDedupTTL) and
+// realistic Buzz @mention volume per persona, that bound stays small (tens,
+// not thousands, of entries), and a per-dispatch sweep is simpler to reason
+// about than a periodic ticker-driven one. Revisit with a periodic sweep
+// (every N calls, or a ticker) only if a persona's mention volume grows
+// enough to make this measurably show up in profiling.
+func (b *BuzzTaskBridge) checkAndMarkSeen(eventID string) bool {
 	now := time.Now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -164,22 +182,20 @@ func (b *BuzzTaskBridge) isDuplicateEvent(eventID string) bool {
 			return true
 		}
 	}
+	b.seenEvts[eventID] = now
 	return false
 }
 
-// markEventSeen records eventID as seen now. Callers must only invoke this
-// after the dispatch it guards has actually succeeded (FR-101) -- marking on
-// a failed attempt would cause a later relay reconnect/replay of the same
-// event ID to be misreported as a harmless duplicate and the instruction
-// permanently lost. A no-op for an empty eventID (some callers, e.g. tests,
-// dispatch without one).
-func (b *BuzzTaskBridge) markEventSeen(eventID string) {
+// unmarkEvent removes eventID from the seen set. Called only when a dispatch
+// checkAndMarkSeen guarded goes on to fail (FR-101) -- see checkAndMarkSeen's
+// doc comment. A no-op for an empty eventID.
+func (b *BuzzTaskBridge) unmarkEvent(eventID string) {
 	if eventID == "" {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.seenEvts[eventID] = time.Now()
+	delete(b.seenEvts, eventID)
 }
 
 // buzzBoardTitle derives a short board-item title from the (already

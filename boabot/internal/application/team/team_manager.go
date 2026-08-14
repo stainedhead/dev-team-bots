@@ -297,7 +297,7 @@ func forwardResultToMonitors(ctx context.Context, monitors []domain.ChannelMonit
 // then calls Shutdown.  It returns an error if the team file cannot be parsed
 // or if no bots could be started.
 func (tm *TeamManager) Run(ctx context.Context) error {
-	teamCfg, err := LoadTeamConfig(tm.cfg.TeamFilePath)
+	teamCfg, err := loadTeamConfig(tm.cfg.TeamFilePath)
 	if err != nil {
 		return fmt.Errorf("team: load team config: %w", err)
 	}
@@ -1214,7 +1214,12 @@ func (tm *TeamManager) isTechLeadRunning(_ context.Context, instanceName string)
 	}
 }
 
-func LoadTeamConfig(path string) (TeamConfig, error) {
+// loadTeamConfig reads and parses team.yaml. It is unexported: the only
+// caller is Run() itself (FR-107) -- the design that once had main.go call
+// this directly changed (implementation-notes.md's Deviations from Plan #3:
+// the per-persona Buzz-monitor loop moved inside Run() instead), so
+// exporting it is no longer necessary API surface.
+func loadTeamConfig(path string) (TeamConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return TeamConfig{}, fmt.Errorf("read %s: %w", path, err)

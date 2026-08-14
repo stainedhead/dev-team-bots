@@ -17,7 +17,7 @@ TDD (Red → Green → Refactor) throughout, per AGENTS.md. Clean Architecture b
 
 ## Critical Path
 
-DM path (subscribe → decrypt → dispatch → reply-publish) and threading fixes (inbound recognition → ThreadID fix → outbound NIP-10 completion → conversation continuation) are largely independent workstreams sharing the `BuzzTaskBridge` as a common integration point — can be parallelized via worktrees/agent teammates per AGENTS.md guidance, converging at the `BuzzTaskBridge` extension for conversation continuation (which both DM and channel threading need).
+P1.1 (ThreadID fix) → P1.3 (KnownThread) → P1.2 (triggerThreadReply) → P1.5 (history replay) is the threading critical path; P1.4 (outbound NIP-10) is independent. Phase 2 (P2.1 → P2.2 → P2.3 → P2.4) is a largely independent DM workstream that can run in parallel via a worktree/agent teammate, converging with Phase 1 only at P2.3/P1.5 (DM dispatch reuses the corrected `ThreadID`/`ChatStore` pattern Phase 1 establishes) — so Phase 2's early tasks (P2.1, P2.2) can start immediately, with P2.3 waiting on P1.1/P1.5. Phase 3 (security audit) runs last, cross-cutting both.
 
 ## Testing Strategy
 

@@ -51,6 +51,15 @@ Extends `boabot`'s Buzz integration in two directions: (1) DM reachability via N
 
 **FR-209:** DM reply publishing uses its own outbound path (encrypted kind:14 rumor → seal → gift-wrap) distinct from the channel-shaped `publishReply` (which hardcodes an `h` channel tag).
 
+## Edge Cases
+
+- **Self-message loop (real risk, not hypothetical):** `nip17.PrepareMessage` produces *two* gift-wrapped copies of every outbound DM — one to the recipient, one to self (`toUs`), so the sender can see their own sent message from another device. The inbound `nip17.ListenForMessages` subscription (`#p`-tagged to self) will receive this self-copy. The DM dispatch path must recognize and skip self-authored rumors (check the decrypted kind:14 rumor's `pubkey` against the persona's own pubkey) — failing to do so risks an infinite dispatch loop (bot replies to its own reply's self-copy, which produces another self-copy, ad infinitum).
+- **Relay doesn't support kind:1059 (RQ3 unresolved statically):** subscription may silently receive nothing, or the relay may reject the subscription filter. Must not crash or block channel monitoring for the same persona — same failure-isolation standard as any other monitor issue.
+- **Malformed/corrupted gift-wrap event:** decrypt/unwrap failure (bad ciphertext, wrong recipient, corrupted seal signature) must be logged and skipped, not crash the monitor goroutine.
+- **Relay-replay of a DM event:** same class of risk as the prior feature's FR-101 fix (channel dedup) — a redelivered kind:1059 event must not double-dispatch. Reuse the existing event-ID dedup pattern (`checkAndMarkSeen`/`unmarkEvent`) for DMs, not a separate mechanism.
+- **Thread reply to a root this persona never dispatched in:** e.g., a different persona's thread in a multi-persona channel, or a thread that predates this persona joining. `KnownThread` must be strictly per-persona (keyed by `botName` + `rootID`, not just `rootID`) so persona A's dispatched-thread state never causes persona B to incorrectly treat an unrelated reply as directed at it.
+- **Concurrent replies in the same thread:** `dispatchedThreads` map access and `ChatStore` reads/writes for the same `threadID` from concurrent goroutines must be race-safe — covered by `-race` testing, consistent with the prior feature's concurrency-test standard.
+
 ## Non-Functional Requirements
 
 - **Performance:** DM decrypt-and-dispatch latency comparable to the existing channel-mention path.
@@ -75,9 +84,15 @@ Extends `boabot`'s Buzz integration in two directions: (1) DM reachability via N
 
 ## Scope of Changes
 
-- Files likely to modify: `boabot/internal/infrastructure/buzz/monitor.go`, `trigger.go`, `discovery.go`, `guard.go`; `boabot/internal/application/orchestrator/buzz_task_bridge.go`.
-- Files likely to create: a DM-specific reply-publish helper (new function/file in `internal/infrastructure/buzz`); possibly a new domain value for DM-vs-channel task origin labeling.
-- Dependencies: `fiatjaf.com/nostr`'s `nip44`/`nip59` packages (already vendored), existing author-gating (`guard.go`), existing `ChatTaskManager`/`Dispatcher` infrastructure.
+- Files to modify:
+  - `boabot/internal/infrastructure/buzz/monitor.go` — DM subscription wiring, `ThreadID` one-argument fix (line ~484: pass `root` not `channelUUID`), `publishReply` NIP-10 completion (add `reply` `e` tag + `p` tag).
+  - `boabot/internal/infrastructure/buzz/trigger.go` — new `triggerThreadReply` kind; new NIP-10 reply/root-tag detection helper.
+  - `boabot/internal/application/orchestrator/buzz_task_bridge.go` — new `KnownThread` method + `dispatchedThreads` map; `ChatStore` history-replay instruction building (mirroring `handleChatSend`'s pattern).
+  - `boabot/internal/domain/buzz_dispatch.go` (or wherever `BuzzTaskDispatcher` is defined) — add `KnownThread(botName, rootID string) bool` to the interface; correct `Dispatch`'s doc comment (currently says "e.g. the Buzz channel UUID").
+- Files to create:
+  - A `nostr.Keyer` adapter in `internal/infrastructure/buzz` (new file) implementing Signer+Cipher over boabot's existing per-persona key material.
+  - A DM subscribe/decrypt/reply-publish path (new file(s) in `internal/infrastructure/buzz`), using `nip17.ListenForMessages`/`PrepareMessage`/`PublishMessage`.
+- Dependencies: `fiatjaf.com/nostr`'s `nip17` package (built on already-vendored `nip44`/`nip59`), existing author-gating (`guard.go`), existing `ChatStore`/`Dispatcher`/`DirectTaskStore`/`BoardStore` infrastructure.
 
 ## Breaking Changes
 
@@ -95,6 +110,7 @@ None expected to public config schema. `DirectTask.ThreadID`'s semantic change (
 - [ ] Outbound DM replies are correctly gift-wrapped and decrypt correctly for the sender.
 - [ ] `boabot -acp` still builds and passes its existing tests, untouched.
 - [ ] No private key, conversation key, or decrypted DM plaintext appears in logs.
+- [ ] A persona's own outbound DM does not trigger a self-dispatch loop (self-copy correctly filtered).
 
 **Quality gates:** `go fmt`, `go vet`, `golangci-lint run`, `go test -race -gcflags=all=-d=checkptr=0 ./...` all clean; domain+application aggregate coverage ≥90% (currently 91.3%, must not regress).
 

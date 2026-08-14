@@ -98,6 +98,25 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 		return sdk.PromptResponse{StopReason: sdk.StopReasonRefusal}, nil
 	}
 
+	// Fallback publish: a turn can produce a perfectly good reply while the
+	// model itself never calls the buzz CLI to actually publish it --
+	// function-calling models only invoke a tool when they judge it
+	// necessary, and a casual-seeming reply doesn't always clear that bar
+	// even though the system prompt says it must. Without this, that reply
+	// is only ever visible as an ephemeral ACP session/update, never a real
+	// channel message. Best-effort: a failure here is logged, not fatal --
+	// the turn still finishes normally and the text still reaches the
+	// human via the emit below either way.
+	if result.Output != "" && !calledPublish(result.ToolCalls) {
+		if channelID, ok := extractChannelID(task.Instruction); ok {
+			if pubErr := a.publisher.Publish(context.Background(), channelID, result.Output); pubErr != nil {
+				slog.Warn("acp fallback publish failed", "session_id", params.SessionId, "task_id", task.ID, "err", pubErr)
+			} else {
+				slog.Info("acp fallback publish succeeded", "session_id", params.SessionId, "task_id", task.ID)
+			}
+		}
+	}
+
 	a.emit(context.Background(), params.SessionId, sdk.UpdateAgentMessageText(result.Output))
 
 	slog.Info("acp turn finished", "session_id", params.SessionId, "task_id", task.ID,

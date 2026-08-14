@@ -107,6 +107,8 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 
 	systemPrompt := u.soulPrompt + domain.TaskOutcomeInstructions
 
+	var executedCalls []domain.ToolCall
+
 	for i := range maxToolIterations {
 		resp, err := provider.Invoke(ctx, domain.InvokeRequest{
 			SystemPrompt: systemPrompt,
@@ -120,9 +122,10 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 		// No tool calls — model produced its final response.
 		if len(resp.ToolCalls) == 0 {
 			return domain.TaskResult{
-				TaskID:  task.ID,
-				Output:  resp.Content,
-				Success: true,
+				TaskID:    task.ID,
+				Output:    resp.Content,
+				Success:   true,
+				ToolCalls: executedCalls,
 			}, nil
 		}
 
@@ -131,6 +134,8 @@ func (u *ExecuteTaskUseCase) Execute(ctx context.Context, task domain.Task) (dom
 			Role:      "assistant",
 			ToolCalls: resp.ToolCalls,
 		})
+
+		executedCalls = append(executedCalls, resp.ToolCalls...)
 
 		// Execute each tool call and append the results.
 		var rulesUpdates []domain.RulesUpdate

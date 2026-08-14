@@ -19,6 +19,11 @@ type TaskResult struct {
 	Output  string
 	Success bool
 	Err     error
+	// ToolCalls records every tool call executed while producing Output, in
+	// execution order. Lets a caller (e.g. the ACP adapter) detect whether a
+	// specific tool was actually invoked during the turn, rather than only
+	// having the final text.
+	ToolCalls []ToolCall
 }
 
 // WorkerFactory creates workers pre-wired with the bot's model provider and MCP client.

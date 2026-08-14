@@ -103,6 +103,83 @@ func TestAgent_Prompt_SuccessMapsToEndTurn(t *testing.T) {
 	}
 }
 
+func TestAgent_Prompt_FallbackPublishesWhenModelNeverCalledBuzzSend(t *testing.T) {
+	fw := &fakeWorker{result: domain.TaskResult{Output: "hello reply", Success: true}}
+	fp := &fakePublisher{}
+	a := New(&fakeWorkerFactory{worker: fw}, "/work", WithPublisher(fp))
+	a.setUpdater(&fakeConn{})
+
+	sid := newSessionForTest(t, a)
+	prompt := "[Context]\nScope: channel\nChannel: general (#3a6a69fc-05a5-55cb-a601-0e12afc77c07)\nHi there"
+	_, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock(prompt)},
+	})
+	if err != nil {
+		t.Fatalf("Prompt returned error: %v", err)
+	}
+
+	if fp.count() != 1 {
+		t.Fatalf("expected 1 fallback publish call, got %d", fp.count())
+	}
+	last := fp.last()
+	if last.channelID != "3a6a69fc-05a5-55cb-a601-0e12afc77c07" {
+		t.Errorf("channelID = %q, want the channel UUID from [Context]", last.channelID)
+	}
+	if last.content != "hello reply" {
+		t.Errorf("content = %q, want the turn's Output", last.content)
+	}
+}
+
+func TestAgent_Prompt_NoFallbackPublishWhenModelAlreadyCalledBuzzSend(t *testing.T) {
+	fw := &fakeWorker{result: domain.TaskResult{
+		Output:  "hello reply",
+		Success: true,
+		ToolCalls: []domain.ToolCall{
+			{Name: "run_shell", Args: map[string]any{"command": `buzz messages send --channel 3a6a69fc-05a5-55cb-a601-0e12afc77c07 --content "hello reply"`}},
+		},
+	}}
+	fp := &fakePublisher{}
+	a := New(&fakeWorkerFactory{worker: fw}, "/work", WithPublisher(fp))
+	a.setUpdater(&fakeConn{})
+
+	sid := newSessionForTest(t, a)
+	prompt := "[Context]\nChannel: general (#3a6a69fc-05a5-55cb-a601-0e12afc77c07)\nHi there"
+	_, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock(prompt)},
+	})
+	if err != nil {
+		t.Fatalf("Prompt returned error: %v", err)
+	}
+
+	if fp.count() != 0 {
+		t.Errorf("expected no fallback publish (model already published), got %d calls", fp.count())
+	}
+}
+
+func TestAgent_Prompt_NoFallbackPublishWhenNoChannelIDInInstruction(t *testing.T) {
+	fw := &fakeWorker{result: domain.TaskResult{Output: "hello reply", Success: true}}
+	fp := &fakePublisher{}
+	a := New(&fakeWorkerFactory{worker: fw}, "/work", WithPublisher(fp))
+	a.setUpdater(&fakeConn{})
+
+	sid := newSessionForTest(t, a)
+	// A DM-scoped turn: no "[Context] Channel: ... (#uuid)" line to parse.
+	prompt := "[Context]\nScope: dm\nHi there"
+	_, err := a.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: sid,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock(prompt)},
+	})
+	if err != nil {
+		t.Fatalf("Prompt returned error: %v", err)
+	}
+
+	if fp.count() != 0 {
+		t.Errorf("expected no fallback publish attempt without a parseable channel id, got %d calls", fp.count())
+	}
+}
+
 func TestAgent_Prompt_UnknownSession(t *testing.T) {
 	a := New(&fakeWorkerFactory{}, "")
 	_, err := a.Prompt(context.Background(), sdk.PromptRequest{SessionId: "does-not-exist"})

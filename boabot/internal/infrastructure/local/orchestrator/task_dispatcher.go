@@ -168,6 +168,7 @@ func (d *LocalTaskDispatcher) sendMessage(ctx context.Context, task domain.Direc
 		TaskID:      task.ID,
 		Instruction: task.Instruction,
 		WorkDir:     task.WorkDir,
+		Source:      string(task.Source),
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {

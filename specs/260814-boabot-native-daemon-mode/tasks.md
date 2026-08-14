@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-0/9 tasks complete.
+3/9 tasks complete: P1.0 (traced), P2.1 (`DirectTaskSourceBuzz` + provider check), P2.2 (`BuzzTaskBridge` use case). P1.1/P1.2 (main.go/team_manager.go wiring) in progress next.
 
 ## Phase 1 — Per-bot Buzz wiring
 

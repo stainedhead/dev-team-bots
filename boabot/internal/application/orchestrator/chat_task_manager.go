@@ -44,18 +44,22 @@ func NewChatTaskManagerWithTTL(dispatcher domain.ScheduledTaskDispatcher, ttl ti
 }
 
 // DetectAndHandle checks whether msg represents a task-management request or a
-// confirmation/cancellation of a pending intent.
+// confirmation/cancellation of a pending intent. source tags any DirectTask
+// actually dispatched as a result of this call (e.g. DirectTaskSourceChat for
+// the web-UI chat path, DirectTaskSourceBuzz when reused by the Buzz bridge)
+// so multi-channel callers don't have their dispatches mislabeled.
 //
 //   - If msg looks like a task request: stores the parsed intent, returns the
-//     confirmation prompt, and sets handled=true.
+//     confirmation prompt, and sets handled=true. task is nil (nothing
+//     dispatched yet).
 //   - If msg looks like a confirmation and a pending intent exists for threadID:
-//     dispatches the task, clears the pending intent, returns a success string,
-//     and sets handled=true.
+//     dispatches the task (tagged source), clears the pending intent, returns
+//     a success string, sets handled=true, and returns the created task.
 //   - If msg is a cancellation and a pending intent exists: clears the pending
-//     intent, returns a cancellation string, and sets handled=true.
-//   - Otherwise: returns "", false, nil — the caller should handle the message
-//     normally.
-func (m *ChatTaskManager) DetectAndHandle(ctx context.Context, threadID, msg string) (response string, handled bool, err error) {
+//     intent, returns a cancellation string, and sets handled=true. task is nil.
+//   - Otherwise: returns "", false, nil, nil — the caller should handle the
+//     message normally.
+func (m *ChatTaskManager) DetectAndHandle(ctx context.Context, threadID, msg string, source domain.DirectTaskSource) (response string, handled bool, task *domain.DirectTask, err error) {
 	lower := strings.ToLower(strings.TrimSpace(msg))
 
 	// Check confirmation / cancellation first so these short words are not
@@ -63,32 +67,32 @@ func (m *ChatTaskManager) DetectAndHandle(ctx context.Context, threadID, msg str
 	if pending, ok := m.loadPending(threadID); ok {
 		if isConfirmation(lower) {
 			m.pendingMap.Delete(threadID)
-			task, dispErr := m.dispatcher.DispatchWithSchedule(
+			dispatched, dispErr := m.dispatcher.DispatchWithSchedule(
 				ctx,
 				pending.BotName,
 				pending.Instruction,
 				pending.Schedule,
-				domain.DirectTaskSourceChat,
+				source,
 				threadID, "", pending.Instruction,
 			)
 			if dispErr != nil {
-				return "", true, fmt.Errorf("dispatch task: %w", dispErr)
+				return "", true, nil, fmt.Errorf("dispatch task: %w", dispErr)
 			}
-			return formatSuccess(pending.BotName, task), true, nil
+			return formatSuccess(pending.BotName, dispatched), true, &dispatched, nil
 		}
 		if isCancellation(lower) {
 			m.pendingMap.Delete(threadID)
-			return "Cancelled. No task was created.", true, nil
+			return "Cancelled. No task was created.", true, nil, nil
 		}
 	}
 
 	// Detect task request.
 	if intent, ok := detectIntent(msg); ok {
 		m.pendingMap.Store(threadID, intent)
-		return formatConfirmationPrompt(intent), true, nil
+		return formatConfirmationPrompt(intent), true, nil, nil
 	}
 
-	return "", false, nil
+	return "", false, nil, nil
 }
 
 // --- pending helpers ---------------------------------------------------------

@@ -20,6 +20,7 @@ type dispatchCall struct {
 	BotName     string
 	Instruction string
 	Schedule    domain.Schedule
+	Source      domain.DirectTaskSource
 	ThreadID    string
 }
 
@@ -27,24 +28,36 @@ func (f *fakeScheduledDispatcher) DispatchWithSchedule(
 	_ context.Context,
 	botName, instruction string,
 	schedule domain.Schedule,
-	_ domain.DirectTaskSource,
+	source domain.DirectTaskSource,
 	threadID, _, _ string,
 ) (domain.DirectTask, error) {
 	f.calls = append(f.calls, dispatchCall{
 		BotName:     botName,
 		Instruction: instruction,
 		Schedule:    schedule,
+		Source:      source,
 		ThreadID:    threadID,
 	})
 	if f.err != nil {
 		return domain.DirectTask{}, f.err
 	}
 	now := time.Now().UTC()
+	nextRunAt := schedule.NextRunAt(now)
+	// Mirror LocalTaskDispatcher.DispatchWithSchedule's real status
+	// semantics: no NextRunAt means it was dispatched immediately (status
+	// running); a NextRunAt in the future means it is still pending,
+	// awaiting the scheduler loop.
+	status := domain.DirectTaskStatusRunning
+	if nextRunAt != nil {
+		status = domain.DirectTaskStatusPending
+	}
 	return domain.DirectTask{
 		ID:        "test-task-id",
 		BotName:   botName,
 		Schedule:  schedule,
-		NextRunAt: schedule.NextRunAt(now),
+		Source:    source,
+		Status:    status,
+		NextRunAt: nextRunAt,
 		CreatedAt: now,
 	}, nil
 }
@@ -56,7 +69,7 @@ func TestDetectAndHandle_TaskRequest_ReturnsConfirmationPrompt(t *testing.T) {
 	m := orchestrator.NewChatTaskManager(d)
 
 	msg := "schedule a weekly code review every Monday at 9am for the architect bot"
-	resp, handled, err := m.DetectAndHandle(context.Background(), "thread-1", msg)
+	resp, handled, _, err := m.DetectAndHandle(context.Background(), "thread-1", msg, domain.DirectTaskSourceChat)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -87,7 +100,7 @@ func TestDetectAndHandle_Confirmation_CreatesTask(t *testing.T) {
 
 	// Step 1: send task request.
 	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-1", taskMsg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-1", taskMsg, domain.DirectTaskSourceChat)
 	if err != nil || !handled {
 		t.Fatalf("expected handled=true err=nil, got handled=%v err=%v", handled, err)
 	}
@@ -96,9 +109,9 @@ func TestDetectAndHandle_Confirmation_CreatesTask(t *testing.T) {
 	for _, confirmWord := range []string{"yes", "y", "confirm", "ok", "sure", "do it", "go ahead"} {
 		d2 := &fakeScheduledDispatcher{}
 		m2 := orchestrator.NewChatTaskManager(d2)
-		_, _, _ = m2.DetectAndHandle(context.Background(), "thread-2", taskMsg)
+		_, _, _, _ = m2.DetectAndHandle(context.Background(), "thread-2", taskMsg, domain.DirectTaskSourceChat)
 
-		resp, handled2, err := m2.DetectAndHandle(context.Background(), "thread-2", confirmWord)
+		resp, handled2, _, err := m2.DetectAndHandle(context.Background(), "thread-2", confirmWord, domain.DirectTaskSourceChat)
 		if err != nil {
 			t.Errorf("[%s] unexpected error: %v", confirmWord, err)
 		}
@@ -114,7 +127,7 @@ func TestDetectAndHandle_Confirmation_CreatesTask(t *testing.T) {
 	}
 
 	// Verify original manager also dispatched exactly once.
-	resp, handled2, err := m.DetectAndHandle(context.Background(), "thread-1", "yes")
+	resp, handled2, _, err := m.DetectAndHandle(context.Background(), "thread-1", "yes", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,16 +142,54 @@ func TestDetectAndHandle_Confirmation_CreatesTask(t *testing.T) {
 	}
 }
 
+// TestDetectAndHandle_Confirmation_TagsCallerSuppliedSource verifies that
+// DetectAndHandle's confirmation-dispatch branch tags the created DirectTask
+// with the source the *caller* passed in (not a hardcoded
+// DirectTaskSourceChat), and returns a non-nil *domain.DirectTask only when
+// a dispatch actually happened -- the seam BuzzTaskBridge (P2.2/P3.1) relies
+// on to (a) avoid mislabeling Buzz-confirmed scheduled tasks as chat-sourced
+// and (b) know whether to create a board item.
+func TestDetectAndHandle_Confirmation_TagsCallerSuppliedSource(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	m := orchestrator.NewChatTaskManager(d)
+
+	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
+	_, handled, task, err := m.DetectAndHandle(context.Background(), "chan-1", taskMsg, domain.DirectTaskSourceBuzz)
+	if err != nil || !handled {
+		t.Fatalf("expected handled=true err=nil, got handled=%v err=%v", handled, err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on the request/prompt turn, got %+v", task)
+	}
+
+	_, handled2, task2, err2 := m.DetectAndHandle(context.Background(), "chan-1", "yes", domain.DirectTaskSourceBuzz)
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
+	if !handled2 {
+		t.Fatal("expected handled=true")
+	}
+	if task2 == nil {
+		t.Fatal("expected a non-nil task on the confirmation turn")
+	}
+	if task2.Source != domain.DirectTaskSourceBuzz {
+		t.Errorf("expected task.Source=%q, got %q", domain.DirectTaskSourceBuzz, task2.Source)
+	}
+	if len(d.calls) != 1 || d.calls[0].Source != domain.DirectTaskSourceBuzz {
+		t.Errorf("expected DispatchWithSchedule called once with source=buzz, got calls=%+v", d.calls)
+	}
+}
+
 func TestDetectAndHandle_Confirmation_ClearsPending(t *testing.T) {
 	d := &fakeScheduledDispatcher{}
 	m := orchestrator.NewChatTaskManager(d)
 
 	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
-	_, _, _ = m.DetectAndHandle(context.Background(), "thread-1", taskMsg)
-	_, _, _ = m.DetectAndHandle(context.Background(), "thread-1", "yes")
+	_, _, _, _ = m.DetectAndHandle(context.Background(), "thread-1", taskMsg, domain.DirectTaskSourceChat)
+	_, _, _, _ = m.DetectAndHandle(context.Background(), "thread-1", "yes", domain.DirectTaskSourceChat)
 
 	// Sending "yes" again with no pending should return handled=false.
-	resp, handled, err := m.DetectAndHandle(context.Background(), "thread-1", "yes")
+	resp, handled, _, err := m.DetectAndHandle(context.Background(), "thread-1", "yes", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,14 +205,14 @@ func TestDetectAndHandle_Cancellation_ClearsPending(t *testing.T) {
 	m := orchestrator.NewChatTaskManager(d)
 
 	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
-	_, _, _ = m.DetectAndHandle(context.Background(), "thread-1", taskMsg)
+	_, _, _, _ = m.DetectAndHandle(context.Background(), "thread-1", taskMsg, domain.DirectTaskSourceChat)
 
 	for _, cancelWord := range []string{"no", "cancel", "nevermind", "stop"} {
 		d2 := &fakeScheduledDispatcher{}
 		m2 := orchestrator.NewChatTaskManager(d2)
-		_, _, _ = m2.DetectAndHandle(context.Background(), "thread-3", taskMsg)
+		_, _, _, _ = m2.DetectAndHandle(context.Background(), "thread-3", taskMsg, domain.DirectTaskSourceChat)
 
-		resp, handled, err := m2.DetectAndHandle(context.Background(), "thread-3", cancelWord)
+		resp, handled, _, err := m2.DetectAndHandle(context.Background(), "thread-3", cancelWord, domain.DirectTaskSourceChat)
 		if err != nil {
 			t.Errorf("[%s] unexpected error: %v", cancelWord, err)
 		}
@@ -183,7 +234,7 @@ func TestDetectAndHandle_UnrelatedMessage_NotHandled(t *testing.T) {
 	d := &fakeScheduledDispatcher{}
 	m := orchestrator.NewChatTaskManager(d)
 
-	resp, handled, err := m.DetectAndHandle(context.Background(), "thread-1", "hello world")
+	resp, handled, _, err := m.DetectAndHandle(context.Background(), "thread-1", "hello world", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,7 +252,7 @@ func TestDetectAndHandle_YesWithNoPending_NotHandled(t *testing.T) {
 	d := &fakeScheduledDispatcher{}
 	m := orchestrator.NewChatTaskManager(d)
 
-	resp, handled, err := m.DetectAndHandle(context.Background(), "thread-1", "yes")
+	resp, handled, _, err := m.DetectAndHandle(context.Background(), "thread-1", "yes", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -290,13 +341,13 @@ func TestDetectAndHandle_DifferentThreads_Isolated(t *testing.T) {
 	taskMsg := "schedule a daily standup every day at 9am for the architect bot"
 
 	// Pending in thread-A.
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-A", taskMsg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-A", taskMsg, domain.DirectTaskSourceChat)
 	if err != nil || !handled {
 		t.Fatalf("expected handled=true err=nil, got handled=%v err=%v", handled, err)
 	}
 
 	// "yes" on thread-B (no pending) should not dispatch.
-	resp, handled2, err := m.DetectAndHandle(context.Background(), "thread-B", "yes")
+	resp, handled2, _, err := m.DetectAndHandle(context.Background(), "thread-B", "yes", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -319,7 +370,7 @@ func TestDetectAndHandle_ASAPDispatch_SuccessMessageHasASAP(t *testing.T) {
 
 	// "create task" = action, "architect" = known bot keyword → 2 hits, no time.
 	taskMsg := "create task for the architect bot"
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-asap", taskMsg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-asap", taskMsg, domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -327,7 +378,7 @@ func TestDetectAndHandle_ASAPDispatch_SuccessMessageHasASAP(t *testing.T) {
 		t.Fatal("expected handled=true")
 	}
 
-	resp, handled2, err := m.DetectAndHandle(context.Background(), "thread-asap", "yes")
+	resp, handled2, _, err := m.DetectAndHandle(context.Background(), "thread-asap", "yes", domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error on confirm: %v", err)
 	}
@@ -349,7 +400,7 @@ func TestDetectAndHandle_AtTimeKeyword_Detected(t *testing.T) {
 
 	// No "every"/"daily"/day-name — relies on " at 2pm" digit detection.
 	msg := "schedule a task at 2pm for the architect bot"
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-at", msg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-at", msg, domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -368,7 +419,7 @@ func TestDetectAndHandle_ForWithoutThe_ExtractsBotName(t *testing.T) {
 
 	// "add task" = action, "bot" present, " for " (no "for the") → bot name extraction
 	msg := "add task run reports for reporting bot"
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-for", msg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-for", msg, domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +458,7 @@ func TestDetectAndHandle_ExpiredIntent_NotConfirmable(t *testing.T) {
 	m := orchestrator.NewChatTaskManagerWithTTL(d, time.Millisecond)
 
 	taskMsg := "schedule a weekly code review every Monday at 9am for the architect bot"
-	_, handled, err := m.DetectAndHandle(context.Background(), "thread-ttl", taskMsg)
+	_, handled, _, err := m.DetectAndHandle(context.Background(), "thread-ttl", taskMsg, domain.DirectTaskSourceChat)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -419,7 +470,7 @@ func TestDetectAndHandle_ExpiredIntent_NotConfirmable(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	// "yes" with expired intent should not be confirmable.
-	_, handled2, err2 := m.DetectAndHandle(context.Background(), "thread-ttl", "yes")
+	_, handled2, _, err2 := m.DetectAndHandle(context.Background(), "thread-ttl", "yes", domain.DirectTaskSourceChat)
 	if err2 != nil {
 		t.Fatalf("unexpected error on confirmation: %v", err2)
 	}

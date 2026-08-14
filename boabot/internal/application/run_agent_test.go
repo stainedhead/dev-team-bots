@@ -234,6 +234,68 @@ func TestRunAgent_Poll_TaskMessage(t *testing.T) {
 	}
 }
 
+// TestRunAgent_Poll_TaskMessage_PayloadSourcePreferredOverMessageFrom verifies
+// that handleTask prefers TaskPayload.Source over Message.From when building
+// domain.Task.Source -- Message.From carries the *sending* bot identity
+// (e.g. the orchestrator dispatcher's own name), not the task's origin
+// channel, so execute_task.go:100's chat/buzz provider-selection check would
+// never fire without this (see implementation-notes.md P1.0 findings).
+func TestRunAgent_Poll_TaskMessage_PayloadSourcePreferredOverMessageFrom(t *testing.T) {
+	taskPayload, _ := json.Marshal(domain.TaskPayload{
+		TaskID:      "task-buzz-1",
+		Instruction: "do the thing",
+		Source:      "buzz",
+	})
+
+	msgCh := make(chan []domain.ReceivedMessage, 1)
+	msgCh <- []domain.ReceivedMessage{
+		{
+			Message: domain.Message{
+				Type:    domain.MessageTypeTask,
+				From:    "orchestrator", // sender identity -- must NOT win over payload.Source
+				Payload: taskPayload,
+			},
+			ReceiptHandle: "receipt-buzz-1",
+		},
+	}
+
+	workerExecuted := make(chan domain.Task, 1)
+	worker := &mocks.Worker{
+		ExecuteFn: func(_ context.Context, task domain.Task) (domain.TaskResult, error) {
+			workerExecuted <- task
+			return domain.TaskResult{TaskID: task.ID, Success: true}, nil
+		},
+	}
+
+	queue := &mocks.MessageQueue{
+		ReceiveFn: func(ctx context.Context) ([]domain.ReceivedMessage, error) {
+			select {
+			case msgs := <-msgCh:
+				return msgs, nil
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		DeleteFn: func(_ context.Context, _ string) error { return nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uc := buildUseCase(queue, &mocks.Broadcaster{}, &mocks.WorkerFactory{Worker: worker}, nil)
+	go func() { _ = uc.Run(ctx) }()
+
+	select {
+	case task := <-workerExecuted:
+		if task.Source != "buzz" {
+			t.Fatalf("expected task.Source %q (from payload), got %q (Message.From leaked through)", "buzz", task.Source)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for task execution")
+	}
+}
+
 // TestRunAgent_Poll_ContextCancel verifies that poll() exits cleanly when the
 // context is cancelled.
 func TestRunAgent_Poll_ContextCancel(t *testing.T) {

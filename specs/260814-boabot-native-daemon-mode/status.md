@@ -12,7 +12,7 @@
 | 2 | Research & Data Modeling | Complete |
 | 3 | Architecture & Planning | Complete |
 | 4 | Task Breakdown | Complete |
-| 5 | Implementation | Not Started |
+| 5 | Implementation | In Progress |
 | 6 | Completion & Archival | Not Started |
 
 ## Phase 0 Task Checklist
@@ -42,3 +42,4 @@
 
 - 2026-08-14: Spec directory created from `boabot-native-daemon-mode-PRD.md`; PRD moved into spec directory.
 - 2026-08-14: `/review-spec` run; codebase research resolved RQ1-4 concretely, narrowed RQ5; spec.md, research.md, data-dictionary.md, architecture.md, tasks.md, plan.md updated with findings. Spec now implementation-ready.
+- 2026-08-14: Step 3 implementation started. P1.0 traced and documented in implementation-notes.md (exact current Buzz -> Worker.Execute path). P2.1 done (`DirectTaskSourceBuzz` domain value + `execute_task.go:100` provider-selection check extended, with a supporting `TaskPayload.Source` fix required to make the check reachable at all -- see implementation-notes.md). P2.2 done (`BuzzTaskBridge` application-layer use case in `internal/application/orchestrator/buzz_task_bridge.go`, reusing `ChatTaskManager` for NL scheduling, with event-ID dedup). `go test -race`, `go vet`, `golangci-lint run`, `gofmt` all clean at this checkpoint. Next: P1.1/P1.2 (main.go/team_manager.go wiring), then P2.3/P3.x.

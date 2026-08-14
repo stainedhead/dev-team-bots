@@ -823,6 +823,37 @@ func TestExecuteTask_WithChatProvider_UsedForChatSource(t *testing.T) {
 	}
 }
 
+// TestExecuteTask_WithChatProvider_UsedForBuzzSource verifies that a
+// dedicated chat provider is also used when task.Source == "buzz" —
+// DirectTaskSourceBuzz-originated tasks (spec.md FR-005/architecture.md's
+// "extend execute_task.go:100... treat DirectTaskSourceBuzz the same as
+// DirectTaskSourceChat") get the same conversational-provider treatment as
+// chat-sourced tasks.
+func TestExecuteTask_WithChatProvider_UsedForBuzzSource(t *testing.T) {
+	chatCalled := false
+	chatProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			chatCalled = true
+			return domain.InvokeResponse{Content: "chat response", StopReason: "stop"}, nil
+		},
+	}
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(defaultProvider, &mocks.MCPClient{}, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithChatProvider(chatProvider)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-buzz-1", Source: "buzz", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !chatCalled {
+		t.Error("expected chat provider to be called for buzz-source task")
+	}
+}
+
 // TestExecuteTask_ProgressHandler_CallErr_InProgress verifies that formatProgressLine
 // includes the error string when CallTool returns a hard error (callErr != nil).
 func TestExecuteTask_ProgressHandler_CallErr_InProgress(t *testing.T) {

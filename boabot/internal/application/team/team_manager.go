@@ -220,6 +220,23 @@ func resolveTaskOutcome(output string, success bool) (domain.DirectTaskStatus, d
 	return domain.DirectTaskStatusErrored, domain.WorkItemStatusErrored
 }
 
+// chatMessageThreadID returns the ThreadID to record on the shared chat
+// feed's inbound completion message for task. Only chat-sourced tasks use
+// their own task.ThreadID -- it corresponds to a real domain.ChatThread the
+// operator created via the web-UI chat interface. Every other source uses
+// "" (matching board/operator's pre-existing convention): board- and
+// operator-dispatched tasks already carry an empty ThreadID, and a Buzz-
+// sourced task's ThreadID (the Nostr channel UUID, needed by
+// BuzzTaskBridge/ChatTaskManager's own scheduling-confirmation pending map)
+// does not correspond to any registered ChatThread and must not leak into
+// GET /api/v1/chat's flat listing as an orphaned/mislabeled grouping.
+func chatMessageThreadID(task domain.DirectTask) string {
+	if task.Source == domain.DirectTaskSourceChat {
+		return task.ThreadID
+	}
+	return ""
+}
+
 // boardTracksSource reports whether a DirectTask with this source has a
 // corresponding board item (ActiveTaskID-linked) whose status the shared
 // TaskResultHandler (startBot) should update on completion. Board-sourced
@@ -1010,7 +1027,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 			}
 			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
 				msg.BotName = task.BotName
-				msg.ThreadID = task.ThreadID
+				msg.ThreadID = chatMessageThreadID(task)
 			}
 			if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil {
 				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)

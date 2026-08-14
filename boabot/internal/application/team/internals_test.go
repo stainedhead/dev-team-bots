@@ -173,6 +173,57 @@ func TestBoardTracksSource(t *testing.T) {
 	}
 }
 
+// ── chatMessageThreadID ────────────────────────────────────────────────────────
+
+// TestChatMessageThreadID verifies which DirectTaskSource values' own
+// task.ThreadID is safe to record on the shared chat feed's inbound
+// completion message. Only chat-sourced tasks have a ThreadID that
+// corresponds to a real domain.ChatThread the operator created via the
+// web-UI chat interface. Board/operator-sourced tasks already dispatch with
+// an empty ThreadID (pre-existing convention). Buzz-sourced tasks carry a
+// real, non-empty ThreadID -- the Nostr channel UUID, needed by
+// BuzzTaskBridge/ChatTaskManager's own scheduling-confirmation pending map
+// -- which must NOT leak into the shared chat feed as a message ThreadID:
+// it does not correspond to any registered ChatThread and would render as
+// an orphaned/mislabeled grouping in GET /api/v1/chat's flat listing
+// (spec.md's non-goal: this feature populates Board/Tasks, not a new chat
+// surface).
+func TestChatMessageThreadID(t *testing.T) {
+	tests := []struct {
+		name string
+		task domain.DirectTask
+		want string
+	}{
+		{
+			name: "chat source keeps its own ThreadID",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceChat, ThreadID: "thread-abc"},
+			want: "thread-abc",
+		},
+		{
+			name: "buzz source's channel-UUID ThreadID is not leaked into the chat feed",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceBuzz, ThreadID: "nostr-channel-uuid"},
+			want: "",
+		},
+		{
+			name: "board source (already empty ThreadID today)",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceBoard, ThreadID: ""},
+			want: "",
+		},
+		{
+			name: "operator source (already empty ThreadID today)",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceOperator, ThreadID: ""},
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chatMessageThreadID(tc.task); got != tc.want {
+				t.Errorf("chatMessageThreadID(%+v) = %q, want %q", tc.task, got, tc.want)
+			}
+		})
+	}
+}
+
 // ── teamAskRouter ─────────────────────────────────────────────────────────────
 
 func TestTeamAskRouter_GetOrCreate_SameChannel(t *testing.T) {

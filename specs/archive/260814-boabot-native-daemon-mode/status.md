@@ -14,7 +14,7 @@
 | 4 | Task Breakdown | Complete |
 | 5 | Implementation | Complete (P1.0-P3.2; P4.1 out of scope — operator action, no code) |
 | 5.5 | Documentation and User Docs | Complete |
-| 6 | Completion & Archival | Not Started |
+| 6 | Completion & Archival | Complete (original spec archived at dev-flow Step 7; auto-review spec/fixes tracked separately) |
 
 ## Phase 0 Task Checklist
 

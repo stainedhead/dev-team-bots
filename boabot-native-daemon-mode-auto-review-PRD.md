@@ -176,6 +176,16 @@ Any Buzz instruction with multi-byte characters (emoji, non-Latin scripts — en
 
 ---
 
+## Open Decisions Needing an Owner Call Before Implementation
+
+These are embedded either/or choices inside individual findings above — surfaced here so Step 9 doesn't have to hunt through prose for them. None block starting on the other findings.
+
+- **FR-106** (coverage-gate framing): file a non-blocking follow-up to raise `internal/application/team`'s `startBot`/`Run` coverage, **or** clarify AGENTS.md/README's coverage framing as an aggregate gate rather than per-package. Recommendation: (b) — the aggregate gate is already what CI enforces; documenting that accurately is lower-risk than a speculative coverage-raising follow-up with no assigned scope.
+- **FR-107** (`LoadTeamConfig` export): revert to unexported `loadTeamConfig`, **or** update `architecture.md`/ADR-B028 to state the real reason it's exported. Recommendation: revert — the stated rationale for exporting it no longer applies per the final design, and an unused export is a minor but real API-surface cost.
+- **FR-108** item 1 (AC checkboxes): check each with a test reference or leave unchecked with a one-line reason. No real choice here — do both per-item, this is a mechanical pass, not a design decision.
+
+---
+
 ## Implementation Guidance for Fixes
 
 - **Use TDD for every fix.** Each finding above starts with a failing test that reproduces the problem — a redelivered event ID after a failed dispatch (FR-101), a multi-byte truncation boundary (FR-102), a `nil`-returning `BuzzMonitorBuilder` (FR-103) — before any production code changes. This applies to test-only additions too: write the test, confirm it exercises the previously-uncovered branch, then leave production code as-is if it's already correct (e.g. FR-103 once written may reveal the `continue` logic needs no change at all).

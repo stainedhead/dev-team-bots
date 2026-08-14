@@ -126,7 +126,7 @@ Measured on domain and application packages (excluding `mocks/`, `cmd/`, `config
 | `internal/application/eta` | 30 | 100% |
 | `internal/application/metrics` | 66 | 100% |
 | `internal/application/notifications` | 181 | 94.8% |
-| `internal/application/orchestrator` | 938 | 95.2% |
+| `internal/application/orchestrator` | 983 | 95.2% |
 | `internal/application/plugin` | 256 | 93.1% |
 | `internal/application/pool` | 259 | 97.8% |
 | `internal/application/rebalancing` | 74 | 100% |

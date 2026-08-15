@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	buzzinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/buzz"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
@@ -282,6 +283,30 @@ func TestBuildBuzzMonitor_KeypairLoadFailure(t *testing.T) {
 
 	if mon != nil {
 		t.Fatal("expected nil Monitor when the private key fails to resolve")
+	}
+}
+
+// TestNewBuzzMonitorBuilder_KeyLoadFailure_ReturnsTrueNilInterface guards
+// against a Go typed-nil-interface pitfall: newBuzzMonitorBuilder's closure
+// returns domain.ChannelMonitor (an interface), but internally calls
+// buildBuzzMonitor, which returns *buzzinfra.Monitor (a concrete pointer). A
+// bare `return buildBuzzMonitor(...)` converts a nil *buzzinfra.Monitor into
+// a *non-nil* domain.ChannelMonitor interface value (type=*buzzinfra.Monitor,
+// value=nil) -- `mon == nil` at the TeamManager.Run() call site then never
+// catches it, so a monitor for a persona whose key failed to load is
+// registered anyway and panics with a nil-pointer dereference the first
+// time anything calls .Start() on it (observed in production: every bot in
+// the team crash-loops indefinitely, not just the affected persona, because
+// they all share TeamManager's monitor list).
+func TestNewBuzzMonitorBuilder_KeyLoadFailure_ReturnsTrueNilInterface(t *testing.T) {
+	store := &buzzFakeStore{values: map[domain.SecretRef]string{}} // no private key configured
+	cfg := config.Config{Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"}}
+	builder := newBuzzMonitorBuilder(store, "", t.TempDir())
+
+	mon := builder(context.Background(), team.BotEntry{Name: "buzzbot", Type: "buzzbot", Enabled: true}, cfg, queue.NewRouter(), nil, nil, nil, nil)
+
+	if mon != nil {
+		t.Fatalf("expected a true nil domain.ChannelMonitor interface when the private key fails to resolve, got a non-nil interface wrapping %#v (this is the typed-nil pitfall the comment above describes)", mon)
 	}
 }
 

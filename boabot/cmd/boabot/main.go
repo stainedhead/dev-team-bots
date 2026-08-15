@@ -175,7 +175,29 @@ func run(ctx context.Context, cfg config.Config) error {
 	// only the infrastructure-construction step (buildBuzzMonitor), called
 	// back by Run() at the right time with the dependencies only it has.
 	// See specs/260814-boabot-native-daemon-mode/implementation-notes.md.
-	mgr.WithBuzzMonitorBuilder(func(
+	mgr.WithBuzzMonitorBuilder(newBuzzMonitorBuilder(store, managerCfg.BotsDir, managerCfg.MemoryRoot))
+
+	return mgr.Run(ctx)
+}
+
+// newBuzzMonitorBuilder returns the team.BuzzMonitorBuilder closure
+// TeamManager.Run() invokes once per Buzz-enabled persona (see the wiring
+// comment at its call site in run()).
+//
+// The nil check here is load-bearing, not defensive boilerplate: this
+// closure's declared return type is domain.ChannelMonitor (an interface),
+// but buildBuzzMonitor returns *buzzinfra.Monitor (a concrete pointer). A
+// bare `return buildBuzzMonitor(...)` converts a nil *buzzinfra.Monitor
+// (buildBuzzMonitor's documented fail-closed result on a bad/missing key)
+// into a *non-nil* domain.ChannelMonitor interface value -- Go's classic
+// typed-nil-interface pitfall. TeamManager.Run()'s own `if mon == nil`
+// check can never catch that, so the broken monitor was being registered
+// anyway and every bot in the team (they share one monitor list) crashed
+// with a nil-pointer panic the first time anything called .Start() on it.
+// Comparing the concrete *buzzinfra.Monitor to nil first, and returning a
+// literal nil for the interface, is the standard fix.
+func newBuzzMonitorBuilder(store domain.SecretStore, botsDir, memoryRoot string) team.BuzzMonitorBuilder {
+	return func(
 		buildCtx context.Context,
 		entry team.BotEntry,
 		botCfg config.Config,
@@ -202,10 +224,12 @@ func run(ctx context.Context, cfg config.Config) error {
 		// buildBuzzMonitor's router.Lookup-before-Register handles that
 		// (and the Run()-side team-entry pre-registration) uniformly now,
 		// so no queueAlreadyRegistered flag is needed here.
-		return buildBuzzMonitor(buildCtx, botCfg, store, r, managerCfg.BotsDir, managerCfg.MemoryRoot, shutdownFn, bridge, chatStore)
-	})
-
-	return mgr.Run(ctx)
+		mon := buildBuzzMonitor(buildCtx, botCfg, store, r, botsDir, memoryRoot, shutdownFn, bridge, chatStore)
+		if mon == nil {
+			return nil
+		}
+		return mon
+	}
 }
 
 // buildBuzzMonitor constructs the Buzz (Nostr) domain.ChannelMonitor from

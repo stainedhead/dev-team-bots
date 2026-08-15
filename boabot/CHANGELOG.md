@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.4.1...boabot/v0.5.0) (2026-08-15)
+
+
+### Features
+
+* boabot native daemon mode multi-agent Buzz support ([2983af1](https://github.com/stainedhead/dev-team-bots/commit/2983af1517ae6982a3e7aab490bd6f6d88824058))
+* **boabot:** add Buzz-&gt;Dispatcher bridge use case (P1.0, P2.1, P2.2) ([d771f75](https://github.com/stainedhead/dev-team-bots/commit/d771f756fcfb02a87ccc9a5462f8f9afb78f0be0))
+* **boabot:** per-persona Buzz monitor wiring through the Dispatcher bridge (P1.1, P1.2, P2.3, P3.1, P3.2) ([793699b](https://github.com/stainedhead/dev-team-bots/commit/793699b3d103701b657810235d3522bd3c9e8a90))
+* Buzz DM support and complete threaded-reply support ([7a6a776](https://github.com/stainedhead/dev-team-bots/commit/7a6a776e0847c2ae21cb2b2d40d675371fda8d22))
+* **buzz:** add NIP-17 DM support and complete threaded-reply dispatch ([fd0e7a8](https://github.com/stainedhead/dev-team-bots/commit/fd0e7a8ab6f16322e5b3e24d1b390f86e4faefef))
+
+
+### Bug Fixes
+
+* **boabot:** close P1 review findings — dedup, UTF-8 truncation, nil-monitor coverage, chat_provider disclosure ([1ea7119](https://github.com/stainedhead/dev-team-bots/commit/1ea7119e1b29a730b7d458d75b513c4f662ce0a4))
+* **boabot:** harden FR-101 dedup against concurrent replay; close FR-107/FR-110 ([43ddd31](https://github.com/stainedhead/dev-team-bots/commit/43ddd3183c31a61c3c4e90b723cca79c38606733))
+* **boabot:** stop leaking Buzz channel UUIDs into the shared chat feed ([441dc36](https://github.com/stainedhead/dev-team-bots/commit/441dc361d7bb9a5f0a7eabb51b8aec5693487637))
+* **buzz:** close P2 review findings FR-302 through FR-306 ([6122a24](https://github.com/stainedhead/dev-team-bots/commit/6122a24f453700b60ddebae49ed6585ecca2ab6e))
+* **buzz:** eliminate duplicate chat-store write for Buzz task replies (FR-301) ([515ec8b](https://github.com/stainedhead/dev-team-bots/commit/515ec8b44db9da158fe4318a75e6a6d8f7b31442))
+
 ## [0.4.1](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.4.0...boabot/v0.4.1) (2026-08-14)
 
 

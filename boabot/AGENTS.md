@@ -88,7 +88,7 @@ internal/
 - `ToolGater` — Select(intent, allTools) → full schemas + stubs.
 - `SkillRegistry` — List, Get, Approve, Reject, Revoke.
 - `CardRegistry` — Get, Set, List (local in-memory Agent Card cache).
-- `RelayClient` — Connect, Authenticate, Publish, Subscribe, Close (Buzz/Nostr adapter target).
+- `RelayClient` — Connect, Authenticate, Publish, PublishRaw, Subscribe, Close (Buzz/Nostr adapter target). `PublishRaw` publishes an already-signed event verbatim (no re-signing) — required for NIP-17 gift-wrapped DMs, whose outer envelope is signed with an ephemeral key, not the client's own.
 - `SecretStore` — Get (ordered provider-chain resolution; env/systemd/keystore/file adapter targets).
 - `ControlPlane`, `BoardStore`, `UserStore` — orchestrator mode only.
 

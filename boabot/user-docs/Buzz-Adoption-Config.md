@@ -5,11 +5,13 @@
 ## What's supported
 
 - **Channel `@mentions`** — the bot discovers the channels it is a relay-confirmed member of and responds when `@mention`ed, replying in a NIP-10 threaded `kind:9` message scoped to the channel.
+- **In-thread replies without re-`@mention`ing** — once the bot has dispatched in a thread (channel or DM), a human replying in that same thread is recognized and dispatched without needing to `@mention` the bot again; the conversation continues with prior context carried forward. See "Direct messages and threaded replies" below.
+- **Direct messages (NIP-17 gift-wrapped DMs)** — any Buzz-enabled persona is reachable via a direct 1:1 message to its own pubkey, using the same key it already uses for channel participation. See "Direct messages and threaded replies" below — in particular the unauthorized-sender default, before you rely on this in a shared or public relay.
 - **Presence** — the bot publishes `kind:20001` presence at an interval under Buzz's 180-second staleness bound, and a `kind:20002` typing indicator while a dispatched task is executing.
-- **Gated `!shutdown`** — a `!shutdown` message from an allowed pubkey (the author gate below, or the configured owner) triggers boabot's existing graceful shutdown.
+- **Gated `!shutdown`** — a `!shutdown` message from an allowed pubkey (the author gate below, or the configured owner) triggers boabot's existing graceful shutdown. Channel only — see "Direct messages and threaded replies" below.
 - **NIP-OA / NIP-AA attestation (optional)** — an owner-issued `auth` tag can be attached to the bot's NIP-42 AUTH event, granting Buzz virtual channel membership without explicit per-channel enrollment.
 
-Not yet supported (see the PRD's Phasing section): NIP-17 gift-wrapped DMs and DM-triggered tasks, NIP-50 search, NIP-CW channel-window paging, NIP-AP persona publication, NIP-AM turn metrics, NIP-AE engram publication, and git-on-Nostr (NIP-GS/NIP-34/NIP-MP).
+Not yet supported (see the PRD's Phasing section): NIP-50 search, NIP-CW channel-window paging, NIP-AP persona publication, NIP-AM turn metrics, NIP-AE engram publication, and git-on-Nostr (NIP-GS/NIP-34/NIP-MP).
 
 ### Multiple personas, one process
 
@@ -144,11 +146,38 @@ The reply appears threaded under `alice`'s original message in any Buzz client, 
 
 ---
 
+## Direct messages and threaded replies
+
+### Direct messages
+
+No extra config is required beyond what Steps 1-3 above already set up. DM reachability activates automatically the moment a persona's channel Buzz identity does — there is no `buzz.dm_enabled` flag, and no separate key to provision. The same `buzz_private_key` that authenticates the persona for channel participation is also what makes DM decryption possible.
+
+**Read this before assuming DMs are gated the same way channels are.** Channel `@mention`s only reach the bot from someone who is already a relay-confirmed member of a channel the bot has joined — the relay itself curates who can even attempt to trigger a dispatch. A direct message has no equivalent curation: **any Nostr identity that knows a persona's public key can send it a DM**, and if `respond_to`/`respond_to_allowlist` is left unconfigured (the default — see Step 2 above), that DM dispatches a real, budget-consuming task exactly like an in-gate channel mention would. If you want DM reachability restricted to known senders, you must explicitly configure `respond_to` or `respond_to_allowlist` — leaving it unset does not implicitly restrict DMs just because it "feels" more locked-down than a public channel.
+
+**Unauthorized senders are silently ignored, not sent a decline reply.** When the author gate *is* configured and a DM arrives from outside it, boabot logs and drops it — the sender receives no response at all, not even a "you're not authorized" message. This is deliberate: a decline reply would confirm to an arbitrary Nostr identity that a given persona exists and is listening, which is a materially larger information leak than curated channel membership already permits. There is no config option in this release to switch to a decline-reply instead.
+
+A DM-dispatched task creates a real Task and Kanban board item, exactly like a channel `@mention`, visible live in the orchestrator UI — DM conversations are not private or hidden from the operator's view. Two things make a DM-originated task recognizable at a glance:
+
+- Its board/task title is prefixed `[Buzz DM] `.
+- Its thread ID (used for conversation-continuation history, and visible in logs/UI) is `dm:<counterparty-pubkey-hex>` — distinguishable from a bare 64-character-hex channel thread root.
+
+`!shutdown` is **not** reachable via DM — it is recognized only on the channel path. A DM containing the literal text `!shutdown` is dispatched as an ordinary task instruction, not routed to the shutdown handler.
+
+### Threaded replies (channel or DM)
+
+Once a persona has dispatched a task in a thread — a channel thread, or a DM conversation — a human replying in that same thread is recognized and dispatched **without needing to `@mention` the bot again**. This applies symmetrically to channel threads and DM conversations. Recognition is per-persona: if two personas are both active in a channel, only the persona that actually dispatched in a given thread will pick up a follow-up reply there; the other persona stays silent on it, even though it can see the same channel.
+
+The conversation carries context forward: boabot replays the 10 most-recent prior messages in that thread/DM when building the next turn, the same pattern the web UI's own chat interface already uses. There's no separate timeout — a conversation's relevance to the model simply fades once more than 10 messages have passed since a given point, exactly as it would in the web UI.
+
+Outbound channel replies (whether continuing a thread or answering a fresh mention) now carry full NIP-10 threading metadata — a root tag, a reply tag pointing at the immediate parent, and a tag back to the original author — so any Buzz client renders the whole exchange as one coherent thread, not just a reply to the very first message. DM replies are gift-wrapped for the recipient (and, per NIP-17, a second copy for your own other devices) but carry no thread tags — 1:1 DMs aren't NIP-10-threaded the way channel messages are.
+
+---
+
 ## Behaviour notes
 
-- **Loop prevention**: events authored by the bot's own pubkey are silently dropped, matching Slack's bot-message filter.
-- **Threading**: replies are NIP-10 threaded against the triggering mention's root event, scoped to the originating channel (`#h`).
-- **Author gating**: `respond_to`/`respond_to_allowlist` gate ordinary dispatch; `!shutdown` uses a wider gate that also accepts `owner_pubkey`. An out-of-gate sender's mention or `!shutdown` is ignored and logged, never silently dropped without a trace.
+- **Loop prevention**: events authored by the bot's own pubkey are silently dropped, matching Slack's bot-message filter. This includes NIP-17's self-copy of every outbound DM (see "Direct messages" above) — it is recognized and dropped before dispatch, not treated as a new inbound message.
+- **Threading**: channel replies are NIP-10 threaded — root tag, reply tag to the immediate parent, and author tag — scoped to the originating channel (`#h`). See "Threaded replies" above for in-thread-reply recognition without re-`@mention`ing.
+- **Author gating**: `respond_to`/`respond_to_allowlist` gate ordinary dispatch on both the channel and DM paths; `!shutdown` uses a wider gate that also accepts `owner_pubkey`, and is channel-only (see "Direct messages" above). An out-of-gate sender's attempt is always logged server-side (never a silent no-trace drop from an operator's point of view) — but the *sender themselves* gets nothing back either way: a channel mention outside the gate produces no reply, and neither does an out-of-gate DM.
 - **Budget and autonomy**: Buzz-dispatched tasks go through the exact same `MessageQueue` → worker harness path as every other channel — the existing per-bot `BudgetTracker` caps and calibrated-autonomy gates apply with no Buzz-specific bypass.
 - **Process-singleton protection**: a second boabot process started against the same private key refuses to attach its Buzz monitor (logging why) rather than producing duplicate replies or a duplicate presence identity — see `docs/technical-details.md`'s "Buzz (Nostr) Channel Monitor" section.
 - **One bot per relay identity**: `bot_name` routes all Buzz messages received on that keypair's identity to a single named bot, matching Slack's `bot_name` model.

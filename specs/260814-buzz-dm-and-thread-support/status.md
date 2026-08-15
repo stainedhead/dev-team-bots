@@ -1,7 +1,7 @@
 # Status: Buzz DM Support and Full Threaded-Reply Support
 
 **Created:** 2026-08-14
-**Last Updated:** 2026-08-14
+**Last Updated:** 2026-08-15
 
 ## Overall Progress
 
@@ -13,6 +13,7 @@
 | 3 | Architecture & Planning | Complete |
 | 4 | Task Breakdown | Complete |
 | 5 | Implementation | Complete (10/10 tasks) |
+| 5.5 | Documentation and User Docs (dev-flow Step 4) | Complete |
 | 6 | Completion & Archival | Not Started |
 
 ## Phase 5 Task Checklist (tasks.md P1.1-P3.1)
@@ -50,10 +51,11 @@ All quality gates green: `go fmt`, `go vet`, `golangci-lint run` (0 issues), `go
 
 ## Blockers
 
-- None currently. FR-204's unauthorized-DM-handling decision (silent ignore vs. decline reply) remains an open operator call — does not block starting implementation, only finalizing that one FR's exact behavior.
+- None. FR-204's unauthorized-DM-handling decision is resolved and implemented: silent ignore (no decline reply), documented as an operator-overridable default in `docs/architectural-decision-record.md` (ADR-B029) and `user-docs/Buzz-Adoption-Config.md`. No decline-reply option exists in this release.
 
 ## Recent Activity
 
 - 2026-08-14: Spec directory created from `buzz-dm-and-thread-support-PRD.md`; PRD moved into spec directory. This PRD followed a live code audit (channel mentions confirmed working, threading confirmed partially implemented with specific gaps, DM confirmed unimplemented with architecture ready) plus two explicit product decisions from the user (DM tasks visible on shared board; in-thread replies continue same task).
 - 2026-08-14: `/review-spec` run; codebase research resolved RQ1/RQ2/RQ4/RQ5 concretely (biggest finding: a ready-made `nip17` package already exists in the vendored dependency, and conversation continuation can reuse the existing `ChatStore` pattern with zero new session machinery). research.md, data-dictionary.md, architecture.md, tasks.md, plan.md, spec.md updated with findings. Spec now implementation-ready.
 - 2026-08-14: All 10 implementation tasks (P1.1-P3.1) complete. Threading fixes (Phase 1) and DM support (Phase 2) both landed; Phase 3's log-safety audit found and fixed a real (if narrow) key-leak path through a vendored-library error string. One deviation from architecture.md required (`nip17.ListenForMessages`/`PublishMessage` need a `*nostr.Pool` this codebase doesn't have — DM subscribe/publish instead reuse the existing single-relay `relayClient` seam plus `nip17.PrepareMessage`/`nip59.GiftUnwrap` directly), documented in implementation-notes.md. All quality gates green; coverage 91.4% (no regression). See implementation-notes.md for full technical-decision/deviation record.
+- 2026-08-15: Documentation pass (dev-flow Step 4) complete. Updated `boabot/README.md` (DM/threading summary, refreshed coverage table: 91.3%→91.4% aggregate), `docs/product-summary.md`, `docs/product-details.md` (new "Direct Messages (NIP-17)" and "Threaded-Reply Continuation" sections, including the chat-feed double-write tradeoff and the unauthorized-DM security framing), `docs/technical-details.md` (new "DM Support and Threaded-Reply Completion" subsection under Buzz; corrected the stale channel-UUID-keyed scheduling-confirmation claim), `docs/architectural-decision-record.md` (new ADR-B029), `user-docs/Buzz-Adoption-Config.md` (removed the stale "DMs not yet supported" line; new "Direct messages and threaded replies" section; `!shutdown` scope corrected to channel-only), and `user-docs/buzz-multi-agent-getting-started.md` ("Things that surprise people" bullets replaced/extended). No new user-docs pages created — extended the two existing Buzz pages per the task brief's guidance. `boabot/AGENTS.md`'s `RelayClient` interface listing updated to include `PublishRaw`. No code files touched.

@@ -177,6 +177,11 @@ type TeamManager struct {
 // *signature* (domain/config/queue types only) so internal/application/team
 // stays free of an internal/infrastructure/buzz import, matching
 // WithChannelMonitor's own doc comment (FR-034).
+// chatStore is passed in addition to dispatcher/board (P1.5/P2.x: the Buzz
+// bridge/monitor uses it for ChatStore-backed conversation continuation --
+// FR-206 thread-reply history replay and DM conversation history -- the
+// same tm.sharedChatStore the web-UI chat path already uses, reused as-is
+// per architecture.md's RQ1 resolution).
 type BuzzMonitorBuilder func(
 	ctx context.Context,
 	entry BotEntry,
@@ -184,6 +189,7 @@ type BuzzMonitorBuilder func(
 	router *queue.Router,
 	dispatcher domain.ScheduledTaskDispatcher,
 	board domain.BoardStore,
+	chatStore domain.ChatStore,
 	shutdownFn func(context.Context) error,
 ) domain.ChannelMonitor
 
@@ -393,7 +399,7 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 					"persona", e.Name, "buzz_bot_name", botCfg.Buzz.BotName)
 				continue
 			}
-			mon := tm.buzzMonitorBuilder(ctx, e, botCfg, tm.router, dispatcher, tm.sharedBoard, tm.Shutdown)
+			mon := tm.buzzMonitorBuilder(ctx, e, botCfg, tm.router, dispatcher, tm.sharedBoard, tm.sharedChatStore, tm.Shutdown)
 			if mon == nil {
 				continue
 			}

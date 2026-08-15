@@ -237,7 +237,7 @@ func TestBuildBuzzMonitor_Disabled(t *testing.T) {
 	store := &buzzFakeStore{values: map[domain.SecretRef]string{}}
 	cfg := config.Config{Buzz: config.BuzzConfig{Enabled: false, BotName: "buzzbot", RelayURL: "wss://relay.example.com"}}
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 	if mon != nil {
 		t.Fatal("expected nil Monitor when buzz.enabled is false")
@@ -259,7 +259,7 @@ func TestBuildBuzzMonitor_MissingBotNameOrRelayURL(t *testing.T) {
 		store := &buzzFakeStore{values: map[domain.SecretRef]string{}}
 		cfg := config.Config{Buzz: bc}
 
-		mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+		mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 		if mon != nil {
 			t.Fatalf("expected nil Monitor for incomplete BuzzConfig %+v", bc)
@@ -278,7 +278,7 @@ func TestBuildBuzzMonitor_KeypairLoadFailure(t *testing.T) {
 	store := &buzzFakeStore{values: map[domain.SecretRef]string{}} // no private key configured
 	cfg := config.Config{Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"}}
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 	if mon != nil {
 		t.Fatal("expected nil Monitor when the private key fails to resolve")
@@ -303,7 +303,7 @@ func TestBuildBuzzMonitor_EnabledSuccess(t *testing.T) {
 	}
 	router := queue.NewRouter()
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, router, t.TempDir(), t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, router, t.TempDir(), t.TempDir(), nil, nil, nil)
 
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor for a valid, enabled BuzzConfig")
@@ -337,7 +337,7 @@ func TestBuildBuzzMonitor_QueueAlreadyRegistered_DoesNotDoubleRegister(t *testin
 		}
 	}()
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, router, "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, router, "", t.TempDir(), nil, nil, nil)
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor")
 	}
@@ -394,7 +394,7 @@ func TestBuildBuzzMonitor_AuthTagSecretIsResolved(t *testing.T) {
 		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
 	}
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor for a valid, enabled BuzzConfig with a resolvable auth-tag secret")
@@ -423,7 +423,7 @@ func TestBuildBuzzMonitor_NoAuthTagSecret_StillActivates(t *testing.T) {
 		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
 	}
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor when no auth-tag secret is configured")
@@ -588,7 +588,7 @@ func TestBuildBuzzMonitor_InvalidAuthTagSecret_LogsAndContinues(t *testing.T) {
 		Buzz: config.BuzzConfig{Enabled: true, BotName: "buzzbot", RelayURL: "wss://relay.example.com"},
 	}
 
-	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil)
+	mon := buildBuzzMonitor(context.Background(), cfg, store, queue.NewRouter(), "", t.TempDir(), nil, nil, nil)
 
 	if mon == nil {
 		t.Fatal("expected a non-nil Monitor even when the configured auth-tag secret is malformed (log-and-continue, not fail-closed)")

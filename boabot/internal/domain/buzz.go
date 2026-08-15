@@ -98,6 +98,18 @@ type RelayClient interface {
 	// connection and delivery resumes on the same channel.
 	Subscribe(ctx context.Context, f Filter) (<-chan Event, error)
 
+	// PublishRaw sends evt to the relay exactly as given, without signing
+	// it or overwriting its PubKey -- unlike Publish, which always signs
+	// with the client's own key. Required for NIP-17 gift-wrapped DM
+	// events (kind:1059), whose outer envelope is intentionally signed
+	// with a throwaway ephemeral key (not the persona's own key) to
+	// preserve NIP-17's sender-anonymity privacy property; routing such an
+	// event through Publish would silently re-sign it with the wrong key
+	// and break both that property and the recipient's ability to decrypt
+	// it (GiftUnwrap derives the seal's conversation key from the
+	// envelope's PubKey).
+	PublishRaw(ctx context.Context, evt Event) error
+
 	// Close tears down the relay connection and releases all resources,
 	// including canceling every outstanding subscription's channel.
 	Close() error

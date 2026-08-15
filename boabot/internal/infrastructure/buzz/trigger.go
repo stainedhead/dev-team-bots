@@ -4,15 +4,18 @@ import "github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 
 // triggerKind classifies why (or whether) an inbound event qualifies as a
 // task trigger (F10/FR-019). It is a small enum rather than a bool so a
-// second trigger source (DMs, kind:1059, explicitly out of scope this run)
-// is additive later -- a new case here plus a new branch in
-// classifyTrigger, not a rewrite of an if-chain scattered through the
-// dispatch call site.
+// second trigger source is additive -- a new case here plus a new branch at
+// the dispatch call site, not a rewrite of an if-chain. triggerThreadReply
+// (P1.2/FR-205) is exactly that: an in-thread reply that lacks a fresh
+// @mention but matches a thread this persona previously dispatched in
+// (BuzzTaskDispatcher.KnownThread) -- see monitor.go's handleChannelEvent
+// and matchKnownThread.
 type triggerKind int
 
 const (
 	triggerNone triggerKind = iota
 	triggerMention
+	triggerThreadReply
 )
 
 // classifyTrigger implements F10: an inbound event qualifies as a task
@@ -99,6 +102,59 @@ func rootEventID(evt domain.Event) string {
 		}
 	}
 	return evt.ID
+}
+
+// threadReplyCandidates returns candidate thread-root IDs for evt, in
+// priority order, for matching against BuzzTaskDispatcher.KnownThread when
+// classifyTrigger did not find an explicit @mention (P1.2/FR-205). NIP-10
+// tagging is inconsistent in the wild: modern clients mark e-tags
+// "root"/"reply" explicitly; older/simpler clients rely on the deprecated
+// positional convention (first e tag = root, last e tag = reply) or send a
+// single unmarked e tag. This collects every plausible root candidate --
+// root-marked, then reply-marked, then positional first/last -- rather
+// than relying on rootEventID's marked-tag-only lookup, so a genuine
+// in-thread reply isn't missed just because the sending client used a
+// different (still NIP-10-legal) tagging convention. Deduplicated, order
+// preserved: an explicitly root-marked tag is checked before positional
+// fallbacks, since it is the least ambiguous signal. Returns nil for an
+// event with no `e` tags at all -- such an event cannot be a reply within
+// any existing thread.
+func threadReplyCandidates(evt domain.Event) []string {
+	var eTags [][]string
+	for _, t := range evt.Tags {
+		if len(t) >= 2 && t[0] == "e" {
+			eTags = append(eTags, t)
+		}
+	}
+	if len(eTags) == 0 {
+		return nil
+	}
+
+	var candidates []string
+	seen := make(map[string]bool, len(eTags))
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, id)
+		}
+	}
+
+	for _, t := range eTags {
+		if len(t) >= 4 && t[3] == "root" {
+			add(t[1])
+		}
+	}
+	for _, t := range eTags {
+		if len(t) >= 4 && t[3] == "reply" {
+			add(t[1])
+		}
+	}
+	// Deprecated positional convention: first e tag = root, last e tag =
+	// reply (may be the same tag if there is only one e tag).
+	add(eTags[0][1])
+	add(eTags[len(eTags)-1][1])
+
+	return candidates
 }
 
 // hasTagValue reports whether tags contains a tag named name whose first

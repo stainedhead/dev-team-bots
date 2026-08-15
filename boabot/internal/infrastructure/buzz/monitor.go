@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
@@ -70,6 +71,11 @@ type relayClient interface {
 	Connect(ctx context.Context) error
 	Authenticate(ctx context.Context) error
 	Publish(ctx context.Context, evt domain.Event) error
+	// PublishRaw sends evt verbatim, without signing/overwriting its
+	// PubKey -- see domain.RelayClient.PublishRaw's doc comment. Required
+	// for the DM reply path (dm.go), whose gift-wrapped events are already
+	// signed with a throwaway ephemeral key by nip59.GiftWrap.
+	PublishRaw(ctx context.Context, evt domain.Event) error
 	Subscribe(ctx context.Context, f domain.Filter) (<-chan domain.Event, error)
 	Close() error
 	SetConnStateFunc(fn func(connected bool))
@@ -152,18 +158,34 @@ type Config struct {
 	LockDir string
 }
 
-// replyTarget is where HandleResult (F12) publishes a task's kind:9 reply.
+// replyTarget is where HandleResult (F12) publishes a channel-dispatched
+// task's kind:9 reply, carrying everything publishReply needs for complete
+// NIP-10 tagging (FR-207): the root event (thread root, per P1.1's fix),
+// the immediate parent event this reply is directed at (parentEventID --
+// the triggering mention/thread-reply's own event ID), and that event's
+// author (authorPubKey), so the eventual reply can carry a `p` tag back to
+// them.
 type replyTarget struct {
-	channelUUID string
-	rootEventID string
+	channelUUID   string
+	rootEventID   string
+	parentEventID string
+	authorPubKey  string
 }
 
-// pendingEntry is one in-flight dispatched task.
+// pendingEntry is one in-flight dispatched task. Exactly one of target
+// (channel-dispatched) or dmTarget (DM-dispatched, P2.3) is meaningful --
+// dmTarget is non-nil only for a task dispatched via the DM path, in which
+// case target is the zero value and ignored.
 type pendingEntry struct {
-	target replyTarget
+	target   replyTarget
+	dmTarget *dmReplyTarget
+
 	// typingDone is closed by HandleResult, under the same lock that pops
 	// this entry from Monitor.pending, to stop F16's typing-indicator loop
-	// for this task.
+	// for this task. nil for a DM-dispatched entry -- F16's typing
+	// indicator is a channel (#h-tagged) concept that has no DM analogue,
+	// so no typing loop is ever started for one; HandleResult and Stop
+	// nil-check before closing it.
 	typingDone chan struct{}
 }
 
@@ -187,6 +209,21 @@ type Monitor struct {
 	// path only remains live for tests that predate the bridge and any
 	// caller that intentionally omits it.
 	taskDispatcher domain.BuzzTaskDispatcher
+
+	// chatStore, when set via WithChatStore, records every inbound/outbound
+	// Buzz message (channel thread-reply and DM) so a later dispatch in the
+	// same thread/conversation can replay it as context (FR-206). nil is
+	// safe -- every call site nil-checks before using it, degrading to the
+	// pre-existing no-history-replay behaviour.
+	chatStore domain.ChatStore
+
+	// dmKeyer, when set via WithDMKeyer, is this persona's nostr.Keyer
+	// adapter (dm_keyer.go) over its own key material, required for every
+	// DM operation (P2.1). nil disables DM support entirely -- no
+	// subscription is opened and no DM reply can be prepared -- consistent
+	// with spec.md's non-goal "DM support for personas without a
+	// provisioned key."
+	dmKeyer nostr.Keyer
 
 	newTicker func(time.Duration) ticker
 
@@ -230,6 +267,20 @@ func WithMonitorLogger(l *slog.Logger) MonitorOption {
 // a required constructor parameter.
 func WithTaskDispatcher(td domain.BuzzTaskDispatcher) MonitorOption {
 	return func(m *Monitor) { m.taskDispatcher = td }
+}
+
+// WithChatStore wires ChatStore-backed history replay (FR-206/P1.5) for
+// both the channel thread-continuation path and DM conversations. See the
+// chatStore field's doc comment.
+func WithChatStore(cs domain.ChatStore) MonitorOption {
+	return func(m *Monitor) { m.chatStore = cs }
+}
+
+// WithDMKeyer wires DM support (P2.1-P2.4): a nostr.Keyer over this
+// persona's own key material, required for the DM subscription and reply
+// paths. See the dmKeyer field's doc comment for what omitting it means.
+func WithDMKeyer(kr nostr.Keyer) MonitorOption {
+	return func(m *Monitor) { m.dmKeyer = kr }
 }
 
 // withTicker overrides the ticker constructor used by the presence (F14)
@@ -329,6 +380,14 @@ func (m *Monitor) run(ctx context.Context) {
 		m.logger.Error("buzz monitor: start membership watch failed", "err", err)
 		return
 	}
+	// P2.2: DM support is additive and opt-in (dmKeyer wired via
+	// WithDMKeyer). A DM subscription failure is isolated to DM handling
+	// only -- it must never block or tear down channel discovery/
+	// membership watch above, which have already started successfully by
+	// this point (NFR Reliability).
+	if m.dmKeyer != nil {
+		m.startDMSubscription(ctx)
+	}
 }
 
 // screen implements FR-028: content is routed through the configured
@@ -352,19 +411,37 @@ func (m *Monitor) screen(field, content string) string {
 }
 
 // handleChannelEvent implements F9 (self-filter) -> F10 (trigger
-// classification) -> the !shutdown branch (F17, checked on RAW content
-// with FR-026's wider gate) OR the ordinary dispatch path (F11, which
-// applies F8's ordinary gate internally). Screening (F7) happens only
-// once content is actually used to build a task instruction -- never
-// before gate/trigger/control-command matching, so a prompt-injection
-// payload can never be crafted to also dodge the author gate or masquerade
-// as a control command via screener-side rewriting.
+// classification, extended by P1.2's triggerThreadReply fallback) -> the
+// !shutdown branch (F17, checked on RAW content with FR-026's wider gate)
+// OR the ordinary dispatch path (F11, which applies F8's ordinary gate
+// internally). Screening (F7) happens only once content is actually used to
+// build a task instruction -- never before gate/trigger/control-command
+// matching, so a prompt-injection payload can never be crafted to also
+// dodge the author gate or masquerade as a control command via
+// screener-side rewriting.
 func (m *Monitor) handleChannelEvent(ctx context.Context, channelUUID string, evt domain.Event) {
 	if evt.PubKey == m.cfg.AgentPubKeyHex {
 		return // F9: self-authored, ignore (loop prevention)
 	}
-	if classifyTrigger(evt, m.cfg.AgentPubKeyHex) != triggerMention {
-		return
+
+	root := rootEventID(evt)
+	kind := classifyTrigger(evt, m.cfg.AgentPubKeyHex)
+	if kind != triggerMention {
+		// FR-205/P1.2: not an explicit @mention -- still dispatch if this is
+		// a reply/root-tagged event within a thread this persona previously
+		// dispatched in (KnownThread). Only meaningful with a bridge wired
+		// (KnownThread is BuzzTaskBridge-backed state); the pre-bridge
+		// direct-dispatch fallback never supported thread continuation and
+		// still doesn't.
+		if m.taskDispatcher == nil {
+			return
+		}
+		matchedRoot, ok := m.matchKnownThread(evt)
+		if !ok {
+			return
+		}
+		kind = triggerThreadReply
+		root = matchedRoot
 	}
 
 	text := strings.TrimSpace(evt.Content)
@@ -373,7 +450,29 @@ func (m *Monitor) handleChannelEvent(ctx context.Context, channelUUID string, ev
 		return
 	}
 
-	m.dispatch(ctx, channelUUID, evt)
+	if kind == triggerThreadReply {
+		m.logger.Info("buzz monitor: dispatching thread-reply without re-mention",
+			"channel", channelUUID, "event_id", evt.ID, "thread_root", root)
+	}
+
+	m.dispatch(ctx, channelUUID, root, evt)
+}
+
+// matchKnownThread implements P1.2's NIP-10 reply/root-tag detection for an
+// event that did not qualify via classifyTrigger's explicit-@mention check.
+// It only considers kind:9 channel messages (mirroring classifyTrigger's own
+// kind check) and tries each of threadReplyCandidates(evt), in order,
+// against m.taskDispatcher.KnownThread, returning the first match.
+func (m *Monitor) matchKnownThread(evt domain.Event) (string, bool) {
+	if evt.Kind != kindChannelMessage {
+		return "", false
+	}
+	for _, candidate := range threadReplyCandidates(evt) {
+		if m.taskDispatcher.KnownThread(m.cfg.BotName, candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 // handleShutdownCommand implements F17/FR-026.
@@ -399,13 +498,16 @@ func (m *Monitor) handleShutdownCommand(ctx context.Context, evt domain.Event) {
 }
 
 // dispatch implements F11 (mint task ID, enqueue) with F8's ordinary
-// author gate, F6's root-event resolution, F7's screening on the
-// instruction text, F13's structured logging, and F16's typing-indicator
-// kick-off. When a BuzzTaskDispatcher is wired (WithTaskDispatcher), it
-// routes through that bridge (P2.2) instead of building/sending the task
-// message directly; otherwise it falls back to the pre-existing direct
-// queue.Send behaviour.
-func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.Event) {
+// author gate, F7's screening on the instruction text, F13's structured
+// logging, and F16's typing-indicator kick-off. root is the thread root
+// this dispatch's reply/continuation state keys off (computed by the
+// caller -- handleChannelEvent -- either via F6's rootEventID for an
+// explicit @mention, or via the matched KnownThread candidate for a P1.2
+// thread-reply). When a BuzzTaskDispatcher is wired (WithTaskDispatcher),
+// it routes through that bridge (P2.2) instead of building/sending the
+// task message directly; otherwise it falls back to the pre-existing
+// direct queue.Send behaviour.
+func (m *Monitor) dispatch(ctx context.Context, channelUUID, root string, evt domain.Event) {
 	text := strings.TrimSpace(evt.Content)
 	if text == "" {
 		return
@@ -429,7 +531,6 @@ func (m *Monitor) dispatch(ctx context.Context, channelUUID string, evt domain.E
 		return
 	}
 
-	root := rootEventID(evt)
 	instruction := m.screen("message_body", text)
 
 	if m.taskDispatcher != nil {
@@ -465,23 +566,26 @@ func (m *Monitor) dispatchDirect(ctx context.Context, channelUUID, root string, 
 		return
 	}
 
-	m.awaitResult(ctx, taskID, channelUUID, root)
+	m.awaitResult(ctx, taskID, channelUUID, root, evt.ID, evt.PubKey)
 
 	m.logger.Info("buzz monitor: dispatched task",
 		"task_id", taskID, "agent_pubkey", m.cfg.AgentPubKeyHex, "relay_url", m.cfg.RelayURL,
 		"channel", channelUUID, "event_id", evt.ID)
 }
 
-// dispatchViaBridge routes an inbound mention through the
+// dispatchViaBridge routes an inbound mention/thread-reply through the
 // domain.BuzzTaskDispatcher bridge (P2.2), replacing the direct
 // queue.Send/Worker.Execute call dispatchDirect makes. The bridge decides
 // immediate-vs-scheduled dispatch (reusing ChatTaskManager's NL-scheduling
 // flow), creates the DirectTask/board item, and reports back what the
 // monitor should do next: publish an immediate text reply (a confirmation
 // prompt, cancellation ack, or scheduled-task ack), await the dispatched
-// task's own result, both, or neither (a relay-replay duplicate).
+// task's own result, both, or neither (a relay-replay duplicate). root
+// (not channelUUID -- P1.1's fix) is passed as threadID: the stable
+// per-conversation key the bridge uses for both NL-scheduling state and
+// ChatStore history replay (FR-208).
 func (m *Monitor) dispatchViaBridge(ctx context.Context, channelUUID, root string, evt domain.Event, instruction string) {
-	result, err := m.taskDispatcher.Dispatch(ctx, m.cfg.BotName, evt.ID, channelUUID, instruction)
+	result, err := m.taskDispatcher.Dispatch(ctx, m.cfg.BotName, evt.ID, root, instruction)
 	if err != nil {
 		m.logger.Error("buzz monitor: task dispatcher bridge failed",
 			"err", err, "channel", channelUUID, "event_id", evt.ID)
@@ -494,11 +598,11 @@ func (m *Monitor) dispatchViaBridge(ctx context.Context, channelUUID, root strin
 	}
 
 	if result.Reply != "" {
-		_ = m.publishReply(ctx, channelUUID, root, result.Reply) // logged internally on failure
+		_ = m.publishReply(ctx, channelUUID, root, evt.ID, evt.PubKey, result.Reply) // logged internally on failure
 	}
 
 	if result.TaskID != "" && result.AwaitResult {
-		m.awaitResult(ctx, result.TaskID, channelUUID, root)
+		m.awaitResult(ctx, result.TaskID, channelUUID, root, evt.ID, evt.PubKey)
 	}
 
 	m.logger.Info("buzz monitor: dispatched task via bridge",
@@ -509,12 +613,18 @@ func (m *Monitor) dispatchViaBridge(ctx context.Context, channelUUID, root strin
 // awaitResult registers taskID in the pending map and starts F16's
 // typing-indicator loop, so a later HandleResult call for this taskID
 // publishes a threaded reply -- shared by both the direct and bridge
-// dispatch paths.
-func (m *Monitor) awaitResult(ctx context.Context, taskID, channelUUID, root string) {
+// dispatch paths. parentEventID/authorPubKey carry FR-207's complete NIP-10
+// tagging through to the eventual publishReply call.
+func (m *Monitor) awaitResult(ctx context.Context, taskID, channelUUID, root, parentEventID, authorPubKey string) {
 	typingDone := make(chan struct{})
 	m.mu.Lock()
 	m.pending[taskID] = &pendingEntry{
-		target:     replyTarget{channelUUID: channelUUID, rootEventID: root},
+		target: replyTarget{
+			channelUUID:   channelUUID,
+			rootEventID:   root,
+			parentEventID: parentEventID,
+			authorPubKey:  authorPubKey,
+		},
 		typingDone: typingDone,
 	}
 	m.mu.Unlock()
@@ -523,18 +633,35 @@ func (m *Monitor) awaitResult(ctx context.Context, taskID, channelUUID, root str
 }
 
 // publishReply publishes content as a threaded kind:9 reply into
-// channelUUID, rooted at root, and returns any publish error (logged by the
-// caller with its own context -- e.g. HandleResult's FR-032 task_id-tagged
-// success log). Shared by HandleResult (F12, an eventual task result) and
+// channelUUID, and returns any publish error (logged by the caller with its
+// own context -- e.g. HandleResult's FR-032 task_id-tagged success log).
+// Shared by HandleResult (F12, an eventual task result) and
 // dispatchViaBridge (an immediate bridge-produced Reply, e.g. a scheduling
 // confirmation prompt) so both use identical event tagging.
-func (m *Monitor) publishReply(ctx context.Context, channelUUID, root, content string) error {
+//
+// FR-207: the event carries complete NIP-10 threading metadata -- a
+// root-marked `e` tag (root), a reply-marked `e` tag for the immediate
+// parent (parentEventID, the triggering mention/thread-reply's own event),
+// and a `p` tag back to that event's author (authorPubKey). The reply tag
+// is omitted when parentEventID equals root (replying directly to the
+// thread's own root needs only the one root-marked `e` tag per NIP-10 --
+// a duplicate reply tag pointing at the same ID adds nothing). The p tag
+// is omitted when authorPubKey is empty (defensive; every real call site
+// supplies it).
+func (m *Monitor) publishReply(ctx context.Context, channelUUID, root, parentEventID, authorPubKey, content string) error {
+	tags := [][]string{
+		{"h", channelUUID},
+		{"e", root, "", "root"},
+	}
+	if parentEventID != "" && parentEventID != root {
+		tags = append(tags, []string{"e", parentEventID, "", "reply"})
+	}
+	if authorPubKey != "" {
+		tags = append(tags, []string{"p", authorPubKey})
+	}
 	reply := domain.Event{
-		Kind: kindChannelMessage,
-		Tags: [][]string{
-			{"h", channelUUID},
-			{"e", root, "", "root"},
-		},
+		Kind:    kindChannelMessage,
+		Tags:    tags,
 		Content: content,
 	}
 	if err := m.relay.Publish(ctx, reply); err != nil {
@@ -542,7 +669,29 @@ func (m *Monitor) publishReply(ctx context.Context, channelUUID, root, content s
 			"channel", channelUUID, "err", err)
 		return err
 	}
+	m.recordOutbound(ctx, root, m.cfg.BotName, content)
 	return nil
+}
+
+// recordOutbound appends a bot-originated reply to ChatStore (FR-206), when
+// one is wired (WithChatStore) and threadID is non-empty. Shared by the
+// channel reply path (publishReply) and the DM reply path (dm.go's
+// publishDMReply). A ChatStore append failure is logged and non-fatal --
+// the reply has already been published; a history-recording failure must
+// not be reported as a publish failure.
+func (m *Monitor) recordOutbound(ctx context.Context, threadID, botName, content string) {
+	if m.chatStore == nil || threadID == "" {
+		return
+	}
+	msg := domain.ChatMessage{
+		ThreadID:  threadID,
+		BotName:   botName,
+		Direction: domain.ChatDirectionInbound,
+		Content:   content,
+	}
+	if err := m.chatStore.Append(ctx, msg); err != nil {
+		m.logger.Warn("buzz monitor: failed to append outbound chat message", "thread_id", threadID, "err", err)
+	}
 }
 
 // HandleResult implements domain.ChannelMonitor / F12. Unmatched task IDs
@@ -557,7 +706,9 @@ func (m *Monitor) HandleResult(ctx context.Context, p domain.TaskResultPayload) 
 	entry, ok := m.pending[p.TaskID]
 	if ok {
 		delete(m.pending, p.TaskID)
-		close(entry.typingDone) // F16: stop typing, under the same lock that pops the entry
+		if entry.typingDone != nil {
+			close(entry.typingDone) // F16: stop typing, under the same lock that pops the entry
+		}
 	}
 	m.mu.Unlock()
 
@@ -573,7 +724,20 @@ func (m *Monitor) HandleResult(ctx context.Context, p domain.TaskResultPayload) 
 		output = "(no output)"
 	}
 
-	if err := m.publishReply(ctx, entry.target.channelUUID, entry.target.rootEventID, output); err != nil {
+	// P2.4: a DM-dispatched task (registered via awaitDMResult) publishes
+	// through the gift-wrap DM reply path, not the channel-shaped
+	// publishReply -- FR-209.
+	if entry.dmTarget != nil {
+		if err := m.publishDMReply(ctx, entry.dmTarget.recipientPubKey, entry.dmTarget.threadID, output); err != nil {
+			m.logger.Warn("buzz monitor: dm task result publish failed", "task_id", p.TaskID)
+			return
+		}
+		m.logger.Info("buzz monitor: published dm reply",
+			"task_id", p.TaskID, "agent_pubkey", m.cfg.AgentPubKeyHex, "relay_url", m.cfg.RelayURL)
+		return
+	}
+
+	if err := m.publishReply(ctx, entry.target.channelUUID, entry.target.rootEventID, entry.target.parentEventID, entry.target.authorPubKey, output); err != nil {
 		// publishReply already logged the failure; add the task_id this
 		// call site alone knows, for FR-032 traceability.
 		m.logger.Warn("buzz monitor: task result publish failed", "task_id", p.TaskID)

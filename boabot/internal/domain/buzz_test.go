@@ -36,6 +36,11 @@ func (f *fakeRelayClient) Publish(_ context.Context, evt domain.Event) error {
 	return nil
 }
 
+func (f *fakeRelayClient) PublishRaw(_ context.Context, evt domain.Event) error {
+	f.published = append(f.published, evt)
+	return nil
+}
+
 func (f *fakeRelayClient) Subscribe(_ context.Context, filter domain.Filter) (<-chan domain.Event, error) {
 	f.subs = append(f.subs, filter)
 	ch := make(chan domain.Event)
@@ -80,6 +85,14 @@ func TestRelayClient_InterfaceShape(t *testing.T) {
 	}
 	if len(f.published) != 1 || f.published[0].ID != evt.ID || f.published[0].Content != evt.Content {
 		t.Fatalf("expected published event to round-trip through the interface, got %+v", f.published)
+	}
+
+	rawEvt := domain.Event{ID: "raw-id", Content: "gift-wrapped"}
+	if err := f.PublishRaw(ctx, rawEvt); err != nil {
+		t.Fatalf("PublishRaw: %v", err)
+	}
+	if len(f.published) != 2 || f.published[1].ID != rawEvt.ID {
+		t.Fatalf("expected PublishRaw event to round-trip through the interface, got %+v", f.published)
 	}
 
 	since := int64(100)

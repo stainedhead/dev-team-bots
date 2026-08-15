@@ -169,6 +169,79 @@ func TestRootEventID_NonRootETag_Ignored(t *testing.T) {
 	}
 }
 
+// --- P1.2: threadReplyCandidates --------------------------------------------
+
+func TestThreadReplyCandidates_NoETags_ReturnsNil(t *testing.T) {
+	evt := domain.Event{ID: "evt-1", Tags: [][]string{{"h", "chan-1"}}}
+	if got := threadReplyCandidates(evt); got != nil {
+		t.Fatalf("expected nil for an event with no e tags, got %v", got)
+	}
+}
+
+func TestThreadReplyCandidates_RootMarked_FirstCandidate(t *testing.T) {
+	evt := domain.Event{ID: "evt-2", Tags: [][]string{{"e", "root-id", "", "root"}}}
+	got := threadReplyCandidates(evt)
+	if len(got) == 0 || got[0] != "root-id" {
+		t.Fatalf("expected root-id as the first candidate, got %v", got)
+	}
+}
+
+func TestThreadReplyCandidates_ReplyMarked_Included(t *testing.T) {
+	// A reply carrying only a reply-marked e tag (no root marker) --
+	// rootEventID alone would miss this (falls back to evt.ID), but it's a
+	// real NIP-10-legal in-thread reply.
+	evt := domain.Event{ID: "evt-3", Tags: [][]string{{"e", "parent-id", "", "reply"}}}
+	got := threadReplyCandidates(evt)
+	found := false
+	for _, c := range got {
+		if c == "parent-id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected parent-id (reply-marked) among candidates, got %v", got)
+	}
+}
+
+func TestThreadReplyCandidates_PositionalUnmarked_FirstAndLast(t *testing.T) {
+	// Deprecated NIP-10 positional convention: first e = root, last e =
+	// reply, no markers at all.
+	evt := domain.Event{ID: "evt-4", Tags: [][]string{
+		{"e", "positional-root"},
+		{"e", "positional-middle"},
+		{"e", "positional-reply"},
+	}}
+	got := threadReplyCandidates(evt)
+	hasRoot, hasReply := false, false
+	for _, c := range got {
+		if c == "positional-root" {
+			hasRoot = true
+		}
+		if c == "positional-reply" {
+			hasReply = true
+		}
+	}
+	if !hasRoot || !hasReply {
+		t.Fatalf("expected positional first/last e tags among candidates, got %v", got)
+	}
+}
+
+func TestThreadReplyCandidates_Deduplicated(t *testing.T) {
+	// A single e tag, unmarked: positional first == positional last == the
+	// only candidate. Must not appear twice.
+	evt := domain.Event{ID: "evt-5", Tags: [][]string{{"e", "only-id"}}}
+	got := threadReplyCandidates(evt)
+	count := 0
+	for _, c := range got {
+		if c == "only-id" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected only-id exactly once, got %v", got)
+	}
+}
+
 // --- tag helpers ------------------------------------------------------------
 
 func TestHasTagValue(t *testing.T) {

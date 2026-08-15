@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-0/10 tasks complete.
+10/10 tasks complete. See status.md and implementation-notes.md for details, deviations, and test coverage.
 
 ## Phase 1 — Threading fixes (independent of DM path, do first — smaller and unblocks FR-206's history-replay pattern reuse)
 

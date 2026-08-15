@@ -56,6 +56,19 @@ func (f *fakeRelay) Publish(_ context.Context, evt domain.Event) error {
 	return nil
 }
 
+// PublishRaw mirrors Publish for test purposes -- fakeRelay doesn't
+// distinguish "signed by rc.sk" from "already signed" the way the real
+// RelayClient does, so it just records the event, same as Publish.
+func (f *fakeRelay) PublishRaw(_ context.Context, evt domain.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.publishErr != nil {
+		return f.publishErr
+	}
+	f.published = append(f.published, evt)
+	return nil
+}
+
 func (f *fakeRelay) Subscribe(_ context.Context, filt domain.Filter) (<-chan domain.Event, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -571,6 +584,93 @@ func TestMonitor_HandleResult_PublishesThreadedReply(t *testing.T) {
 	m.mu.Unlock()
 	if stillPending {
 		t.Fatal("expected pending entry to be popped after HandleResult")
+	}
+}
+
+// TestMonitor_HandleResult_PublishesCompleteNIP10Tags is P1.4's core
+// acceptance criterion (FR-207): a reply within an existing thread (evt
+// itself carries a root-marked e tag distinct from its own ID) must
+// publish with all three tags -- root e, reply e (the immediate parent,
+// evt's own ID), and p (evt's author) -- not just the root tag.
+func TestMonitor_HandleResult_PublishesCompleteNIP10Tags(t *testing.T) {
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := newTestMonitor(fr, q, nil)
+
+	evt := domain.Event{
+		ID:      "parent-evt",
+		PubKey:  "author-pk",
+		Kind:    9,
+		Tags:    [][]string{{"h", "chan-1"}, {"p", "self-pk"}, {"e", "thread-root", "", "root"}},
+		Content: "reply within an existing thread",
+	}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+	waitFor(t, time.Second, func() bool { return len(q.GetSendCalls()) == 1 })
+	var payload domain.TaskPayload
+	_ = json.Unmarshal(q.GetSendCalls()[0].Message.Payload, &payload)
+
+	m.HandleResult(context.Background(), domain.TaskResultPayload{TaskID: payload.TaskID, Output: "the answer", Success: true})
+
+	reply, ok := lastEventOfKind(fr.publishedSnapshot(), kindChannelMessage)
+	if !ok {
+		t.Fatalf("expected a published kind:9 reply, got %+v", fr.publishedSnapshot())
+	}
+
+	var rootTags, replyTags, pTags [][]string
+	for _, tag := range reply.Tags {
+		if len(tag) >= 1 && tag[0] == "e" && len(tag) >= 4 && tag[3] == "root" {
+			rootTags = append(rootTags, tag)
+		}
+		if len(tag) >= 1 && tag[0] == "e" && len(tag) >= 4 && tag[3] == "reply" {
+			replyTags = append(replyTags, tag)
+		}
+		if len(tag) >= 1 && tag[0] == "p" {
+			pTags = append(pTags, tag)
+		}
+	}
+	if len(rootTags) != 1 || rootTags[0][1] != "thread-root" {
+		t.Fatalf("expected exactly one root e tag == thread-root, got %+v", rootTags)
+	}
+	if len(replyTags) != 1 || replyTags[0][1] != "parent-evt" {
+		t.Fatalf("expected exactly one reply e tag == parent-evt, got %+v", replyTags)
+	}
+	if len(pTags) != 1 || pTags[0][1] != "author-pk" {
+		t.Fatalf("expected exactly one p tag == author-pk, got %+v", pTags)
+	}
+}
+
+// TestMonitor_HandleResult_ReplyToRoot_NoDuplicateReplyTag verifies that
+// when the triggering event IS the thread root itself (no separate parent),
+// publishReply emits only the root e tag -- not a duplicate reply-marked e
+// tag pointing at the same event ID, which NIP-10 doesn't call for.
+func TestMonitor_HandleResult_ReplyToRoot_NoDuplicateReplyTag(t *testing.T) {
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := newTestMonitor(fr, q, nil)
+
+	evt := domain.Event{ID: "root-evt", PubKey: "author-pk", Kind: 9, Tags: [][]string{{"h", "chan-1"}, {"p", "self-pk"}}, Content: "hi"}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+	waitFor(t, time.Second, func() bool { return len(q.GetSendCalls()) == 1 })
+	var payload domain.TaskPayload
+	_ = json.Unmarshal(q.GetSendCalls()[0].Message.Payload, &payload)
+
+	m.HandleResult(context.Background(), domain.TaskResultPayload{TaskID: payload.TaskID, Output: "the answer", Success: true})
+
+	reply, ok := lastEventOfKind(fr.publishedSnapshot(), kindChannelMessage)
+	if !ok {
+		t.Fatalf("expected a published kind:9 reply, got %+v", fr.publishedSnapshot())
+	}
+	eCount := 0
+	for _, tag := range reply.Tags {
+		if len(tag) >= 1 && tag[0] == "e" {
+			eCount++
+		}
+	}
+	if eCount != 1 {
+		t.Fatalf("expected exactly one e tag (root only, no duplicate reply tag), got %d: %+v", eCount, reply.Tags)
+	}
+	if got := firstTagValue(reply.Tags, "p"); got != "author-pk" {
+		t.Fatalf("expected p tag == author-pk, got %s", got)
 	}
 }
 

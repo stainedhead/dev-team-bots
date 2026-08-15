@@ -227,20 +227,109 @@ func resolveTaskOutcome(output string, success bool) (domain.DirectTaskStatus, d
 }
 
 // chatMessageThreadID returns the ThreadID to record on the shared chat
-// feed's inbound completion message for task. Only chat-sourced tasks use
-// their own task.ThreadID -- it corresponds to a real domain.ChatThread the
-// operator created via the web-UI chat interface. Every other source uses
-// "" (matching board/operator's pre-existing convention): board- and
-// operator-dispatched tasks already carry an empty ThreadID, and a Buzz-
-// sourced task's ThreadID (the Nostr channel UUID, needed by
-// BuzzTaskBridge/ChatTaskManager's own scheduling-confirmation pending map)
-// does not correspond to any registered ChatThread and must not leak into
-// GET /api/v1/chat's flat listing as an orphaned/mislabeled grouping.
+// feed's completion message for task. Chat- and Buzz-sourced tasks both use
+// their own task.ThreadID: for DirectTaskSourceChat it is a real
+// domain.ChatThread the operator created via the web-UI chat interface; for
+// DirectTaskSourceBuzz (FR-301 fix) it is the same NIP-10 thread-root hex or
+// "dm:<pubkey>" key that internal/infrastructure/buzz's dispatchViaBridge/
+// handleDMEvent pass as Dispatch's threadID and that BuzzTaskBridge stores
+// verbatim on the resulting DirectTask -- the identical key
+// buildInstructionWithHistory/recordOutbound key ChatStore history under, so
+// recording it here (rather than "") is what lets this handler be the
+// single writer of a Buzz task's completion message instead of a second,
+// "" - ThreadID copy that duplicated Monitor.recordOutbound's own,
+// correctly-keyed write (see handleSharedTaskResult's doc comment). Every
+// other source uses "" (matching board/operator's pre-existing convention):
+// board- and operator-dispatched tasks carry an empty ThreadID and have no
+// equivalent per-conversation key to record.
 func chatMessageThreadID(task domain.DirectTask) string {
-	if task.Source == domain.DirectTaskSourceChat {
+	if task.Source == domain.DirectTaskSourceChat || task.Source == domain.DirectTaskSourceBuzz {
 		return task.ThreadID
 	}
 	return ""
+}
+
+// handleSharedTaskResult is the generic (per-bot, source-agnostic)
+// TaskResultHandler registered on every bot's RunAgentUseCase (startBot):
+// it appends the task's output to the shared chat feed exactly once, using
+// chatMessageThreadID to decide which ThreadID (if any) to key the message
+// under, updates the task's terminal status and any linked board item, and
+// forwards the result to every registered channel monitor so each can
+// publish its own reply (Slack today; Buzz and others later).
+//
+// FR-301: for a DirectTaskSourceBuzz task, this is now the ONLY writer of
+// the bot's completion message to sharedChatStore. Before the fix,
+// chatMessageThreadID returned "" for Buzz tasks, so this handler's write
+// carried no usable ThreadID, and internal/infrastructure/buzz/monitor.go's
+// Monitor.recordOutbound (called from publishReply/publishDMReply after a
+// successful relay publish) wrote a second, correctly-threaded copy of the
+// same content -- both copies passed handleChatList's "board-"-prefix-only
+// filter, so every Buzz task reply appeared twice in GET /api/v1/chat.
+// chatMessageThreadID now passes the real Buzz ThreadID through instead, so
+// this single write is both deduplicated AND correctly keyed for FR-206's
+// ChatStore history replay; recordOutbound's call from the task-completion
+// path (publishReply/publishDMReply as invoked by HandleResult) was removed
+// accordingly -- see monitor.go's HandleResult doc comment. This handler
+// runs before forwardResultToMonitors below ever reaches a channel
+// monitor's own publish attempt, so the chat record survives a relay-
+// publish failure just as it did before the fix (the failure-mode
+// regression this fix's acceptance criterion flags).
+//
+// Extracted from startBot's WithTaskResultHandler closure (previously
+// inline) so it is directly unit-testable without spinning up a full
+// RunAgentUseCase/bus.
+func (tm *TeamManager) handleSharedTaskResult(ctx context.Context, p domain.TaskResultPayload, monitors []domain.ChannelMonitor) {
+	sharedChat := tm.sharedChatStore
+	sharedTasks := tm.sharedTaskStore
+	if sharedChat == nil || sharedTasks == nil {
+		return
+	}
+	if _, err := sharedTasks.Get(ctx, p.TaskID); err != nil {
+		return // not a tracked chat task
+	}
+	msg := domain.ChatMessage{
+		Direction: domain.ChatDirectionInbound,
+		Content:   p.Output,
+		TaskID:    p.TaskID,
+	}
+	if task, getErr := sharedTasks.Get(ctx, p.TaskID); getErr == nil {
+		msg.BotName = task.BotName
+		msg.ThreadID = chatMessageThreadID(task)
+	}
+	if appendErr := sharedChat.Append(ctx, msg); appendErr != nil {
+		slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
+	}
+
+	// Mark the task as completed.
+	if task, getErr := sharedTasks.Get(ctx, p.TaskID); getErr == nil {
+		now := time.Now().UTC()
+		taskStatus, boardStatus := resolveTaskOutcome(p.Output, p.Success)
+		task.Status = taskStatus
+		task.CompletedAt = &now
+		task.Output = p.Output
+		_, _ = sharedTasks.Update(ctx, task)
+
+		// If this task has a corresponding board item, update its status.
+		if boardTracksSource(task.Source) && tm.sharedBoard != nil {
+			items, listErr := tm.sharedBoard.List(ctx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
+			if listErr == nil && len(items) > 0 {
+				item := items[0]
+				if p.Output != "" {
+					item.LastResult = p.Output
+					item.LastResultAt = &now
+				} else if item.LastResult == "" {
+					item.LastResultAt = &now
+				}
+				item.ActiveTaskID = ""
+				item.Status = boardStatus
+				_, _ = tm.sharedBoard.Update(ctx, item)
+			}
+		}
+	}
+
+	// Forward the result to every registered channel monitor so each
+	// can post its own reply (Slack today; Buzz and others later).
+	forwardResultToMonitors(ctx, monitors, p)
 }
 
 // boardTracksSource reports whether a DirectTask with this source has a
@@ -1023,52 +1112,7 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	monitors := tm.monitors
 	if sharedChat != nil && sharedTasks != nil {
 		uc.WithTaskResultHandler(func(handlerCtx context.Context, p domain.TaskResultPayload) {
-			if _, err := sharedTasks.Get(handlerCtx, p.TaskID); err != nil {
-				return // not a tracked chat task
-			}
-			msg := domain.ChatMessage{
-				Direction: domain.ChatDirectionInbound,
-				Content:   p.Output,
-				TaskID:    p.TaskID,
-			}
-			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
-				msg.BotName = task.BotName
-				msg.ThreadID = chatMessageThreadID(task)
-			}
-			if appendErr := sharedChat.Append(handlerCtx, msg); appendErr != nil {
-				slog.Warn("failed to append inbound chat message", "task_id", p.TaskID, "err", appendErr)
-			}
-
-			// Mark the task as completed.
-			if task, getErr := sharedTasks.Get(handlerCtx, p.TaskID); getErr == nil {
-				now := time.Now().UTC()
-				taskStatus, boardStatus := resolveTaskOutcome(p.Output, p.Success)
-				task.Status = taskStatus
-				task.CompletedAt = &now
-				task.Output = p.Output
-				_, _ = sharedTasks.Update(handlerCtx, task)
-
-				// If this task has a corresponding board item, update its status.
-				if boardTracksSource(task.Source) && tm.sharedBoard != nil {
-					items, listErr := tm.sharedBoard.List(handlerCtx, domain.WorkItemFilter{ActiveTaskID: p.TaskID})
-					if listErr == nil && len(items) > 0 {
-						item := items[0]
-						if p.Output != "" {
-							item.LastResult = p.Output
-							item.LastResultAt = &now
-						} else if item.LastResult == "" {
-							item.LastResultAt = &now
-						}
-						item.ActiveTaskID = ""
-						item.Status = boardStatus
-						_, _ = tm.sharedBoard.Update(handlerCtx, item)
-					}
-				}
-			}
-
-			// Forward the result to every registered channel monitor so each
-			// can post its own reply (Slack today; Buzz and others later).
-			forwardResultToMonitors(handlerCtx, monitors, p)
+			tm.handleSharedTaskResult(handlerCtx, p, monitors)
 		})
 	} else if len(monitors) > 0 {
 		// In non-orchestrator mode, install a minimal result handler that

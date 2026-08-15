@@ -5,14 +5,15 @@
 
 ## Progress Summary
 
-0/6 tasks complete.
+1/6 tasks complete.
 
 ## Phase 1 — P1 fix (must close before done)
 
-### T-FR301 — Fix Buzz task reply duplicate chat-store write
+### T-FR301 — Fix Buzz task reply duplicate chat-store write — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-301. TDD: failing test first (Buzz task's reply appears twice in `sharedChatStore`/`GET /api/v1/chat`), then fix (prefer option a: pass real `ThreadID` through `chatMessageThreadID`, addressing the failure-mode regression the review flagged).
+- **Resolution:** option (a) implemented. `chatMessageThreadID` now passes the real Buzz ThreadID through; `Monitor.recordOutbound` moved off the task-completion path (only fires for immediate bridge replies that have no `DirectTask`). See implementation-notes.md for full detail.
 
 ## Phase 2 — P2 fixes (independent, parallelizable)
 

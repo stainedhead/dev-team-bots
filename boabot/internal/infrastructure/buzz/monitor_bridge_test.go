@@ -7,6 +7,7 @@ import (
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/mocks"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 )
 
 // This file covers the P2.2/P2.3 replacement of Monitor.dispatch()'s direct
@@ -372,5 +373,96 @@ func TestMonitor_HandleResult_StillWorksForBridgeDispatchedTask(t *testing.T) {
 	m.mu.Unlock()
 	if stillPending {
 		t.Fatal("expected pending entry to be popped after HandleResult")
+	}
+}
+
+// --- FR-301: recordOutbound moved off the task-completion path -------------
+
+// TestMonitor_HandleResult_DoesNotRecordChatOutbound is FR-301's regression
+// guard on the buzz-package side: internal/application/team.
+// TeamManager.handleSharedTaskResult is now the single writer of a Buzz
+// task's completion message to the shared ChatStore (using the task's own,
+// now-correctly-threaded ThreadID -- see team_manager.go's
+// chatMessageThreadID). Before the fix, Monitor.HandleResult's call to
+// publishReply (which unconditionally called recordOutbound on a successful
+// publish) wrote a SECOND copy of the same reply, duplicating the
+// generic handler's write and producing two rows in GET /api/v1/chat for
+// the same bot reply. HandleResult must still publish the reply (unchanged,
+// asserted below) but must no longer append anything to a wired ChatStore.
+func TestMonitor_HandleResult_DoesNotRecordChatOutbound(t *testing.T) {
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	td := &mocks.BuzzTaskDispatcher{
+		DispatchFn: func(_ context.Context, _, _, _, _ string) (domain.BuzzDispatchResult, error) {
+			return domain.BuzzDispatchResult{TaskID: "bridge-task-chat-1", AwaitResult: true}, nil
+		},
+	}
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	m := newTestMonitor(fr, q, nil, WithTaskDispatcher(td), WithChatStore(chatStore))
+
+	evt := domain.Event{ID: "root-evt-chat-1", PubKey: "someone", Kind: 9, Tags: [][]string{{"h", "chan-1"}, {"p", "self-pk"}}, Content: "hi"}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+	waitFor(t, time.Second, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, ok := m.pending["bridge-task-chat-1"]
+		return ok
+	})
+
+	m.HandleResult(context.Background(), domain.TaskResultPayload{TaskID: "bridge-task-chat-1", Output: "the answer", Success: true})
+
+	reply, ok := lastEventOfKind(fr.publishedSnapshot(), kindChannelMessage)
+	if !ok || reply.Content != "the answer" {
+		t.Fatalf("expected the bridge-dispatched task's result to still be published, got %+v", fr.publishedSnapshot())
+	}
+
+	msgs, err := chatStore.ListAll(context.Background())
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected HandleResult to record no ChatStore messages (the generic per-bot handler is now the single writer), got %d: %+v", len(msgs), msgs)
+	}
+}
+
+// TestMonitor_Dispatch_WithTaskDispatcher_ReplyOnly_RecordsChatOnce verifies
+// the flip side of the FR-301 fix: an immediate bridge-produced Reply (a
+// scheduling confirmation prompt, which has no DirectTask/TaskResultPayload
+// and so is never seen by the generic per-bot handler) has no other writer
+// -- recordOutbound must still run for THIS call site, exactly once, so
+// FR-206's ChatStore history replay still sees the prompt on the next turn.
+func TestMonitor_Dispatch_WithTaskDispatcher_ReplyOnly_RecordsChatOnce(t *testing.T) {
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	td := &mocks.BuzzTaskDispatcher{
+		DispatchFn: func(_ context.Context, _, _, _, _ string) (domain.BuzzDispatchResult, error) {
+			return domain.BuzzDispatchResult{Reply: "I'll create a task... Confirm?"}, nil
+		},
+	}
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	m := newTestMonitor(fr, q, nil, WithTaskDispatcher(td), WithChatStore(chatStore))
+
+	evt := domain.Event{ID: "root-evt-chat-2", PubKey: "someone", Kind: 9, Tags: [][]string{{"h", "chan-1"}, {"p", "self-pk"}}, Content: "schedule a review every Monday at 9am"}
+	m.handleChannelEvent(context.Background(), "chan-1", evt)
+
+	waitFor(t, time.Second, func() bool {
+		_, ok := lastEventOfKind(fr.publishedSnapshot(), kindChannelMessage)
+		return ok
+	})
+
+	var msgs []domain.ChatMessage
+	waitFor(t, time.Second, func() bool {
+		var err error
+		msgs, err = chatStore.ListAll(context.Background())
+		return err == nil && len(msgs) >= 1
+	})
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 ChatStore message for the confirmation prompt, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Content != "I'll create a task... Confirm?" {
+		t.Errorf("unexpected recorded content: %q", msgs[0].Content)
+	}
+	if msgs[0].ThreadID != "root-evt-chat-2" {
+		t.Errorf("expected ThreadID %q, got %q", "root-evt-chat-2", msgs[0].ThreadID)
 	}
 }

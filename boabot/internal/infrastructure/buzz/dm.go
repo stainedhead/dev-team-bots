@@ -201,7 +201,13 @@ func (m *Monitor) handleDMEvent(ctx context.Context, evt domain.Event) {
 	}
 
 	if result.Reply != "" {
-		_ = m.publishDMReply(ctx, rumor.PubKey, threadID, result.Reply) // logged internally on failure
+		// FR-301: see publishDMReply's doc comment -- this immediate reply
+		// has no DirectTask/TaskResultPayload, so recordOutbound must run
+		// here (only on a successful publish, matching the pre-FR-301
+		// behaviour for this path), not inside publishDMReply.
+		if err := m.publishDMReply(ctx, rumor.PubKey, threadID, result.Reply); err == nil {
+			m.recordOutbound(ctx, threadID, m.cfg.BotName, result.Reply)
+		} // publishDMReply logs its own failure internally
 	}
 	if result.TaskID != "" && result.AwaitResult {
 		m.awaitDMResult(result.TaskID, rumor.PubKey, threadID)
@@ -242,6 +248,14 @@ func (m *Monitor) awaitDMResult(taskID string, recipient nostr.PubKey, threadID 
 // (the actual recipient copy). A toUs publish failure is logged but does
 // not fail the call -- the recipient copy is what matters for the DM to be
 // received at all; a toThem failure does fail the call.
+//
+// FR-301: unlike before, this method does NOT call recordOutbound itself --
+// see publishReply's doc comment for the full rationale (this is the DM
+// analogue of the same fix). HandleResult's DM task-completion replies are
+// now recorded exactly once by TeamManager.handleSharedTaskResult;
+// handleDMEvent's immediate-Reply branch (a scheduling confirmation prompt)
+// calls recordOutbound itself, at its own call site, after this method
+// returns successfully.
 func (m *Monitor) publishDMReply(ctx context.Context, recipient nostr.PubKey, threadID, content string) error {
 	if m.dmKeyer == nil {
 		m.logger.Warn("buzz monitor: dm reply requested but no dm keyer wired, dropping")
@@ -269,7 +283,6 @@ func (m *Monitor) publishDMReply(ctx context.Context, recipient nostr.PubKey, th
 		return err
 	}
 
-	m.recordOutbound(ctx, threadID, m.cfg.BotName, content)
 	return nil
 }
 

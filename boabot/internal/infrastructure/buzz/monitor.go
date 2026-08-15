@@ -598,7 +598,15 @@ func (m *Monitor) dispatchViaBridge(ctx context.Context, channelUUID, root strin
 	}
 
 	if result.Reply != "" {
-		_ = m.publishReply(ctx, channelUUID, root, evt.ID, evt.PubKey, result.Reply) // logged internally on failure
+		// FR-301: this immediate reply (a scheduling confirmation prompt or
+		// ack) has no DirectTask/TaskResultPayload, so it is never seen by
+		// TeamManager.handleSharedTaskResult -- recordOutbound must run here,
+		// not inside publishReply, so FR-206's ChatStore history replay still
+		// sees it on a later turn. Only recorded on a successful publish,
+		// matching publishReply's own pre-FR-301 behaviour for this path.
+		if err := m.publishReply(ctx, channelUUID, root, evt.ID, evt.PubKey, result.Reply); err == nil {
+			m.recordOutbound(ctx, root, m.cfg.BotName, result.Reply)
+		} // publishReply logs its own failure internally
 	}
 
 	if result.TaskID != "" && result.AwaitResult {
@@ -639,6 +647,16 @@ func (m *Monitor) awaitResult(ctx context.Context, taskID, channelUUID, root, pa
 // dispatchViaBridge (an immediate bridge-produced Reply, e.g. a scheduling
 // confirmation prompt) so both use identical event tagging.
 //
+// FR-301: unlike before, this method does NOT call recordOutbound itself.
+// HandleResult's task-completion replies are now recorded exactly once by
+// internal/application/team.TeamManager.handleSharedTaskResult (via
+// chatMessageThreadID passing the real Buzz ThreadID through) -- a second,
+// unconditional recordOutbound write here would reintroduce the duplicate
+// chat-store row that finding fixed. dispatchViaBridge's immediate-Reply
+// branch (a scheduling confirmation prompt or ack) has no corresponding
+// DirectTask/TaskResultPayload for that handler to ever see, so it calls
+// recordOutbound itself, at its own call site, after a successful publish.
+//
 // FR-207: the event carries complete NIP-10 threading metadata -- a
 // root-marked `e` tag (root), a reply-marked `e` tag for the immediate
 // parent (parentEventID, the triggering mention/thread-reply's own event),
@@ -669,16 +687,24 @@ func (m *Monitor) publishReply(ctx context.Context, channelUUID, root, parentEve
 			"channel", channelUUID, "err", err)
 		return err
 	}
-	m.recordOutbound(ctx, root, m.cfg.BotName, content)
 	return nil
 }
 
 // recordOutbound appends a bot-originated reply to ChatStore (FR-206), when
-// one is wired (WithChatStore) and threadID is non-empty. Shared by the
-// channel reply path (publishReply) and the DM reply path (dm.go's
-// publishDMReply). A ChatStore append failure is logged and non-fatal --
-// the reply has already been published; a history-recording failure must
-// not be reported as a publish failure.
+// one is wired (WithChatStore) and threadID is non-empty. A ChatStore
+// append failure is logged and non-fatal -- the reply has already been
+// published; a history-recording failure must not be reported as a publish
+// failure.
+//
+// FR-301: called ONLY from the immediate-bridge-reply call sites
+// (dispatchViaBridge and dm.go's handleDMEvent, both after a successful
+// publish) -- never from publishReply/publishDMReply themselves, and never
+// from HandleResult's task-completion path. A task's own completion message
+// is recorded exactly once, by internal/application/team.TeamManager.
+// handleSharedTaskResult, using the task's real Buzz ThreadID (see
+// team_manager.go's chatMessageThreadID). Calling recordOutbound again here
+// for that path would reintroduce the duplicate-chat-row bug this finding
+// fixed -- see HandleResult's doc comment.
 func (m *Monitor) recordOutbound(ctx context.Context, threadID, botName, content string) {
 	if m.chatStore == nil || threadID == "" {
 		return
@@ -701,6 +727,15 @@ func (m *Monitor) recordOutbound(ctx context.Context, threadID, botName, content
 // reply-publish failure"). The pending-map entry is popped regardless of
 // publish outcome, matching the Slack adapter's fire-and-forget reply
 // semantics.
+//
+// FR-301: this method publishes the task's reply via publishReply/
+// publishDMReply but deliberately does not record it to ChatStore itself
+// (neither method calls recordOutbound for this path anymore) --
+// TeamManager.handleSharedTaskResult, which runs before this method is ever
+// reached (it triggers forwardResultToMonitors), already recorded the same
+// content under the task's real Buzz ThreadID. A second write here would
+// duplicate that row in GET /api/v1/chat, which is exactly the bug this
+// finding fixed.
 func (m *Monitor) HandleResult(ctx context.Context, p domain.TaskResultPayload) {
 	m.mu.Lock()
 	entry, ok := m.pending[p.TaskID]

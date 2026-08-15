@@ -7,12 +7,12 @@
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Initial Research (PRD/Feature Research) | In Progress |
+| 0 | Initial Research (PRD/Feature Research) | Complete |
 | 1 | Specification (spec.md) | Complete |
-| 2 | Research & Data Modeling | Not Started |
-| 3 | Architecture & Planning | Not Started |
-| 4 | Task Breakdown | Not Started |
-| 5 | Implementation | Not Started |
+| 2 | Research & Data Modeling | Complete |
+| 3 | Architecture & Planning | Complete |
+| 4 | Task Breakdown | Complete |
+| 5 | Implementation | In Progress (1/6 tasks complete: T-FR301) |
 | 6 | Completion & Archival | Not Started |
 
 ## Phase 0 Task Checklist
@@ -22,6 +22,15 @@
 - [x] Research questions identified (see `research.md`) — findings are already precisely located by file/function in the review PRD.
 - [x] Phase files initialized (spec.md, status.md, research.md, data-dictionary.md, architecture.md, plan.md, tasks.md, implementation-notes.md)
 
+## Phase 5 Task Checklist
+
+- [x] T-FR301 (P1) — Buzz task reply duplicate chat-store write fixed (option a). TDD: failing test first, then fix. `go test -race`/`golangci-lint`/`go vet` clean.
+- [ ] T-FR302 (P2) — `dispatchedThreads` unbounded growth
+- [ ] T-FR303 (P2) — DM pre-gate crypto-cost ordering
+- [ ] T-FR304 (P2) — startup warning for fail-open DM gate
+- [ ] T-FR305 (P2) — FR-207 wording tightening + `publishReply` single-`p`-tag scope
+- [ ] T-FR306 (P2) — dispatch-failure rollback asymmetry documentation
+
 ## Blockers
 
 - None. All 6 findings are precisely scoped by the review; the two open design branches (FR-301's option a/b, FR-303's fix-vs-document) are resolvable during implementation without further owner input.
@@ -29,3 +38,4 @@
 ## Recent Activity
 
 - 2026-08-15: Spec directory created from `buzz-dm-and-thread-support-auto-review-PRD.md`; PRD moved into spec directory.
+- 2026-08-15: T-FR301 (P1) closed — `chatMessageThreadID` now passes the real Buzz ThreadID through for `DirectTaskSourceBuzz` tasks; `Monitor.recordOutbound` moved off the task-completion path (HandleResult no longer double-writes). TDD: failing test first (`TestHandleSharedTaskResult_BuzzTask_RecordsExactlyOneMessage`, `TestMonitor_HandleResult_DoesNotRecordChatOutbound`), then fix. Full suite green, `-race`, `golangci-lint`, `go vet` clean. Domain+application aggregate coverage 92.16% (up from 91.4% baseline, no regression).

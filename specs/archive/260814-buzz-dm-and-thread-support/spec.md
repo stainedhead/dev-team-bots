@@ -45,7 +45,7 @@ Extends `boabot`'s Buzz integration in two directions: (1) DM reachability via N
 
 **FR-206:** An in-thread reply recognized under FR-205 continues the same underlying task/conversation, carrying forward context, rather than spawning an unrelated new task. Applies symmetrically to DM conversations.
 
-**FR-207:** Outbound Buzz replies (channel and DM) are tagged with root `e`, `reply`-marked `e` (immediate parent), and `p` (original author) — complete NIP-10 metadata.
+**FR-207:** Outbound **channel** Buzz replies are tagged with root `e`, `reply`-marked `e` (immediate parent), and `p` (original author) — complete NIP-10 metadata. DM replies are a separate case with their own acceptance criterion (see Success Criteria below: "Outbound DM replies are correctly gift-wrapped and decrypt correctly for the sender") and carry no `e`/root NIP-10 tags at all — a 1:1 NIP-17 DM has no thread to reference, so NIP-10 threading metadata does not apply to it. (Tightened 2026-08-15 per the `buzz-dm-and-thread-support-auto-review` review's FR-305 finding: the original "(channel and DM)" phrasing here could be misread, in isolation, as requiring the three NIP-10 tags on DM replies too; the Success Criteria list always specified the correct, narrower scope.)
 
 **FR-208:** `DirectTask.ThreadID` for Buzz-originated tasks is keyed by the actual NIP-10 thread root (or DM conversation), not channel UUID — independent scheduling-confirmation state per thread/conversation.
 

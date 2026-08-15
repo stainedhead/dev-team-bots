@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-1/6 tasks complete.
+6/6 tasks complete.
 
 ## Phase 1 — P1 fix (must close before done)
 
@@ -17,27 +17,32 @@
 
 ## Phase 2 — P2 fixes (independent, parallelizable)
 
-### T-FR302 — Resolve `dispatchedThreads` unbounded growth
+### T-FR302 — Resolve `dispatchedThreads` unbounded growth — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-302. Either documented as accepted (small entries, bounded in practice) or eviction implemented with a test.
+- **Resolution:** documented as accepted, no code change. See implementation-notes.md.
 
-### T-FR303 — Resolve DM pre-gate crypto-cost ordering
+### T-FR303 — Resolve DM pre-gate crypto-cost ordering — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-303. Either documented as an accepted, inherent NIP-17 property, or a size pre-filter added with a test.
+- **Resolution:** documented as accepted, no code change. See implementation-notes.md.
 
-### T-FR304 — Add startup warning for fail-open DM gate
+### T-FR304 — Add startup warning for fail-open DM gate — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-304. TDD: test asserting the warning fires when DM activates with `!gate.active()`, absent when configured. Mirror `LockDir`-empty warning's exact style.
+- **Resolution:** fixed. Warning added at the top of `startDMSubscription`. TDD: failing test first (`TestMonitor_StartDMSubscription_GateInactive_WarnsFailOpen`), then fix. `TestMonitor_StartDMSubscription_GateActive_NoWarning` covers the absent case.
 
-### T-FR305 — Tighten FR-207 wording; resolve `publishReply`'s single-`p`-tag scope
+### T-FR305 — Tighten FR-207 wording; resolve `publishReply`'s single-`p`-tag scope — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-305. Docs-only for the wording fix; code change only if extending `publishReply` is chosen.
+- **Resolution:** (a) FR-207 wording tightened in the archived spec.md. (b) documented as accepted, no code change. See implementation-notes.md.
 
-### T-FR306 — Document dispatch-failure rollback asymmetry
+### T-FR306 — Document dispatch-failure rollback asymmetry — DONE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-306. Docs-only, one sentence in implementation-notes.md.
+- **Resolution:** sentence added to the archived spec's implementation-notes.md Technical Decisions.

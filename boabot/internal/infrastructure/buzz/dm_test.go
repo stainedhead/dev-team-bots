@@ -382,6 +382,53 @@ func TestMonitor_StartDMSubscription_SubscribeError_LoggedNotFatal(t *testing.T)
 	m.startDMSubscription(context.Background())
 }
 
+// TestMonitor_StartDMSubscription_GateInactive_WarnsFailOpen is FR-304's
+// core acceptance criterion: DM listening activating (startDMSubscription
+// called, as run() does whenever dmKeyer != nil) with an unconfigured
+// (fail-open) author gate must log a Warn naming the condition explicitly,
+// mirroring Monitor.Start's existing LockDir-empty warning's greppability
+// (see TestMonitor_Start_NoLockDir_LockingDisabled in monitor_test.go).
+// testConfig() sets neither RespondTo nor RespondToAllowlist, so the gate
+// is inactive (authorGate.active() == false) by construction.
+func TestMonitor_StartDMSubscription_GateInactive_WarnsFailOpen(t *testing.T) {
+	var logBuf bytes.Buffer
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	m := newTestMonitor(fr, q, nil,
+		WithDMKeyer(NewDMKeyer(nostr.Generate())),
+		WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	m.startDMSubscription(context.Background())
+
+	got := logBuf.String()
+	if !strings.Contains(got, "INACTIVE") {
+		t.Fatalf("expected a warning that the DM author gate is inactive, got: %q", got)
+	}
+	if !strings.Contains(got, "respond_to") {
+		t.Fatalf("expected the warning to name respond_to/respond_to_allowlist, got: %q", got)
+	}
+}
+
+// TestMonitor_StartDMSubscription_GateActive_NoWarning verifies the flip
+// side: when respond_to/respond_to_allowlist IS configured (gate active),
+// no fail-open warning is logged.
+func TestMonitor_StartDMSubscription_GateActive_NoWarning(t *testing.T) {
+	var logBuf bytes.Buffer
+	fr := newFakeRelay()
+	q := &mocks.MessageQueue{}
+	cfg := testConfig()
+	cfg.RespondTo = "some-authorized-pubkey"
+	m := NewMonitor(fr, cfg, q, nil,
+		WithDMKeyer(NewDMKeyer(nostr.Generate())),
+		WithMonitorLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
+
+	m.startDMSubscription(context.Background())
+
+	if got := logBuf.String(); strings.Contains(got, "INACTIVE") {
+		t.Fatalf("expected no fail-open gate warning when respond_to is configured, got: %q", got)
+	}
+}
+
 // TestMonitor_Run_DMKeyerWired_AlsoOpensDMSubscription is an integration-
 // level check that run() wires the DM subscription (in addition to
 // discovery/membership-watch) exactly when a dmKeyer is configured.

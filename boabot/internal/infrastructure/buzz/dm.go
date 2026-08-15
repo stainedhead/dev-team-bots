@@ -75,7 +75,25 @@ func dmThreadID(counterparty nostr.PubKey) string {
 // channel monitoring, already started by the time run() calls this, is
 // completely unaffected (spec.md's "Relay doesn't support kind:1059" edge
 // case).
+//
+// FR-304: before subscribing, warns loudly if DM listening is activating
+// with the author gate unconfigured (fail-open) -- mirroring Monitor.
+// Start's existing LockDir-empty warning (same "buzz monitor: ..." prefix,
+// names the inactive protection explicitly, greppable in the running
+// process's own logs). Unlike the channel path, where a curated NIP-29
+// group membership sits upstream of the gate, DM reachability has no such
+// upstream filter -- any Nostr identity that discovers this persona's
+// pubkey (which it routinely publishes) can address it directly, so an
+// unconfigured gate here widens the persona's reachable surface more than
+// the channel path's identical code-level gate suggests. See this
+// finding's PRD entry (FR-304) and user-docs/Buzz-Adoption-Config.md's
+// existing operator-facing disclosure of the same risk.
 func (m *Monitor) startDMSubscription(ctx context.Context) {
+	if !m.gate.active() {
+		m.logger.Warn("buzz monitor: DM listening active with no respond_to/respond_to_allowlist configured; "+
+			"FR-204 author gate is INACTIVE for DMs -- any Nostr identity that discovers this persona's pubkey can dispatch a task via DM",
+			"agent_pubkey", m.cfg.AgentPubKeyHex)
+	}
 	ch, err := m.relay.Subscribe(ctx, domain.Filter{
 		Kinds: []int{kindGiftWrap},
 		Tags:  map[string][]string{"p": {m.cfg.AgentPubKeyHex}},

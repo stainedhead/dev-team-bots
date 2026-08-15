@@ -854,6 +854,37 @@ func TestExecuteTask_WithChatProvider_UsedForBuzzSource(t *testing.T) {
 	}
 }
 
+// TestExecuteTask_WithChatProvider_UsedForACPSource verifies that a
+// dedicated chat provider is also used when task.Source == "acp" —
+// spec.md FR-401 (specs/260815-acp-harness-feature-parity): ACP-sourced
+// tasks (cmd/boabot/acp.go's turn.go sets Source: "acp") get the same
+// conversational-provider treatment chat/Buzz-sourced tasks already get,
+// so a configured models.chat_provider actually applies to ACP mode.
+func TestExecuteTask_WithChatProvider_UsedForACPSource(t *testing.T) {
+	chatCalled := false
+	chatProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			chatCalled = true
+			return domain.InvokeResponse{Content: "chat response", StopReason: "stop"}, nil
+		},
+	}
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	uc := newExecuteTaskUseCase(defaultProvider, &mocks.MCPClient{}, &mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+	uc.WithChatProvider(chatProvider)
+
+	_, err := uc.Execute(context.Background(), domain.Task{ID: "t-acp-1", Source: "acp", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !chatCalled {
+		t.Error("expected chat provider to be called for acp-source task")
+	}
+}
+
 // TestExecuteTask_ProgressHandler_CallErr_InProgress verifies that formatProgressLine
 // includes the error string when CallTool returns a hard error (callErr != nil).
 func TestExecuteTask_ProgressHandler_CallErr_InProgress(t *testing.T) {

@@ -16,7 +16,26 @@ import (
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/filelock"
 )
+
+// persistLockTimeout bounds how long persist() waits to acquire the
+// cross-process file lock (persistPath+".lock") before giving up. Chosen
+// generously relative to the sub-millisecond cost of a JSON marshal and a
+// small file write, so it is only ever reached if a lock holder has
+// genuinely wedged -- not a value real concurrent writers are expected to
+// approach.
+const persistLockTimeout = 5 * time.Second
+
+// persistAfterLockHook, when non-nil, is invoked by persist() immediately
+// after it acquires the cross-process file lock, before re-reading
+// persistPath from disk or writing -- a test seam only (see
+// board_race_test.go), letting tests deterministically force a second,
+// concurrent persist() call from a different InMemoryBoardStore instance
+// onto filelock.AcquireWait's retry/backoff wait path rather than relying
+// on scheduler luck. Nil (the production default) means no delay; must
+// never be set outside a test.
+var persistAfterLockHook func()
 
 // ErrWorkItemNotFound is returned when a work item ID does not exist in the store.
 var ErrWorkItemNotFound = errors.New("orchestrator: work item not found")
@@ -54,39 +73,105 @@ func NewInMemoryBoardStore(persistPath string) *InMemoryBoardStore {
 }
 
 func (s *InMemoryBoardStore) loadFromDisk() {
-	data, err := os.ReadFile(s.persistPath)
-	if err != nil {
-		return
-	}
-	var items []domain.WorkItem
-	if err := json.Unmarshal(data, &items); err != nil {
-		return
-	}
-	for _, it := range items {
-		s.items[it.ID] = it
+	for id, it := range readDiskItems(s.persistPath) {
+		s.items[id] = it
 	}
 }
 
-func (s *InMemoryBoardStore) persist() {
-	if s.persistPath == "" {
-		return
+// readDiskItems reads and decodes path's current on-disk board state,
+// keyed by item ID. A missing file or malformed content is treated as "no
+// items" (mirrors the previous loadFromDisk's silent-skip behavior), not
+// an error -- callers persisting for the first time, or racing a
+// concurrent writer's own in-progress first write, must not fail.
+func readDiskItems(path string) map[string]domain.WorkItem {
+	items := make(map[string]domain.WorkItem)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return items
 	}
-	items := make([]domain.WorkItem, 0, len(s.items))
-	for _, it := range s.items {
-		items = append(items, it)
+	var decoded []domain.WorkItem
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return items
 	}
+	for _, it := range decoded {
+		items[it.ID] = it
+	}
+	return items
+}
+
+// writeItemsAtomically marshals items and atomically publishes them under
+// path via the same same-directory-temp-file-then-rename sequence the
+// original persist() used. Errors are swallowed (best-effort persistence,
+// matching the pre-fix behavior) rather than propagated, since BoardStore's
+// domain interface has no error return for persistence failures.
+func writeItemsAtomically(path string, items []domain.WorkItem) {
 	data, err := json.Marshal(items)
 	if err != nil {
 		return
 	}
-	tmp := s.persistPath + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+	tmp := path + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}
-	_ = os.Rename(tmp, s.persistPath)
+	_ = os.Rename(tmp, path)
+}
+
+// persist writes this process's just-made mutation to persistPath so it
+// survives alongside any other process's concurrently-persisted state
+// (FR-1/T-FR1): it acquires a cross-process file lock at
+// persistPath+".lock" (waiting its turn rather than failing fast, since
+// many legitimate concurrent writers -- e.g. buzz-acp's documented
+// multi-process agent pool, ADR-B026 -- are expected), re-reads the
+// current on-disk state immediately before writing, and merges it with
+// this call's own touched item(s) by ID: upsert sets/overwrites those IDs,
+// deleteIDs removes them, and every other on-disk item (written by another
+// process) passes through untouched. This stops one process's write from
+// silently clobbering items it never touched -- it does not solve full
+// concurrent-edit-of-the-same-item semantics (see Reorder's doc comment
+// for the one known, accepted gap in that regard).
+func (s *InMemoryBoardStore) persist(upsert []domain.WorkItem, deleteIDs []string) {
+	if s.persistPath == "" {
+		return
+	}
+
+	lockPath := s.persistPath + ".lock"
+	lock, err := filelock.AcquireWait(lockPath, persistLockTimeout)
+	if err != nil {
+		// Best-effort persistence: if the cross-process lock cannot be
+		// acquired within persistLockTimeout (e.g. a wedged holder), skip
+		// this write rather than falling back to an unsafe full overwrite
+		// that would reintroduce the very clobbering hazard this fix
+		// exists to close. Unlike the pre-fix full-overwrite persist(),
+		// this write is NOT automatically retried by a later call: since
+		// each persist() now only writes its own targeted upsert/delete
+		// (not the whole in-memory state), an item dropped here reaches
+		// disk only if it is mutated again (Create/Update/Delete/Reorder)
+		// and that later call's persist() succeeds. See
+		// implementation-notes.md's Edge Cases section.
+		return
+	}
+	defer func() { _ = lock.Release() }()
+
+	if persistAfterLockHook != nil {
+		persistAfterLockHook()
+	}
+
+	merged := readDiskItems(s.persistPath)
+	for _, it := range upsert {
+		merged[it.ID] = it
+	}
+	for _, id := range deleteIDs {
+		delete(merged, id)
+	}
+
+	items := make([]domain.WorkItem, 0, len(merged))
+	for _, it := range merged {
+		items = append(items, it)
+	}
+	writeItemsAtomically(s.persistPath, items)
 }
 
 // Create stores a new WorkItem with a generated ID and sets UpdatedAt.
@@ -109,7 +194,7 @@ func (s *InMemoryBoardStore) Create(_ context.Context, item domain.WorkItem) (do
 	}
 	item.SortPosition = sameStatus + 1
 	s.items[id] = item
-	s.persist()
+	s.persist([]domain.WorkItem{item}, nil)
 	s.mu.Unlock()
 	return item, nil
 }
@@ -125,7 +210,7 @@ func (s *InMemoryBoardStore) Update(_ context.Context, item domain.WorkItem) (do
 	}
 	oldStatus := existing.Status
 	s.items[item.ID] = item
-	s.persist()
+	s.persist([]domain.WorkItem{item}, nil)
 	hook := s.statusChangeHook
 	s.mu.Unlock()
 
@@ -191,22 +276,32 @@ func (s *InMemoryBoardStore) Delete(_ context.Context, id string) error {
 		return ErrWorkItemNotFound
 	}
 	delete(s.items, id)
-	s.persist()
+	s.persist(nil, []string{id})
 	return nil
 }
 
 // Reorder sets the SortPosition of each item to its 1-based index in ids.
 // Items whose ID does not appear in ids are left unchanged.
+//
+// Known, accepted limitation (FR-1/T-FR1's scope): this stops one
+// process's Reorder from clobbering items *other* processes touched, but
+// it does not solve the true concurrent-conflict case of two processes
+// reordering the *same* column at the same time -- a naive per-item merge
+// by ID can still produce colliding or gapped SortPosition values in that
+// scenario. Solving full concurrent-edit-of-the-same-item semantics is out
+// of scope for this fix.
 func (s *InMemoryBoardStore) Reorder(_ context.Context, ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	touched := make([]domain.WorkItem, 0, len(ids))
 	for i, id := range ids {
 		if item, ok := s.items[id]; ok {
 			item.SortPosition = i + 1
 			s.items[id] = item
+			touched = append(touched, item)
 		}
 	}
-	s.persist()
+	s.persist(touched, nil)
 	return nil
 }
 

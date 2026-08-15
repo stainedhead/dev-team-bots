@@ -13,10 +13,13 @@ import (
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/team"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 	acpinfra "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/acp"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/cliagent"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/bm25"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/fs"
 	localmcp "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/mcp"
+	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
+	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 )
@@ -119,9 +122,7 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 
 	embedder := domain.Embedder(bm25.DefaultEmbedder())
 
-	mcpClient := localmcp.NewClient(cfg.Orchestrator.WorkDirs)
-
-	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, string(soulBytes))
+	worker := buildACPWorker(cfg, memPath, string(soulBytes), pf, provider, memStore, embedder, vecStore)
 
 	// Mirrors team_manager.go's startBot exactly (RT3/FR-004, auto-review):
 	// native mode wires a RulesTracker under this identical condition so the
@@ -147,4 +148,135 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 	}
 
 	return acpinfra.New(singleWorkerFactory{w: worker}, "", opts...), nil
+}
+
+// buildACPWorker constructs the *application.ExecuteTaskUseCase buildACPAgent
+// wraps as the single persona's domain.Worker, given its already-loaded
+// config, computed memPath, and SOUL.md system prompt. Extracted out of
+// buildACPAgent -- which stays wiring-only per AGENTS.md's cmd/ convention --
+// so FR-401's chat-provider selection and FR-402-405's board/plugin/CLI tool
+// wiring are directly unit-testable, mirroring cmd/boabot/main.go's
+// newBuzzMonitorBuilder extraction pattern (see its doc comment).
+//
+// pf and provider are passed in rather than rebuilt here so tests can supply
+// a fake domain.ProviderFactory instead of constructing real
+// anthropic/openai/bedrock clients (specs/260815-acp-harness-feature-parity).
+func buildACPWorker(
+	cfg config.Config,
+	memPath, soulPrompt string,
+	pf domain.ProviderFactory,
+	provider domain.ModelProvider,
+	memStore domain.MemoryStore,
+	embedder domain.Embedder,
+	vecStore domain.VectorStore,
+) *application.ExecuteTaskUseCase {
+	mcpOpts := buildACPMCPOptions(cfg, memPath)
+	mcpClient := localmcp.NewClient(cfg.Orchestrator.WorkDirs, mcpOpts...)
+
+	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, soulPrompt)
+
+	// FR-401 (scope addition beyond isConversationalSource's own extension --
+	// see implementation-notes.md): mirrors team_manager.go:1047-1056's exact
+	// gating condition. Without this, isConversationalSource recognizing
+	// "acp" has no effect in production -- u.chatProvider stays nil for
+	// every ACP-mode task, the same dead-code failure mode
+	// docs/architectural-decision-record.md's ADR-B028 decision 4 already
+	// documented for the pre-existing "chat" branch. A bad/unresolvable
+	// chat_provider degrades gracefully (NFR-Reliability): logged, falls
+	// back to the default provider, never blocks worker construction.
+	if chatName := cfg.Models.ChatProvider; chatName != "" && chatName != cfg.Models.Default {
+		if chatProvider, chatErr := pf.Get(chatName); chatErr != nil {
+			slog.Warn("acp mode: chat provider unavailable; falling back to default for acp-sourced tasks",
+				"bot", cfg.Bot.Name, "chat_provider", chatName, "err", chatErr)
+		} else {
+			worker.WithChatProvider(chatProvider)
+			slog.Info("acp mode: chat provider activated", "bot", cfg.Bot.Name, "chat_provider", chatName)
+		}
+	}
+
+	return worker
+}
+
+// buildACPMCPOptions constructs the functional options for ACP mode's local
+// filesystem MCP client -- board store (FR-402/403), plugin store (FR-404),
+// and CLI runner/tools (FR-405) -- gated on the same granular config fields
+// team_manager.go:1020-1036 gates on, not an umbrella enabled flag (see
+// architecture.md's "do not reuse orchestrator.enabled" decision). This is
+// scope-equivalent, not condition-identical: see each gate's own comment
+// below for the two specific ways ACP mode's gating differs from native
+// mode's (the board gate compares a different struct field, equivalent by
+// convention; the plugin/CLI-tool gates read a different config scope).
+// Every store construction here degrades gracefully on failure (NFR-Reliability):
+// logged, ACP mode still starts and executes tasks without that tool
+// surface. Startup logs state clearly whether each tool surface activated
+// for this persona (NFR-Observability), mirroring how Buzz monitor
+// activation is already logged in main.go.
+func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Client) {
+	var opts []func(*localmcp.Client)
+
+	// Board store (FR-402/403): equivalent to team_manager.go:1023's
+	// persona-type gate by convention, not by construction -- team_manager.go
+	// compares entry.Type (the team.yaml entry's own field, also the
+	// <bots-dir>/<type>/ directory name that bot is loaded from);
+	// cfg.Bot.BotType here is the loaded persona's own bot.type field from
+	// its config.yaml, a different piece of data with no team.yaml entry to
+	// read in ACP mode. The two coincide today only because every real
+	// persona's own bot.type matches the directory name it's loaded from --
+	// the same convention resolveACPConfigPath already relies on. Not an
+	// enabled flag either way (tm.sharedBoard is always non-nil in native
+	// mode). NewInMemoryBoardStore has no failure path of its own (a
+	// missing/corrupt persist file is silently treated as an empty board),
+	// so there is nothing to log-and-skip here beyond activation.
+	if cfg.Bot.BotType != "tech-lead" {
+		boardPath := filepath.Join(memPath, "board.json")
+		opts = append(opts, localmcp.WithBoardStore(orchestratorlocal.NewInMemoryBoardStore(boardPath)))
+		slog.Info("acp mode: board store activated", "bot", cfg.Bot.Name, "path", boardPath)
+	} else {
+		slog.Info("acp mode: board store not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
+	}
+
+	// Plugin store (FR-404): uses the same install-dir-presence gate and
+	// relative-path resolution against the persona's own memPath as
+	// team_manager.go:501-519, but at a different config scope: native
+	// mode resolves Orchestrator.Plugins.InstallDir ONCE from the team's
+	// orchestrator-entry persona's config.yaml and shares that single
+	// result team-wide (tm.resolvedPluginStore/resolvedInstallDir); ACP
+	// mode has no team.yaml/orchestrator-entry concept, so cfg here is
+	// always the config of whichever persona this process is running as.
+	// A non-orchestrator persona's own config.yaml must set
+	// orchestrator.plugins.install_dir itself for this to activate --
+	// see user-docs/ACP-Harness-Adoption-Config.md.
+	if installDir := cfg.Orchestrator.Plugins.InstallDir; installDir != "" {
+		if !filepath.IsAbs(installDir) {
+			installDir = filepath.Join(memPath, installDir)
+		}
+		pluginStore, pluginErr := localplugin.NewLocalPluginStore(installDir)
+		if pluginErr != nil {
+			slog.Error("acp mode: plugin store construction failed; continuing without plugin tools",
+				"bot", cfg.Bot.Name, "install_dir", installDir, "err", pluginErr)
+		} else {
+			opts = append(opts, localmcp.WithPluginStore(pluginStore), localmcp.WithInstallDir(installDir))
+			slog.Info("acp mode: plugin store activated", "bot", cfg.Bot.Name, "install_dir", installDir)
+		}
+	} else {
+		slog.Info("acp mode: plugin store not activated (orchestrator.plugins.install_dir not set)", "bot", cfg.Bot.Name)
+	}
+
+	// CLI tools (FR-405): runner is always wired, mirroring
+	// team_manager.go:531's unconditional cliagent.New(); per-tool
+	// availability is gated by each CLIToolConfig.Enabled bool inside
+	// cfg.Orchestrator.CLITools (enforced by localmcp.Client itself via
+	// resolveBinary -- WithCLITools just passes the config through). Same
+	// team-wide-vs-running-persona-own-config scope difference as the
+	// plugin store above applies here too (cfg.Orchestrator.CLITools is
+	// this persona's own field; native mode resolves it once from the
+	// team's orchestrator entry and shares it team-wide).
+	opts = append(opts, localmcp.WithCLIRunner(cliagent.New()), localmcp.WithCLITools(cfg.Orchestrator.CLITools))
+	slog.Info("acp mode: cli runner activated", "bot", cfg.Bot.Name,
+		"claude_code_enabled", cfg.Orchestrator.CLITools.ClaudeCode.Enabled,
+		"codex_enabled", cfg.Orchestrator.CLITools.Codex.Enabled,
+		"openai_codex_enabled", cfg.Orchestrator.CLITools.OpenAICodex.Enabled,
+		"opencode_enabled", cfg.Orchestrator.CLITools.OpenCode.Enabled)
+
+	return opts
 }

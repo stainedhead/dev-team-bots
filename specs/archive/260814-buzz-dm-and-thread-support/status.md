@@ -14,7 +14,7 @@
 | 4 | Task Breakdown | Complete |
 | 5 | Implementation | Complete (10/10 tasks) |
 | 5.5 | Documentation and User Docs (dev-flow Step 4) | Complete |
-| 6 | Completion & Archival | Not Started |
+| 6 | Completion & Archival | Complete (original spec archived at dev-flow Step 7; auto-review spec/fixes tracked separately) |
 
 ## Phase 5 Task Checklist (tasks.md P1.1-P3.1)
 

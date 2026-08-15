@@ -1,7 +1,8 @@
 # Dev-Flow Implementation Status
 
 **PRD:** acp-harness-feature-parity-PRD.md
-**Spec:** specs/260815-acp-harness-feature-parity/
+**Spec:** specs/archive/260815-acp-harness-feature-parity/ (archived Step 7)
+**Review Spec:** specs/260815-acp-harness-feature-parity-auto-review/
 **Branch:** feat/acp-harness-feature-parity
 **Review PRD:** acp-harness-feature-parity-auto-review-PRD.md
 **Process Start:** 2026-08-15T14:34:49Z
@@ -18,9 +19,9 @@
 | 4  | Documentation and User Docs     | ✅ Complete | 2026-08-15T15:06:23Z | 2026-08-15T15:08:02Z | 2 |
 | 5  | Code and Design Review          | ✅ Complete | 2026-08-15T15:08:02Z | 2026-08-15T15:23:00Z | 15 |
 | 6  | Prepare Review PRD              | ✅ Complete | 2026-08-15T15:23:00Z | 2026-08-15T15:24:20Z | 1 |
-| 7  | Archive Original Spec           | 🔄 In Progress | 2026-08-15T15:24:20Z | — | — |
-| 8  | Spec Review Fixes               | ⬜ Pending | — | — | — |
-| 9  | Implement Review Fixes          | ⬜ Pending | — | — | — |
+| 7  | Archive Original Spec           | ✅ Complete | 2026-08-15T15:24:20Z | 2026-08-15T15:24:56Z | 1 |
+| 8  | Spec Review Fixes               | ✅ Complete | 2026-08-15T15:24:56Z | 2026-08-15T15:29:53Z | 5 |
+| 9  | Implement Review Fixes          | 🔄 In Progress | 2026-08-15T15:29:53Z | — | — |
 | 10 | Archive Fixes Spec              | ⬜ Pending | — | — | — |
 | 11 | Final Quality Pass              | ⬜ Pending | — | — | — |
 | 12 | Process Analysis Report         | ⬜ Pending | — | — | — |

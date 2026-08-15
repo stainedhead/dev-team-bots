@@ -1,17 +1,17 @@
 # Dev-Flow Process Analysis
 
-**Feature:** Buzz DM Support and Full Threaded-Reply Support
-**Spec directory:** specs/archive/260814-buzz-dm-and-thread-support/ (+ specs/archive/260814-buzz-dm-and-thread-support-auto-review/)
+**Feature:** ACP Harness Feature Parity
+**Spec directory:** specs/archive/260815-acp-harness-feature-parity/ (+ specs/archive/260815-acp-harness-feature-parity-auto-review/)
 **Report generated:** 2026-08-15
 
 ---
 
 ## 1. Executive Summary
 
-Extended `boabot`'s Buzz integration with NIP-17 encrypted 1:1 direct messages (any Buzz-enabled persona reachable via DM using its existing channel identity, no separate key) and completed threaded-reply support that was previously only partial: in-thread replies without re-`@mention` are now recognized and dispatched, conversation context carries forward via the existing `ChatStore` history-replay pattern, outbound replies carry complete NIP-10 tags, and a latent bug where concurrent threads in one channel shared one scheduling-confirmation slot is fixed.
+Closed two of three confirmed wiring gaps between `boabot -acp` (ACP mode) and native daemon mode's task execution — both share the identical `ExecuteTaskUseCase.Execute` loop, but ACP mode never got `models.chat_provider` benefit and had zero board/plugin/CLI-tool infrastructure standing up in its process. This PRD originated from a live production observation (the `orchestrator` persona repeatedly hitting `exceeded max tool iterations (50)` via ACP mode but not native mode) diagnosed via direct code comparison earlier in this session, then closed via the full dev-flow pipeline.
 
-**Total runtime:** ~1h 47m (first dev-flow commit `37b39c4` at 19:23:46-04:00 to the Step 11 completion commit `dd7caef` at 21:10:49-04:00, per git log).
-**Overall assessment:** Clean, uninterrupted 11-of-14-steps run, comparable in discipline to the prior Buzz multi-agent feature but with materially higher security stakes (real NIP-17 cryptographic wiring). Two mid-run interventions were notable, both quality catches rather than process failures: an advisor-review-caught concurrency race in the review-fix cycle's dedup logic (same class of finding as the prior feature), and a self-review-caught content-normalization regression during this run's own P1 fix, both closed within the step that found them.
+**Total runtime:** ~1h 19m (first dev-flow commit `7316ae8` at 10:36:57-04:00 to the Step 11 completion commit `506627f` at 11:56:12-04:00, per git log).
+**Overall assessment:** The shortest of the three dev-flow runs in this session by wall-clock, but the most consequential code review — this is the first cycle across all three features where the review found a genuine P0, not a documentation gap or minor correctness nit. The P0 (a cross-process concurrent-write hazard on `board.json`) was reachable "by construction" via `buzz-acp`'s own documented agent-pool operation, not a contrived scenario, and was confirmed independently twice: once by the implementing agent's own risk analysis, and again by the code review's independent re-derivation against the actual `buzz-acp` binary's documented behavior.
 
 ---
 
@@ -19,51 +19,49 @@ Extended `boabot`'s Buzz integration with NIP-17 encrypted 1:1 direct messages (
 
 (Source: `DEV-FLOW-STATUS.md`, cross-checked against git commit timestamps.)
 
-| Step | Name | Start (local) | End (local) | Runtime (min) | Key Outputs |
+| Step | Name | Start (UTC) | End (UTC) | Runtime (min) | Key Outputs |
 |---|---|---|---|---|---|
-| 1 | Create Spec from PRD | 19:21:23 | 19:23:30 | 2 | `specs/260814-buzz-dm-and-thread-support/` created, 8 phase files + PRD moved in |
-| 2 | Review Spec | 19:23:30 | 19:29:35 | 6 | RQ1/RQ2/RQ4/RQ5 resolved concretely (biggest finding: a ready-made `nip17` package already exists in the vendored dependency); Edge Cases section added, including a real self-message-loop risk |
-| 3 | Implement Product | 19:29:35 | 20:08:43 | 39 | 10 tasks (P1.1–P3.1) implemented TDD-first, 1 commit, real NIP-17 crypto wiring + threading fixes, coverage 91.4% |
-| 4 | Documentation and User Docs | 20:08:43 | 20:32:01 | 23 | README/docs/ADR/user-docs updated; security-relevant fail-open DM gate behavior surfaced prominently in docs |
-| 5 | Code and Design Review | 20:32:01 | 20:43:00 | 11 | 10 findings independently reproduced (0 P0/1 P1/5 P2); nuanced independent analysis of the fail-open DM gate's real-world exposure vs. its code-level equivalence to the channel path |
-| 6 | Prepare Review PRD | 20:43:00 | 20:44:08 | 1 | Review PRD validated — no gaps found this time (first clean pass across three review-PRD cycles run in this session) |
-| 7 | Archive Original Spec | 20:44:08 | 20:44:35 | 1 | Original spec moved to `specs/archive/` |
-| 8 | Spec Review Fixes | 20:44:35 | 20:46:16 | 2 | Fix-spec created from review PRD, 8 phase files populated |
-| 9 | Implement Review Fixes | 20:46:16 | 21:09:50 | 24 | All 6 findings closed, 3 commits, including a self-review-caught content-normalization regression fixed before declaring done |
-| 10 | Archive Fixes Spec | 21:09:50 | 21:10:24 | 1 | Fix-spec moved to `specs/archive/` |
-| 11 | Final Quality Pass | 21:10:24 | 21:10:39 | 0 | Independent re-verification: lint 0 issues, `-race` suite green, coverage 92.2% |
+| 1 | Create Spec from PRD | 14:34:49 | 14:36:43 | 2 | `specs/260815-acp-harness-feature-parity/` created, 8 phase files + PRD moved in |
+| 2 | Review Spec | 14:36:43 | 14:41:16 | 5 | All 4 research questions resolved; most consequential: `orchestrator.enabled` deliberately NOT reused as the tool-wiring signal (confirmed it only means "start the dashboard" and doesn't gate board wiring in native mode either) |
+| 3 | Implement Product | 14:41:16 | 15:06:23 | 25 | 6 tasks (FR-401–406) implemented TDD-first, 3 commits; caught and fixed a scope gap (`WithChatProvider` was never wired in ACP mode at all, making the literal FR-401 fix inert without it) |
+| 4 | Documentation and User Docs | 15:06:23 | 15:08:02 | 2 | README coverage table refreshed (found stale from *before* the prior feature), ACP-mode bullets updated in README/product-summary |
+| 5 | Code and Design Review | 15:08:02 | 15:23:00 | 15 | 5 findings (1 P0/1 P1/3 P2) — first genuine P0 in this session's three review cycles, independently re-derived against `buzz-acp`'s documented process-pool behavior |
+| 6 | Prepare Review PRD | 15:23:00 | 15:24:20 | 1 | Review PRD validated — no gaps found, P0 calibration confirmed justified |
+| 7 | Archive Original Spec | 15:24:20 | 15:24:56 | 1 | Original spec moved to `specs/archive/` |
+| 8 | Spec Review Fixes | 15:24:56 | 15:29:53 | 5 | Fix-spec created; the P0's fix mechanism resolved concretely via a dedicated research pass (reuse `lock.go`'s primitive, not a new `flock` dependency) before implementation began |
+| 9 | Implement Review Fixes | 15:29:53 | 15:55:03 | 25 | All 5 findings closed, 2 commits; TDD genuinely followed — the regression test was confirmed failing deterministically before the fix, not assumed |
+| 10 | Archive Fixes Spec | 15:55:03 | 15:55:45 | 1 | Fix-spec moved to `specs/archive/` |
+| 11 | Final Quality Pass | 15:55:45 | 15:56:01 | 0 | Independent re-verification, including manually reverting and restoring the P0 fix to confirm the regression test's red/green states were genuine, not just claimed |
 
 **Notable observations:**
-- Step 3 (39 min) and Step 9 (24 min) are again the two largest steps, consistent with the prior feature's pattern — the only steps writing production Go code.
-- Step 4 (Documentation, 23 min) took longer proportionally than the prior feature's Step 4 (8 min) — this feature's documentation had to correctly convey a security-relevant behavior change (the fail-open DM gate) with appropriate prominence, not just describe new functionality, which reasonably takes more care.
-- Step 6 (Prepare Review PRD) found zero gaps for the first time in this session's three review-PRD cycles — the review PRD it validated was itself unusually rigorous (it independently reproduced every claim it was asked to verify, including correcting the "consistent with existing channel behavior" framing rather than accepting it at face value), leaving nothing for the subsequent gap-check to catch.
-- No step failed or required a full retry. Two real mid-course corrections happened, both caught by self-review/advisor-review discipline within their own step rather than surfacing as separate rework: a concurrency-race hardening in Step 3 (documented in implementation-notes.md) and a content-normalization regression caught and fixed in Step 9 before that step was declared complete.
+- Step 3 and Step 9 (25 min each) are tied as the largest steps, unusual — in the prior two features, implementation (Step 3) was consistently larger than the review-fix step (Step 9). Here they're equal because Step 9 had to implement genuinely new infrastructure (a file-locking package) from scratch, not just wire existing pieces together, unlike the prior features' review-fix cycles which were mostly documentation and narrower code changes.
+- Step 5 (Code Review, 15 min) found a P0 despite being the shortest review step of the three cycles in this session (the DM/thread feature's review took 11 min for 6 findings including deep crypto verification; the multi-agent Buzz feature's took 19 min for 10 findings). Review duration doesn't correlate with finding severity — this cycle's reviewer moved efficiently to the load-bearing question (is the board-write collision actually reachable in production?) rather than spreading effort evenly across surface area.
+- No step failed or required a full retry. The P0 was caught, scoped, and closed within the normal Step 5→9 flow — the pipeline's design (independent review before merge) worked exactly as intended: catching a real production-data-loss bug before it shipped, not after.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits (Steps 1–11):** 20
+**Total commits (Steps 1–11):** 14
 
 | Commit | Timestamp | Message |
 |---|---|---|
-| `37b39c4` | 2026-08-14T19:23:46-04:00 | docs: create spec from buzz-dm-and-thread-support PRD (dev-flow Step 1) |
-| `c61a72f` | 2026-08-14T19:29:45-04:00 | docs: resolve spec review gaps with concrete codebase research (dev-flow Step 2) |
-| `fd0e7a8` | 2026-08-14T20:06:51-04:00 | feat(buzz): add NIP-17 DM support and complete threaded-reply dispatch |
-| `f1e7381` | 2026-08-14T20:08:53-04:00 | docs: update dev-flow dashboard — Step 3 complete, Step 4 starting |
-| `e680676` | 2026-08-14T20:29:06-04:00 | docs(buzz): document NIP-17 DM support and threaded-reply completion |
-| `de2bc63` | 2026-08-14T20:32:11-04:00 | docs: update dev-flow dashboard — Step 4 complete, Step 5 starting |
-| `41ea64f` | 2026-08-14T20:43:14-04:00 | docs: add automated code review PRD for buzz-dm-and-thread-support (dev-flow Step 5) |
-| `033f3db` | 2026-08-14T20:44:32-04:00 | chore: archive original buzz-dm-and-thread-support spec (dev-flow Step 7) |
-| `5f0cec9` | 2026-08-14T20:46:29-04:00 | docs: create spec for review-fix implementation (dev-flow Step 8) |
-| `515ec8b` | 2026-08-14T21:00:40-04:00 | fix(buzz): eliminate duplicate chat-store write for Buzz task replies (FR-301) |
-| `6122a24` | 2026-08-14T21:04:18-04:00 | fix(buzz): close P2 review findings FR-302 through FR-306 |
-| `23d25f3` | 2026-08-14T21:08:13-04:00 | docs(buzz): record FR-301 content-normalization tradeoff, fix stale archived note |
-| `f5a1109` | 2026-08-14T21:09:59-04:00 | docs: update dev-flow dashboard — Step 9 complete, Step 10 starting |
-| `2f1344d` | 2026-08-14T21:10:21-04:00 | chore: archive review-fixes spec (dev-flow Step 10) |
-| `dd7caef` | 2026-08-14T21:10:49-04:00 | docs: update dev-flow dashboard — Step 11 final quality pass complete |
+| `7316ae8` | 2026-08-15T10:36:57-04:00 | docs: create spec from acp-harness-feature-parity PRD (dev-flow Step 1) |
+| `af4ca01` | 2026-08-15T10:41:31-04:00 | docs: resolve spec review gaps with concrete codebase research (dev-flow Step 2) |
+| `3fcab64` | 2026-08-15T10:57:58-04:00 | feat(boabot): wire chat provider, board/plugin/CLI tools into ACP mode (FR-401-405) |
+| `4f32eab` | 2026-08-15T11:01:13-04:00 | docs(boabot): document ACP mode tool/provider parity and the mid-task-question non-goal (FR-406) |
+| `5808807` | 2026-08-15T11:04:26-04:00 | fix(boabot): plugin e2e test now exercises the plugin-tool dispatch path; document per-persona board scope |
+| `894e7da` | 2026-08-15T11:08:15-04:00 | docs(boabot): refresh README coverage table, note ACP tool/provider parity (dev-flow Step 4) |
+| `a013bae` | 2026-08-15T11:23:27-04:00 | docs: add code-and-design review PRD for acp-harness-feature-parity (dev-flow Step 5) |
+| `fc778be` | 2026-08-15T11:24:55-04:00 | chore: archive original acp-harness-feature-parity spec (dev-flow Step 7) |
+| `8fbbad8` | 2026-08-15T11:30:10-04:00 | docs: create and resolve spec for review-fix implementation (dev-flow Step 8) |
+| `eba1ca7` | 2026-08-15T11:45:10-04:00 | fix(boabot): make board.json safe under concurrent multi-process writes |
+| `ef1edb0` | 2026-08-15T11:51:48-04:00 | docs(boabot): correct ACP-vs-native config-scope claims; record T-FR5 defer |
+| `cadcccf` | 2026-08-15T11:55:14-04:00 | docs: update dev-flow dashboard — Step 9 complete, Step 10 starting |
+| `a8c9f79` | 2026-08-15T11:55:41-04:00 | chore: archive review-fixes spec (dev-flow Step 10) |
+| `506627f` | 2026-08-15T11:56:12-04:00 | docs: update dev-flow dashboard — Step 11 final quality pass complete |
 
-(Dashboard-only intermediate commits between steps omitted from the narrative list above for brevity but included in the total count; all 20 commits pushed to `feat/buzz-dm-and-thread-support` immediately after creation.)
+All 14 commits pushed to `feat/acp-harness-feature-parity` immediately after creation. No PR opened yet — that is dev-flow Step 14, not yet run at the time of this report.
 
 ---
 
@@ -71,13 +69,12 @@ Extended `boabot`'s Buzz integration with NIP-17 encrypted 1:1 direct messages (
 
 | Phase | Planned (spec) | Actual (git log) | Difference | Notes |
 |---|---|---|---|---|
-| Research | 5 research questions (RQ1–RQ5) | 4 resolved concretely (RQ1, RQ2, RQ4, RQ5); RQ3 (relay NIP-17 support) explicitly and correctly deferred to implementation-time verification | On scope | The RQ2 finding (a ready-made `nip17` package already existed in the vendored dependency) meaningfully reduced implementation risk versus the PRD's original assumption of hand-rolling `nip44`/`nip59` calls |
-| Architecture | Two-workstream design (DM + threading), converging at `BuzzTaskBridge` | Implemented largely as designed, with one real deviation: `nip17.ListenForMessages`/`PublishMessage` needed a `*nostr.Pool` this codebase doesn't have, so DM subscribe/publish reuse the existing single-relay seam instead | Small deviation, well-justified | Documented in implementation-notes.md; did not require a design review cycle to resolve, handled inline during implementation |
-| Implementation | 10 tasks (P1.1–P3.1) across 3 phases | All 10 completed in one commit | On scope | Threading fixes and DM support were planned as parallelizable workstreams but landed as a single coherent commit — the implementing agent judged the shared-file overlap (both touch `monitor.go`) made sequential-within-one-session more coherent than actual parallel worktrees |
-| Review Fixes | Not originally planned (emerges from Step 5) | 6 findings, all 6 closed (1 P1 code fix + 5 P2, three fixed, three explicitly documented-as-accepted per the review's own "default toward accepting" framing) | Added scope (expected) | First review-PRD cycle in this session with zero gaps found at Step 6 — a signal the review itself was unusually thorough, not that less scrutiny was applied |
-| Security verification | Folded into Step 5's review dimensions | Extensive — the review independently reproduced every crypto/privacy-property claim against the vendored library's actual source, not its doc comments, and produced a full independent analysis of the fail-open DM gate's real-world exposure | Exceeded planned scope | This is the first feature in this session's history involving real cryptographic wiring; the review step's rigor scaled up accordingly without being separately instructed to |
+| Research | 4 research questions (RQ1–RQ4) | All 4 resolved concretely, including a consequential correction to the PRD's own assumption (do NOT reuse `orchestrator.enabled`) | On scope, exceeded expected rigor | The research step actively improved on the PRD's stated plan rather than just filling in blanks — the PRD had assumed reuse was the likely path; research found the opposite and the spec was corrected before implementation started |
+| Implementation | 6 tasks (FR-401–406) | All 6 completed, plus one documented scope addition (wiring `WithChatProvider`, not named in FR-401's literal text but required to make it non-inert) | Slightly exceeded planned scope, for a correctness reason | Mirrors the exact same class of finding as ADR-B028 (the original multi-agent Buzz feature's `chat_provider` dead-code fix) — the implementing agent recognized the pattern and closed the gap rather than shipping a technically-compliant-but-inert fix |
+| Review Fixes | Not originally planned (emerges from Step 5) | 5 findings, 1 P0 + 4 lower priority, all 5 closed | Added scope (expected) — but this is the first cycle in this session where that added scope included genuinely new infrastructure (a file-locking package), not just fixes to existing code | The P0's resolution required building something that didn't exist before (extracted from an existing sibling primitive, not invented from scratch) — a larger review-fix undertaking than either prior feature's cycle |
+| Security/reliability verification | Not separately planned; folded into Step 5's review dimensions | The reviewer explicitly traced reachability against `buzz-acp`'s actual documented process-pool behavior (ADR-B026) rather than treating the finding as merely theoretical | Exceeded planned scope | This is the payoff of the "independently verify claims, don't just trust" instruction pattern established across all three of this session's review cycles — it's what turned a plausible-sounding architectural risk into a confirmed, prioritized P0 with a concrete reachability path |
 
-**Phases skipped:** None. **Phases added:** A user-initiated mid-run design checkpoint before Step 5 — the fail-open DM author-gate finding was surfaced directly to the user (not just left for the code review to discover), who explicitly accepted the risk with disclosure in place before the pipeline continued. This is a process addition worth naming: a security-relevant default was escalated for a human decision at the point it was first understood, rather than only appearing later as a review finding.
+**Phases skipped:** None. **Phases added:** A dedicated, focused research pass specifically for the P0's fix mechanism (between Step 8 and Step 9's implementation), narrower in scope than a full spec-review research pass but following the same pattern — resolving "what's the right technical approach" concretely before implementation began, rather than leaving it for the implementing agent to figure out mid-fix.
 
 ---
 
@@ -87,39 +84,38 @@ Exact orchestrator-level token counts unavailable; sub-agent usage from task not
 
 | Step | Sub-agent(s) | Approx. tokens (sub-agent) | Tool calls |
 |---|---|---|---|
-| Pre-spec audit (DM/threading state) | 1 research agent | ~65k | 13 |
-| 2 (research portion) | 1 research agent | ~99k | 30 |
-| 3 | 1 implementation agent | ~416k | 235 |
-| 4 | 1 documentation agent | ~189k | 71 |
-| 5 | 1 review agent | ~192k | 70 |
-| 9 | 1 implementation agent | ~266k | 173 |
+| 2 (research) | 1 research agent | ~64k | 19 |
+| 3 | 1 implementation agent | ~261k | 182 |
+| 5 | 1 review agent | ~181k | 61 |
+| 8 (P0 fix-mechanism research) | 1 research agent | ~69k | 14 |
+| 9 | 1 implementation agent | ~244k | 125 |
 
-Step 3 and Step 9 are again the largest consumers, consistent with Section 2's timing observations. Total sub-agent token usage for this run (~1.23M across the 6 major sub-agent calls) is roughly comparable to the prior feature's pattern, scaled up somewhat for the added crypto-verification rigor in Steps 3, 5, and 9.
+Step 3 and Step 9 are again the largest sub-agent consumers, consistent with the timing observations in Section 2 — they're the only steps writing production Go code, and this cycle's Step 9 involved building genuinely new infrastructure rather than smaller targeted fixes.
 
 ---
 
 ## 6. Process Observations
 
 ### What worked well
-- **Escalating the fail-open DM gate finding to the user directly, before it became just another review-PRD line item**, gave the repo owner a real decision point at the moment of discovery rather than burying a security-relevant default in a batch of findings discovered later. The subsequent code review then independently re-verified the claim used to justify accepting it — and found the "consistent with channel behavior" framing was code-level-true but exposure-level-incomplete — demonstrating that escalating early didn't short-circuit the deeper verification that happened anyway.
-- **Reusing existing patterns aggressively paid off twice.** RQ1's research found that conversation continuation could reuse the exact `ChatStore` history-replay pattern the web-UI chat path already used — zero new session machinery. RQ2's research found the vendored dependency already had a `nip17` convenience package wrapping `nip44`/`nip59` — meaningfully de-risking the crypto implementation versus what the PRD assumed. Both findings shrank the actual implementation surface relative to the original plan.
-- **Self-review caught a real regression before Step 9 was declared done** — the FR-301 fix's side effect on failed-task content recording (raw `p.Output` instead of `Monitor.HandleResult`'s normalized fallback text) was found, investigated, and either accepted-with-a-pinning-test or fixed, not left as a silent behavior change. This mirrors the prior feature's FR-101 concurrency-race catch — a second data point that a self-review pass genuinely catches things a single TDD pass alone would miss.
-- **The Step 6 review-PRD gate found zero gaps this run** — after two prior cycles in this session each finding a minor gap (missing team-dependency rows), the review-PRD itself was thorough enough to pass cleanly, suggesting the review-writing discipline is improving across cycles, not just being repeated at constant quality.
+- **The review step's "independently verify, don't trust" instruction pattern paid off decisively this cycle.** The P0 finding depended on connecting two facts that were each individually documented but never previously connected: (1) `board.go` has no cross-process protection, and (2) `buzz-acp` runs a process pool per ADR-B026. Neither fact alone was new information — the review's value was in the connection, made possible by instructing the reviewer to verify reachability concretely rather than accept "this seems like it could be a problem" as sufficient.
+- **The implementing agent's own risk analysis (in the original feature's implementation-notes.md) had already partially flagged this exact class of concern** ("multiple ACP-mode processes... running concurrently") before the review step ran — it was documented as an accepted risk at the time, correctly per that step's narrower scope, but the connection to `buzz-acp`'s actual pool behavior wasn't made until the dedicated review step. This shows the multi-stage pipeline catching what a single implementation pass, however careful, reasonably deprioritized within its own scope.
+- **The P0's fix was scoped precisely to the actual bug**, not over-engineered: full concurrent-edit-of-the-same-item semantics (e.g., true conflict resolution for `Reorder`) were explicitly and correctly ruled out of scope, since the actual production risk was file-level clobbering of *unrelated* items, not fine-grained edit conflicts. Solving only the real problem kept the fix's blast radius small.
+- **The fix reused an existing primitive (`lock.go`) rather than introducing a new dependency**, preserving this codebase's deliberate stdlib-only/cross-platform-portability constraint — a constraint that wouldn't have been visible without the dedicated research pass reading `lock.go`'s own doc comments.
 
 ### What caused delays or rework
-- The FR-301 fix required a genuine design decision (pass `ThreadID` through vs. filter at read time) that wasn't fully resolved until implementation — architecture.md correctly flagged this as "pending research confirmation" rather than pre-deciding it, which was the right call, but it meant Step 9's implementing agent had to do real design work mid-fix rather than following a fully pre-specified plan.
-- Documentation (Step 4) took proportionally longer than the prior feature's equivalent step, driven by the need to disclose the fail-open DM gate accurately and prominently rather than as a footnote — a reasonable cost of getting a security-relevant disclosure right, not wasted time.
+- Nothing that reads as delay or rework in the negative sense — the "delays" in this cycle (the dedicated P0 fix-mechanism research pass, the two-attempt verification of the regression test's red state) are exactly the deliberate, valuable slowness a P0 correctness fix warrants, not inefficiency.
+- One minor process note: the implementing agent's own advisor review (within Step 9) caught two problems before commit — an adoption-doc claim that contradicted an adjacent existing bullet, and a hook-based test that didn't actually verify contention on its first attempt. Both were caught and fixed within the same step, but represent a first-pass imperfection a second self-review pass corrected — consistent with this session's now-repeated pattern (also seen in both prior features) of self-review catching real issues before external review does.
 
 ### Recommendations for future runs
-- When a research phase surfaces that an existing library/pattern already solves most of a planned feature (as RQ1 and RQ2 both did here), consider re-scoping the task breakdown immediately rather than only noting it in research.md — the task breakdown in this run correctly reflected the simplified approach, but a tighter feedback loop (updating tasks.md the moment such a finding lands, rather than after all research questions are resolved) could shave time off Step 2 for a larger feature.
-- For any future feature touching real cryptography or another high-stakes correctness domain, consider explicitly instructing the code-review step (Step 5) to independently reproduce claims against primary sources (as was done here, and worked well) as a standing practice, not a one-off instruction — codify it as a per-domain review-rigor tier rather than re-deriving the instruction each time.
+- Given this cycle demonstrated the review step's independent-verification instruction catching a genuine P0 by connecting two previously-separate documented facts, consider making "cross-reference this finding against every existing ADR that might be relevant" a standing instruction for code review steps generally, not just as an ad hoc addition — it was pivotal here and cost little extra to request.
+- The pattern of "research the fix mechanism concretely before implementing" (used for this P0, and for the original feature's harder design questions) consistently produces higher-confidence implementation passes with fewer mid-implementation surprises — worth continuing as a standing practice for any P0/P1 finding, not just optionally.
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration:** 3–5 working days for a senior Go engineer with some Nostr/NIP-17 familiarity, or 5–8 days without it — this feature requires reading and correctly applying an unfamiliar protocol spec (NIP-17 gift-wrap DMs) in addition to the same categories of work as the prior feature (reading existing code, TDD implementation, documentation, human code review with at least one fix round). The crypto-correctness bar (no plaintext/key leakage, preserved privacy properties) would typically also involve a security-focused reviewer as a separate reviewer from the feature's primary implementer, adding coordination time a solo estimate doesn't capture.
+**Estimated manual duration:** 2–3 working days for a senior Go engineer — this feature is narrower in scope than the prior two (no new protocol, no new cryptography), but the P0's discovery and correct resolution would itself typically consume a meaningful fraction of a manual review cycle: recognizing that a documented process-pool behavior (in one part of the system) interacts badly with a documented lack of concurrency protection (in another part) is exactly the kind of cross-cutting concern that's easy to miss in a single-reviewer pass under time pressure, and the fix (extracting and adapting an existing locking primitive correctly, with genuine TDD) is not trivial work.
 
-**Actual automated runtime:** ~1h 47m for Steps 1–11, continuous, no waiting on human review turnaround, and no protocol-learning-curve tax (the research step read the vendored library's source directly and found the pre-built `nip17` package in minutes rather than the implementer needing to learn the underlying `nip44`/`nip59` primitives from scratch).
+**Actual automated runtime:** ~1h 19m for Steps 1–11, continuous, no waiting on human review turnaround, including the full P0 discovery-to-fix cycle within that time.
 
-**Efficiency gain:** Comparable to or somewhat exceeding the prior feature's 10–20x estimate, given this feature's added protocol-learning-curve component in the manual baseline — a human engineer unfamiliar with NIP-17 would likely spend a meaningful fraction of the manual estimate just understanding the gift-wrap/seal/rumor structure before writing any code, a cost the automated run didn't pay at anywhere near the same magnitude. As with the prior feature, this is a qualitative estimate — the automated run's security rigor (independent reproduction of every crypto claim, explicit escalation of the fail-open-gate risk for a human decision) is not a corner cut to hit a faster number.
+**Efficiency gain:** Comparable to or exceeding the prior two features' estimates on a pure wall-clock basis, but the more notable result this cycle is *catching a real bug before merge* that a less rigorous process — automated or manual — might plausibly have missed, given it required connecting two separately-documented facts rather than spotting an obvious local defect. This is a qualitative outcome the efficiency ratio alone doesn't capture: the pipeline's value here wasn't just speed, it was catching something a faster-but-shallower process would likely have shipped.

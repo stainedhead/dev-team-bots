@@ -199,10 +199,14 @@ func buildACPWorker(
 
 // buildACPMCPOptions constructs the functional options for ACP mode's local
 // filesystem MCP client -- board store (FR-402/403), plugin store (FR-404),
-// and CLI runner/tools (FR-405) -- mirroring team_manager.go:1020-1036's
-// exact per-feature gating conditions (not an umbrella enabled flag; see
-// architecture.md's "do not reuse orchestrator.enabled" decision). Every
-// store construction here degrades gracefully on failure (NFR-Reliability):
+// and CLI runner/tools (FR-405) -- gated on the same granular config fields
+// team_manager.go:1020-1036 gates on, not an umbrella enabled flag (see
+// architecture.md's "do not reuse orchestrator.enabled" decision). This is
+// scope-equivalent, not condition-identical: see each gate's own comment
+// below for the two specific ways ACP mode's gating differs from native
+// mode's (the board gate compares a different struct field, equivalent by
+// convention; the plugin/CLI-tool gates read a different config scope).
+// Every store construction here degrades gracefully on failure (NFR-Reliability):
 // logged, ACP mode still starts and executes tasks without that tool
 // surface. Startup logs state clearly whether each tool surface activated
 // for this persona (NFR-Observability), mirroring how Buzz monitor
@@ -210,11 +214,19 @@ func buildACPWorker(
 func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Client) {
 	var opts []func(*localmcp.Client)
 
-	// Board store (FR-402/403): mirrors team_manager.go:1023-1024's persona-
-	// type gate exactly (not an enabled flag -- tm.sharedBoard is always
-	// non-nil there). NewInMemoryBoardStore has no failure path of its own
-	// (a missing/corrupt persist file is silently treated as an empty
-	// board), so there is nothing to log-and-skip here beyond activation.
+	// Board store (FR-402/403): equivalent to team_manager.go:1023's
+	// persona-type gate by convention, not by construction -- team_manager.go
+	// compares entry.Type (the team.yaml entry's own field, also the
+	// <bots-dir>/<type>/ directory name that bot is loaded from);
+	// cfg.Bot.BotType here is the loaded persona's own bot.type field from
+	// its config.yaml, a different piece of data with no team.yaml entry to
+	// read in ACP mode. The two coincide today only because every real
+	// persona's own bot.type matches the directory name it's loaded from --
+	// the same convention resolveACPConfigPath already relies on. Not an
+	// enabled flag either way (tm.sharedBoard is always non-nil in native
+	// mode). NewInMemoryBoardStore has no failure path of its own (a
+	// missing/corrupt persist file is silently treated as an empty board),
+	// so there is nothing to log-and-skip here beyond activation.
 	if cfg.Bot.BotType != "tech-lead" {
 		boardPath := filepath.Join(memPath, "board.json")
 		opts = append(opts, localmcp.WithBoardStore(orchestratorlocal.NewInMemoryBoardStore(boardPath)))
@@ -223,8 +235,17 @@ func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Clie
 		slog.Info("acp mode: board store not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
 	}
 
-	// Plugin store (FR-404): mirrors team_manager.go:501-519's install-dir
-	// gate and relative-path resolution against the persona's own memPath.
+	// Plugin store (FR-404): uses the same install-dir-presence gate and
+	// relative-path resolution against the persona's own memPath as
+	// team_manager.go:501-519, but at a different config scope: native
+	// mode resolves Orchestrator.Plugins.InstallDir ONCE from the team's
+	// orchestrator-entry persona's config.yaml and shares that single
+	// result team-wide (tm.resolvedPluginStore/resolvedInstallDir); ACP
+	// mode has no team.yaml/orchestrator-entry concept, so cfg here is
+	// always the config of whichever persona this process is running as.
+	// A non-orchestrator persona's own config.yaml must set
+	// orchestrator.plugins.install_dir itself for this to activate --
+	// see user-docs/ACP-Harness-Adoption-Config.md.
 	if installDir := cfg.Orchestrator.Plugins.InstallDir; installDir != "" {
 		if !filepath.IsAbs(installDir) {
 			installDir = filepath.Join(memPath, installDir)
@@ -245,7 +266,11 @@ func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Clie
 	// team_manager.go:531's unconditional cliagent.New(); per-tool
 	// availability is gated by each CLIToolConfig.Enabled bool inside
 	// cfg.Orchestrator.CLITools (enforced by localmcp.Client itself via
-	// resolveBinary -- WithCLITools just passes the config through).
+	// resolveBinary -- WithCLITools just passes the config through). Same
+	// team-wide-vs-running-persona-own-config scope difference as the
+	// plugin store above applies here too (cfg.Orchestrator.CLITools is
+	// this persona's own field; native mode resolves it once from the
+	// team's orchestrator entry and shares it team-wide).
 	opts = append(opts, localmcp.WithCLIRunner(cliagent.New()), localmcp.WithCLITools(cfg.Orchestrator.CLITools))
 	slog.Info("acp mode: cli runner activated", "bot", cfg.Bot.Name,
 		"claude_code_enabled", cfg.Orchestrator.CLITools.ClaudeCode.Enabled,

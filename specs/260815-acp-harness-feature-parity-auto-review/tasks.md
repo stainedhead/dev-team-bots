@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-1/5 tasks complete.
+5/5 tasks complete (T-FR5 closed via recorded defer decision, per its own "not required to close" acceptance criterion).
 
 ## Phase 1 — P0 fix (must close before mergeable)
 
@@ -17,22 +17,26 @@
 
 ## Phase 2 — P1/P2 documentation fixes (independent, parallelizable)
 
-### T-FR2 — Correct the "exact mirror" claim's scope inaccuracy
+### T-FR2 — Correct the "exact mirror" claim's scope inaccuracy — COMPLETE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-2. Confirm exact current wording in each of 5 locations (archived spec.md, architecture.md, research.md, ADR-B030, adoption doc) before editing; correct all 5 to state ACP mode reads the running persona's own config vs. native mode's team-wide sourcing; add new adoption-doc bullet with remediation guidance (copy settings into the persona's own config).
+- **Done:** all 5 locations corrected (`specs/archive/260815-acp-harness-feature-parity/{spec,architecture,research}.md`, `boabot/docs/architectural-decision-record.md` ADR-B030, `boabot/user-docs/ACP-Harness-Adoption-Config.md`); new adoption-doc bullet added with explicit copy-into-persona's-own-config remediation guidance; matching comments added at each gate site in `cmd/boabot/acp.go`.
 
-### T-FR3 — Soften board-gate "exact condition" language
+### T-FR3 — Soften board-gate "exact condition" language — COMPLETE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-3. Either reword to "equivalent by convention" or add a code comment on `buildACPMCPOptions` explaining the `cfg.Bot.BotType`-matches-directory-name convention.
+- **Done:** both — archived spec.md/architecture.md language softened to "equivalent by convention", and a code comment added on `buildACPMCPOptions`'s board-store gate in `cmd/boabot/acp.go` explaining the `cfg.Bot.BotType`-vs-`entry.Type` distinction.
 
-### T-FR4 — Reword adoption-doc overclaiming heading
+### T-FR4 — Reword adoption-doc overclaiming heading — COMPLETE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-4. Reword "No filesystem/tool differences from native mode" to not overclaim before its own caveats.
+- **Done:** reworded to "Same tool/provider mechanisms as native mode, with scope differences (see below)." — count-free phrasing since T-FR2 adds a third caveat bullet in the same pass.
 
-### T-FR5 — Record decision on gating-logic duplication (optional)
+### T-FR5 — Record decision on gating-logic duplication (optional) — COMPLETE (deferred)
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-5. Not required to close — record the decision (defer, matching precedent) in implementation-notes.md, or implement the shared-function extraction if it turns out to be a small, contained change.
+- **Done:** decision recorded in implementation-notes.md — deferred, matching the review's own precedent framing (`main.go`'s `buildBuzzMonitor`/`newBuzzMonitorBuilder`); not implemented, per the reasoning recorded there.

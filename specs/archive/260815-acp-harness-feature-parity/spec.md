@@ -33,13 +33,13 @@ The live `orchestrator` persona, running in ACP mode, has repeatedly hit `stop_r
 
 **FR-401:** `execute_task.go`'s provider-selection logic treats `Source: "acp"` as a conversational source alongside `"chat"`/`"buzz"`, so a configured `models.chat_provider` applies to ACP-sourced tasks.
 
-**FR-402:** ACP mode's process (`cmd/boabot/acp.go`) constructs its own board-store instance at `filepath.Join(memPath, "board.json")` (reusing the `memPath` already computed at `acp.go:103`), gated on `cfg.Bot.Type != "tech-lead"` — mirroring native mode's exact condition (`team_manager.go:1023-1024`), not an umbrella enabled flag.
+**FR-402:** ACP mode's process (`cmd/boabot/acp.go`) constructs its own board-store instance at `filepath.Join(memPath, "board.json")` (reusing the `memPath` already computed at `acp.go:103`), gated on `cfg.Bot.Type != "tech-lead"` — equivalent by convention to native mode's condition (`team_manager.go:1023-1024`, which compares the `team.yaml` entry's own `Type` field, a different piece of data). The two conditions coincide today only because every real persona's own `bot.type` matches the directory name it's loaded from — the same convention `resolveACPConfigPath` already relies on — not because they read the same field. Not an umbrella enabled flag either way.
 
 **FR-403:** ACP mode's MCP client is constructed with `WithBoardStore` wired to FR-402's board instance whenever FR-402's type-gate passes.
 
-**FR-404:** ACP mode's process constructs its own plugin store gated on `cfg.Orchestrator.Plugins.InstallDir != ""` (mirroring `team_manager.go:513-516`'s exact condition), and wires `WithPluginStore`/`WithInstallDir` into its MCP client when so gated.
+**FR-404:** ACP mode's process constructs its own plugin store gated on `cfg.Orchestrator.Plugins.InstallDir != ""` — the same boolean presence-check `team_manager.go:513-516` uses, but read from a different scope: ACP mode reads the *running persona's own* `config.yaml`, whereas native mode reads *the team's orchestrator entry's* `config.yaml` once and shares the resolved result team-wide across every bot (see `docs/architectural-decision-record.md` ADR-B030). Wires `WithPluginStore`/`WithInstallDir` into its MCP client when so gated.
 
-**FR-405:** ACP mode's MCP client is always constructed with `WithCLIRunner` (unconditional, mirroring `team_manager.go:531`'s unconditional `cliagent.New()`), with `WithCLITools` reflecting per-tool `cfg.Orchestrator.CLITools.<tool>.Enabled` gating exactly as native mode does (`team_manager.go:526`).
+**FR-405:** ACP mode's MCP client is always constructed with `WithCLIRunner` (unconditional, mirroring `team_manager.go:531`'s unconditional `cliagent.New()`), with `WithCLITools` reflecting per-tool `cfg.Orchestrator.CLITools.<tool>.Enabled` gating using the same per-tool boolean check native mode uses (`team_manager.go:526`) — again read from the running persona's own `config.yaml` rather than the team's orchestrator-entry config native mode resolves once and shares team-wide (see FR-404).
 
 **FR-406 (documentation only):** `docs/architectural-decision-record.md` gains an entry explaining why mid-task clarifying questions remain ACP-mode-unsupported, citing the unstable-protocol/upstream-dependency finding.
 

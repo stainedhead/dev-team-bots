@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-5/6 tasks complete (P1.1, P2.1, P2.2, P3.1, P4.1 done; P5.1 remaining).
+6/6 tasks complete.
 
 ## Phase 1 — Independent, smallest first
 

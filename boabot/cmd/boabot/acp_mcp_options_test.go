@@ -183,9 +183,25 @@ func TestBuildACPMCPOptions_PluginStore_ConstructionFailureDegradesGracefully(t 
 }
 
 // TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill proves an
-// ACP-sourced task can actually invoke a plugin-provided tool (read_skill)
-// once a plugin is installed and active on disk -- not just that
-// WithPluginStore was passed as a constructor argument.
+// ACP-sourced task can actually invoke a plugin-provided tool -- calling
+// the tool by the name the plugin's own manifest declares in
+// Provides.Tools ("my-skill"), dispatched through Client.callPluginTool
+// (client.go:299-330), not just that WithPluginStore was passed as a
+// constructor argument. This deliberately does NOT call the client's own
+// always-present read_skill builtin directly (client.go:167-185) -- that
+// would only prove the plugin store is non-nil, not that a plugin's own
+// declared tool is reachable.
+//
+// The manifest's Entrypoint is "plugin.json" (Claude-Code-style skill
+// plugin), which routes callPluginTool to isPluginJSONEntrypoint's
+// readSkill delegation instead of spawning the entrypoint as a subprocess
+// (client.go:317-321). This is deliberate, not a simplification of
+// convenience: Extract's extractArchive (installer.go's os.Create-based
+// file write) does not preserve the tar header's executable bit, so an
+// archive-shipped run.sh-style entrypoint is never executable after
+// installation in this test harness -- exercising the subprocess-entrypoint
+// branch would require a real filesystem chmod after Install, which is not
+// how a real plugin ever installs skills of this shape either.
 func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 	installDir := filepath.Join(t.TempDir(), "plugins")
 	seedStore, err := localplugin.NewLocalPluginStore(installDir)
@@ -196,7 +212,7 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 	manifest := domain.PluginManifest{
 		Name:       "my-skill-plugin",
 		Version:    "1.0.0",
-		Entrypoint: "run.sh",
+		Entrypoint: "plugin.json",
 		Checksums:  map[string]string{"sha256": checksum},
 		Provides: domain.PluginProvides{
 			Tools: []domain.MCPTool{{Name: "my-skill", Description: "a test skill"}},
@@ -213,6 +229,12 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 	opts := buildACPMCPOptions(cfg, t.TempDir())
 	mcpClient := localmcp.NewClient(nil, opts...)
 
+	// Confirm ListTools actually advertises the plugin's own declared tool
+	// name, not just the always-present read_skill builtin.
+	if !listToolNames(t, mcpClient)["my-skill"] {
+		t.Fatal("expected the plugin-declared tool \"my-skill\" to be listed")
+	}
+
 	n := 0
 	provider := &mocks.ModelProvider{
 		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
@@ -221,8 +243,8 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 				return domain.InvokeResponse{
 					ToolCalls: []domain.ToolCall{{
 						ID:   "c1",
-						Name: "read_skill",
-						Args: map[string]any{"name": "my-skill"},
+						Name: "my-skill",
+						Args: map[string]any{},
 					}},
 					StopReason: "tool_calls",
 				}, nil

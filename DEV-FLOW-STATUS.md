@@ -1,7 +1,8 @@
 # Dev-Flow Implementation Status
 
 **PRD:** buzz-dm-and-thread-support-PRD.md
-**Spec:** specs/260814-buzz-dm-and-thread-support/
+**Spec:** specs/archive/260814-buzz-dm-and-thread-support/ (archived Step 7)
+**Review Spec:** specs/260814-buzz-dm-and-thread-support-auto-review/
 **Branch:** feat/buzz-dm-and-thread-support
 **Review PRD:** buzz-dm-and-thread-support-auto-review-PRD.md
 **Process Start:** 2026-08-14T23:21:23Z
@@ -18,9 +19,9 @@
 | 4  | Documentation and User Docs     | ✅ Complete | 2026-08-15T00:08:43Z | 2026-08-15T00:32:01Z | 23 |
 | 5  | Code and Design Review          | ✅ Complete | 2026-08-15T00:32:01Z | 2026-08-15T00:43:00Z | 11 |
 | 6  | Prepare Review PRD              | ✅ Complete | 2026-08-15T00:43:00Z | 2026-08-15T00:44:08Z | 1 |
-| 7  | Archive Original Spec           | 🔄 In Progress | 2026-08-15T00:44:08Z | — | — |
-| 8  | Spec Review Fixes               | ⬜ Pending | — | — | — |
-| 9  | Implement Review Fixes          | ⬜ Pending | — | — | — |
+| 7  | Archive Original Spec           | ✅ Complete | 2026-08-15T00:44:08Z | 2026-08-15T00:44:35Z | 1 |
+| 8  | Spec Review Fixes               | ✅ Complete | 2026-08-15T00:44:35Z | 2026-08-15T00:46:16Z | 2 |
+| 9  | Implement Review Fixes          | 🔄 In Progress | 2026-08-15T00:46:16Z | — | — |
 | 10 | Archive Fixes Spec              | ⬜ Pending | — | — | — |
 | 11 | Final Quality Pass              | ⬜ Pending | — | — | — |
 | 12 | Process Analysis Report         | ⬜ Pending | — | — | — |

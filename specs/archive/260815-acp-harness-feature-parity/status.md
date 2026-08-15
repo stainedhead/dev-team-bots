@@ -13,7 +13,7 @@
 | 3 | Architecture & Planning | Complete |
 | 4 | Task Breakdown | Complete |
 | 5 | Implementation | Complete |
-| 6 | Completion & Archival | Not Started |
+| 6 | Completion & Archival | Complete (original spec archived at dev-flow Step 7; auto-review spec/fixes tracked separately) |
 
 ## Phase 0 Task Checklist
 

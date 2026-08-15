@@ -12,13 +12,21 @@ import (
 const maxToolIterations = 50
 
 // isConversationalSource reports whether source identifies a task that
-// originated from a live, conversational channel (web-UI chat or Buzz),
-// which should get the dedicated chatProvider (when configured) rather than
-// the default provider -- see execute_task.go:100's provider-selection
-// check. Board- and operator-sourced tasks are not conversational and are
-// left on the default provider.
+// originated from a live, conversational channel (web-UI chat, Buzz, or ACP
+// stdio harness mode), which should get the dedicated chatProvider (when
+// configured) rather than the default provider -- see execute_task.go:100's
+// provider-selection check. Board- and operator-sourced tasks are not
+// conversational and are left on the default provider.
+//
+// "acp" (FR-401, specs/260815-acp-harness-feature-parity) has no
+// corresponding domain.DirectTaskSource constant -- internal/infrastructure/
+// acp/turn.go sets Task.Source: "acp" directly, since boabot -acp mode
+// never goes through domain.DirectTask/DirectTaskSource at all (single
+// persona, no team.yaml, no DirectTaskStore).
 func isConversationalSource(source string) bool {
-	return source == string(domain.DirectTaskSourceChat) || source == string(domain.DirectTaskSourceBuzz)
+	return source == string(domain.DirectTaskSourceChat) ||
+		source == string(domain.DirectTaskSourceBuzz) ||
+		source == "acp"
 }
 
 type ExecuteTaskUseCase struct {

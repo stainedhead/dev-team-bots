@@ -1,10 +1,28 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stainedhead/dev-team-bots/boabot/internal/application/mocks"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/config"
 )
+
+// fakeProviderFactory is a minimal domain.ProviderFactory for tests that
+// need to exercise real chat-provider-selection wiring (buildACPWorker)
+// without constructing real anthropic/openai/bedrock clients.
+type fakeProviderFactory map[string]domain.ModelProvider
+
+func (f fakeProviderFactory) Get(name string) (domain.ModelProvider, error) {
+	if p, ok := f[name]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("fakeProviderFactory: unknown provider %q", name)
+}
 
 func TestResolveACPConfigPath_ExplicitConfigWins(t *testing.T) {
 	got := resolveACPConfigPath(true, "/explicit/path/config.yaml", "/bots", "tech-lead")
@@ -137,6 +155,108 @@ models:
 
 	if _, err := buildACPAgent(configPath); err == nil {
 		t.Fatal("expected an error for an invalid BOABOT_ACP_KEEPALIVE_INTERVAL, got nil")
+	}
+}
+
+// TestBuildACPWorker_ChatProviderUsedForACPSource verifies FR-401's
+// acceptance criterion end-to-end through the real production wiring
+// function (buildACPWorker, extracted from buildACPAgent so it's directly
+// unit-testable per AGENTS.md's "cmd/ is wiring only" rule) -- not just
+// that isConversationalSource's string match changed, but that an
+// ACP-sourced task constructed via cfg.Models.chat_provider actually
+// invokes the chat provider, mirroring team_manager.go:1047-1056's exact
+// gating condition.
+func TestBuildACPWorker_ChatProviderUsedForACPSource(t *testing.T) {
+	chatCalled := false
+	chatProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			chatCalled = true
+			return domain.InvokeResponse{Content: "chat response", StopReason: "stop"}, nil
+		},
+	}
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	pf := fakeProviderFactory{"default": defaultProvider, "chat": chatProvider}
+
+	cfg := config.Config{
+		Bot:    config.BotConfig{Name: "test-bot", BotType: "tech-lead"},
+		Models: config.ModelsConfig{Default: "default", ChatProvider: "chat"},
+	}
+
+	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-1", Source: "acp", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !chatCalled {
+		t.Error("expected chat provider to be invoked for an acp-sourced task when models.chat_provider is configured")
+	}
+}
+
+// TestBuildACPWorker_ChatProviderUnresolvable_FallsBackToDefault verifies
+// NFR-Reliability: a bad/unresolvable models.chat_provider degrades
+// gracefully (falls back to the default provider) rather than blocking
+// worker construction, mirroring team_manager.go's own log-and-continue
+// treatment of a failed pf.Get call.
+func TestBuildACPWorker_ChatProviderUnresolvable_FallsBackToDefault(t *testing.T) {
+	defaultCalled := false
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			defaultCalled = true
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	pf := fakeProviderFactory{"default": defaultProvider}
+
+	cfg := config.Config{
+		Bot:    config.BotConfig{Name: "test-bot", BotType: "tech-lead"},
+		Models: config.ModelsConfig{Default: "default", ChatProvider: "does-not-exist"},
+	}
+
+	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-2", Source: "acp", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !defaultCalled {
+		t.Error("expected default provider to be invoked when chat_provider is unresolvable")
+	}
+}
+
+// TestBuildACPWorker_NoChatProvider_UsesDefault verifies that with no
+// models.chat_provider configured at all, the default provider handles
+// acp-sourced tasks (the pre-existing, unconfigured-case behavior).
+func TestBuildACPWorker_NoChatProvider_UsesDefault(t *testing.T) {
+	defaultCalled := false
+	defaultProvider := &mocks.ModelProvider{
+		InvokeFn: func(_ context.Context, _ domain.InvokeRequest) (domain.InvokeResponse, error) {
+			defaultCalled = true
+			return domain.InvokeResponse{Content: "default response", StopReason: "stop"}, nil
+		},
+	}
+	pf := fakeProviderFactory{"default": defaultProvider}
+
+	cfg := config.Config{
+		Bot:    config.BotConfig{Name: "test-bot", BotType: "tech-lead"},
+		Models: config.ModelsConfig{Default: "default"},
+	}
+
+	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+
+	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-3", Source: "acp", Instruction: "hello"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !defaultCalled {
+		t.Error("expected default provider to be invoked when chat_provider is not configured")
 	}
 }
 

@@ -503,10 +503,12 @@ type BuzzDispatchCall struct {
 }
 
 type BuzzTaskDispatcher struct {
-	DispatchFn func(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error)
+	DispatchFn    func(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error)
+	KnownThreadFn func(botName, rootID string) bool
 
-	mu    sync.Mutex
-	Calls []BuzzDispatchCall
+	mu           sync.Mutex
+	Calls        []BuzzDispatchCall
+	KnownThreads map[string]bool // "botName|rootID" -> true, set via MarkKnownThread
 }
 
 func (m *BuzzTaskDispatcher) Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (domain.BuzzDispatchResult, error) {
@@ -526,4 +528,33 @@ func (m *BuzzTaskDispatcher) GetCalls() []BuzzDispatchCall {
 	out := make([]BuzzDispatchCall, len(m.Calls))
 	copy(out, m.Calls)
 	return out
+}
+
+// KnownThread implements domain.BuzzTaskDispatcher. It defers to
+// KnownThreadFn when set; otherwise it consults KnownThreads (populated via
+// MarkKnownThread), defaulting to false.
+func (m *BuzzTaskDispatcher) KnownThread(botName, rootID string) bool {
+	m.mu.Lock()
+	fn := m.KnownThreadFn
+	known := m.KnownThreads
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(botName, rootID)
+	}
+	if known == nil {
+		return false
+	}
+	return known[botName+"|"+rootID]
+}
+
+// MarkKnownThread records botName/rootID as a known thread for the default
+// KnownThreads-map-backed KnownThread behaviour (ignored if KnownThreadFn is
+// set).
+func (m *BuzzTaskDispatcher) MarkKnownThread(botName, rootID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.KnownThreads == nil {
+		m.KnownThreads = make(map[string]bool)
+	}
+	m.KnownThreads[botName+"|"+rootID] = true
 }

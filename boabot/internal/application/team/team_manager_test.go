@@ -232,7 +232,7 @@ func TestTeamManager_BuzzMonitorBuilder_InvokedPerBuzzEnabledPersona(t *testing.
 
 	var built []string
 	var mu sync.Mutex
-	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ domain.ChatStore, _ func(context.Context) error) domain.ChannelMonitor {
 		mu.Lock()
 		built = append(built, botCfg.Buzz.BotName)
 		mu.Unlock()
@@ -298,7 +298,7 @@ func TestTeamManager_BuzzMonitorBuilder_DuplicateBotName_IsolatedNotPanic(t *tes
 
 	var built []string
 	var mu sync.Mutex
-	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ domain.ChatStore, _ func(context.Context) error) domain.ChannelMonitor {
 		mu.Lock()
 		built = append(built, entry.Name)
 		mu.Unlock()
@@ -372,7 +372,7 @@ func TestTeamManager_BuzzMonitorBuilder_OnePersonaConfigLoadFails_OthersUnaffect
 
 	var built []string
 	var mu sync.Mutex
-	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ domain.ChatStore, _ func(context.Context) error) domain.ChannelMonitor {
 		mu.Lock()
 		built = append(built, entry.Name)
 		mu.Unlock()
@@ -445,7 +445,7 @@ func TestTeamManager_BuzzMonitorBuilder_NilForOnePersona_SkippedOthersUnaffected
 
 	var built []string
 	var mu sync.Mutex
-	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ func(context.Context) error) domain.ChannelMonitor {
+	mgr.WithBuzzMonitorBuilder(func(_ context.Context, entry team.BotEntryForTest, botCfg config.Config, _ *queue.Router, _ domain.ScheduledTaskDispatcher, _ domain.BoardStore, _ domain.ChatStore, _ func(context.Context) error) domain.ChannelMonitor {
 		mu.Lock()
 		built = append(built, entry.Name)
 		mu.Unlock()

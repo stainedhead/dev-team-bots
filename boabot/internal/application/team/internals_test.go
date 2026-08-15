@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 )
 
@@ -176,18 +177,16 @@ func TestBoardTracksSource(t *testing.T) {
 // ── chatMessageThreadID ────────────────────────────────────────────────────────
 
 // TestChatMessageThreadID verifies which DirectTaskSource values' own
-// task.ThreadID is safe to record on the shared chat feed's inbound
-// completion message. Only chat-sourced tasks have a ThreadID that
-// corresponds to a real domain.ChatThread the operator created via the
-// web-UI chat interface. Board/operator-sourced tasks already dispatch with
-// an empty ThreadID (pre-existing convention). Buzz-sourced tasks carry a
-// real, non-empty ThreadID -- the Nostr channel UUID, needed by
-// BuzzTaskBridge/ChatTaskManager's own scheduling-confirmation pending map
-// -- which must NOT leak into the shared chat feed as a message ThreadID:
-// it does not correspond to any registered ChatThread and would render as
-// an orphaned/mislabeled grouping in GET /api/v1/chat's flat listing
-// (spec.md's non-goal: this feature populates Board/Tasks, not a new chat
-// surface).
+// task.ThreadID is safe to record on the shared chat feed's completion
+// message. Chat-sourced tasks have a ThreadID that corresponds to a real
+// domain.ChatThread the operator created via the web-UI chat interface.
+// Buzz-sourced tasks (FR-301 fix) carry the same NIP-10 thread-root hex or
+// "dm:<pubkey>" key that internal/infrastructure/buzz's Monitor.
+// recordOutbound uses to key its own ChatStore writes -- passing it through
+// here (instead of "") makes this handler the single, correctly-threaded
+// writer of a Buzz task's completion message, closing the FR-301 duplicate-
+// row finding. Board/operator-sourced tasks still dispatch with an empty
+// ThreadID (pre-existing convention; no equivalent per-conversation key).
 func TestChatMessageThreadID(t *testing.T) {
 	tests := []struct {
 		name string
@@ -200,9 +199,14 @@ func TestChatMessageThreadID(t *testing.T) {
 			want: "thread-abc",
 		},
 		{
-			name: "buzz source's channel-UUID ThreadID is not leaked into the chat feed",
-			task: domain.DirectTask{Source: domain.DirectTaskSourceBuzz, ThreadID: "nostr-channel-uuid"},
-			want: "",
+			name: "buzz source keeps its own ThreadID (FR-301: no longer collapsed to \"\")",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceBuzz, ThreadID: "root-event-hex"},
+			want: "root-event-hex",
+		},
+		{
+			name: "buzz DM source keeps its dm: ThreadID",
+			task: domain.DirectTask{Source: domain.DirectTaskSourceBuzz, ThreadID: "dm:abcdef"},
+			want: "dm:abcdef",
 		},
 		{
 			name: "board source (already empty ThreadID today)",
@@ -221,6 +225,124 @@ func TestChatMessageThreadID(t *testing.T) {
 				t.Errorf("chatMessageThreadID(%+v) = %q, want %q", tc.task, got, tc.want)
 			}
 		})
+	}
+}
+
+// ── handleSharedTaskResult (FR-301) ─────────────────────────────────────────────
+
+// TestHandleSharedTaskResult_BuzzTask_RecordsExactlyOneMessage is FR-301's
+// core acceptance criterion: a Buzz-dispatched task's reply, driven through
+// the generic per-bot TaskResultHandler exactly as startBot wires it, must
+// appear exactly once in sharedChatStore, keyed by the task's own (real)
+// Buzz ThreadID -- not once under "" (the pre-fix chatMessageThreadID
+// behaviour) and once more via internal/infrastructure/buzz/monitor.go's
+// Monitor.recordOutbound (which this fix removes from the task-completion
+// path; see monitor.go's HandleResult doc comment).
+func TestHandleSharedTaskResult_BuzzTask_RecordsExactlyOneMessage(t *testing.T) {
+	ctx := context.Background()
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	taskStore := orchestratorlocal.NewInMemoryDirectTaskStore("")
+
+	task, err := taskStore.Create(ctx, domain.DirectTask{
+		BotName:  "buzz-bot",
+		Source:   domain.DirectTaskSourceBuzz,
+		ThreadID: "root-event-hex",
+		Status:   domain.DirectTaskStatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	tm := &TeamManager{sharedChatStore: chatStore, sharedTaskStore: taskStore}
+	tm.handleSharedTaskResult(ctx, domain.TaskResultPayload{
+		TaskID:  task.ID,
+		Output:  "the answer",
+		Success: true,
+	}, nil)
+
+	msgs, err := chatStore.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 chat message for the Buzz task's reply, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Content != "the answer" {
+		t.Errorf("expected message content %q, got %q", "the answer", msgs[0].Content)
+	}
+	if msgs[0].ThreadID != "root-event-hex" {
+		t.Errorf("expected message ThreadID %q (the real Buzz thread key, not \"\"), got %q", "root-event-hex", msgs[0].ThreadID)
+	}
+}
+
+// TestHandleSharedTaskResult_BuzzTask_ErrorOnly_RecordsRawOutputVerbatim
+// pins a deliberate, documented FR-301 side effect (see
+// implementation-notes.md): handleSharedTaskResult records p.Output
+// VERBATIM, including empty, unlike Monitor.HandleResult's own
+// relay-published text, which falls back to p.Error when p.Success is
+// false and p.Output is empty (and to a literal "(no output)" when both are
+// empty). Before FR-301, the correctly-threaded ChatStore copy came from
+// Monitor.recordOutbound, which received that NORMALIZED text -- so a
+// failed task's ChatStore/FR-206-replay record could show the error text.
+// Post-FR-301, handleSharedTaskResult is the only writer and never sees
+// p.Error, so that row is now empty on this exact input shape. Accepted
+// as-is (not fixed) per architecture.md/spec.md's own risk note that this
+// shared handler serves every DirectTaskSource, not just Buzz --
+// normalizing content here would change recording behaviour for Chat/
+// Board/Operator sources too, which already record raw p.Output today.
+func TestHandleSharedTaskResult_BuzzTask_ErrorOnly_RecordsRawOutputVerbatim(t *testing.T) {
+	ctx := context.Background()
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	taskStore := orchestratorlocal.NewInMemoryDirectTaskStore("")
+
+	task, err := taskStore.Create(ctx, domain.DirectTask{
+		BotName:  "buzz-bot",
+		Source:   domain.DirectTaskSourceBuzz,
+		ThreadID: "root-event-hex-2",
+		Status:   domain.DirectTaskStatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	tm := &TeamManager{sharedChatStore: chatStore, sharedTaskStore: taskStore}
+	tm.handleSharedTaskResult(ctx, domain.TaskResultPayload{
+		TaskID:  task.ID,
+		Output:  "", // empty on a failed task -- Monitor.HandleResult would fall back to Error/"(no output)" for the relay-published text
+		Error:   "something went wrong",
+		Success: false,
+	}, nil)
+
+	msgs, err := chatStore.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 chat message, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Content != "" {
+		t.Errorf("expected raw (unnormalized) empty content recorded verbatim, got %q -- if this now fails, the documented FR-301 tradeoff in implementation-notes.md needs updating, not this test", msgs[0].Content)
+	}
+}
+
+// TestHandleSharedTaskResult_UntrackedTaskID_NoAppend verifies the existing
+// "not a tracked chat task" short-circuit survives the FR-301 extraction
+// unchanged: a TaskResultPayload for a TaskID the shared task store doesn't
+// know about must not append anything to sharedChatStore.
+func TestHandleSharedTaskResult_UntrackedTaskID_NoAppend(t *testing.T) {
+	ctx := context.Background()
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	taskStore := orchestratorlocal.NewInMemoryDirectTaskStore("")
+
+	tm := &TeamManager{sharedChatStore: chatStore, sharedTaskStore: taskStore}
+	tm.handleSharedTaskResult(ctx, domain.TaskResultPayload{TaskID: "unknown-task", Output: "x"}, nil)
+
+	msgs, err := chatStore.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no chat messages for an untracked task ID, got %d", len(msgs))
 	}
 }
 

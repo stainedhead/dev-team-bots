@@ -75,6 +75,34 @@ func TestSubscribe_PGatedKind_CorrectPTag_Allowed(t *testing.T) {
 	}
 }
 
+// TestSubscribe_DMKind_CorrectPTag_Allowed closes a gap the P2.2 DM
+// subscription path (dm.go's startDMSubscription) relies on: it must be
+// verified through the REAL RelayClient.Subscribe (not just fakeRelay,
+// which skips validateSubscriptionFilter entirely) that a kind:1059
+// filter #p-tagged to the client's own key -- the exact shape
+// startDMSubscription constructs -- passes the p-gate guard, using the
+// same key source (rc.PubKey(), derived from the RelayClient's own sk) that
+// production wiring (cmd/boabot/main.go's buildBuzzMonitor) uses for both
+// RelayClient's sk and Monitor.Config.AgentPubKeyHex.
+func TestSubscribe_DMKind_CorrectPTag_Allowed(t *testing.T) {
+	conn := newFakeConn()
+	rc, _ := newTestClient(t, conn)
+	if err := rc.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	_, err := rc.Subscribe(context.Background(), domain.Filter{
+		Kinds: []int{1059},
+		Tags:  map[string][]string{"p": {rc.PubKey().Hex()}},
+	})
+	if err != nil {
+		t.Fatalf("expected the DM (kind:1059) subscription filter to pass the p-gate guard, got %v", err)
+	}
+	if len(conn.subscribes) != 1 {
+		t.Fatalf("expected 1 filter sent to relay, got %d", len(conn.subscribes))
+	}
+}
+
 func TestSubscribe_PGatedKind_MixedWithUngatedKinds_StillGuarded(t *testing.T) {
 	conn := newFakeConn()
 	rc, _ := newTestClient(t, conn)

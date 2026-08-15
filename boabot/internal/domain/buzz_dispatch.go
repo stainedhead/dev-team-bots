@@ -41,9 +41,24 @@ type BuzzDispatchResult struct {
 // internal/application/orchestrator (BuzzTaskBridge); consumed by
 // internal/infrastructure/buzz.Monitor via the WithTaskDispatcher option.
 type BuzzTaskDispatcher interface {
-	// Dispatch handles one inbound Buzz mention. eventID is the triggering
-	// Nostr event ID (used for relay-replay dedup); threadID is a stable
-	// per-conversation key used for the NL-scheduling confirm/cancel flow
-	// (e.g. the Buzz channel UUID).
+	// Dispatch handles one inbound Buzz mention, in-thread reply, or DM.
+	// eventID is the triggering Nostr event ID (used for relay-replay
+	// dedup -- for a DM this is the outer kind:1059 gift-wrap event ID, not
+	// the unwrapped rumor's own ID). threadID is a stable per-conversation
+	// key used for both the NL-scheduling confirm/cancel flow and
+	// ChatStore-backed history replay (FR-206): the NIP-10 thread root for
+	// channel dispatch, or the DM conversation identifier for DM dispatch
+	// -- NOT the Buzz channel UUID (that remains available separately, for
+	// publishing the reply into the right channel/#h tag).
 	Dispatch(ctx context.Context, botName, eventID, threadID, instruction string) (BuzzDispatchResult, error)
+
+	// KnownThread reports whether botName has previously dispatched within
+	// the thread/conversation identified by rootID (FR-205/FR-206). Used
+	// by the Buzz ChannelMonitor's triggerThreadReply classification path
+	// to recognize an in-thread reply that lacks a fresh @mention as still
+	// directed at this persona. Strictly per-persona: a rootID this
+	// persona never dispatched in returns false even if another persona
+	// dispatched there (spec.md's "Thread reply to a root this persona
+	// never dispatched in" edge case).
+	KnownThread(botName, rootID string) bool
 }

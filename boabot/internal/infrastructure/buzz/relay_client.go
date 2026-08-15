@@ -495,6 +495,33 @@ func (rc *RelayClient) Publish(ctx context.Context, evt domain.Event) error {
 	return nil
 }
 
+// PublishRaw sends evt to the relay exactly as given -- unlike Publish, it
+// does NOT sign evt or overwrite its PubKey. See domain.RelayClient's doc
+// comment: this exists for NIP-17 gift-wrapped DM events, whose outer
+// envelope is already signed with a throwaway ephemeral key by
+// nip59.GiftWrap, and re-signing here (as Publish does) would silently
+// defeat that privacy property and break the recipient's ability to
+// decrypt (GiftUnwrap derives the seal's conversation key from the
+// envelope's PubKey).
+func (rc *RelayClient) PublishRaw(ctx context.Context, evt domain.Event) error {
+	rc.mu.Lock()
+	conn := rc.conn
+	rc.mu.Unlock()
+	if conn == nil {
+		return errNotConnected
+	}
+
+	nevt, err := ToLibraryEvent(evt)
+	if err != nil {
+		return fmt.Errorf("buzz: publish raw: %w", err)
+	}
+
+	if err := conn.Publish(ctx, nevt); err != nil {
+		return fmt.Errorf("buzz: publish raw: %w", err)
+	}
+	return nil
+}
+
 // Subscribe registers f and, if currently connected, attaches it
 // immediately. The returned channel survives reconnects: it is
 // re-attached to a fresh underlying subscription after every reconnect

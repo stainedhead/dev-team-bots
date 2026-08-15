@@ -182,16 +182,27 @@ func run(ctx context.Context, cfg config.Config) error {
 		r *queue.Router,
 		dispatcher domain.ScheduledTaskDispatcher,
 		board domain.BoardStore,
+		chatStore domain.ChatStore,
 		shutdownFn func(context.Context) error,
 	) domain.ChannelMonitor {
 		chatMgr := apporchestrator.NewChatTaskManager(dispatcher)
-		bridge := apporchestrator.NewBuzzTaskBridge(dispatcher, board, chatMgr)
+		// P1.5: wire chatStore into the bridge for FR-206's ChatStore
+		// history-replay conversation continuation (thread replies and DMs
+		// alike). Falls back to plain NewBuzzTaskBridge (no history replay)
+		// when chatStore is nil -- e.g. an orchestrator-mode-disabled
+		// process that never creates tm.sharedChatStore.
+		var bridge *apporchestrator.BuzzTaskBridge
+		if chatStore != nil {
+			bridge = apporchestrator.NewBuzzTaskBridgeWithChatStore(dispatcher, board, chatMgr, chatStore)
+		} else {
+			bridge = apporchestrator.NewBuzzTaskBridge(dispatcher, board, chatMgr)
+		}
 		// A persona's own bot_name may collide with Slack's configured bot
 		// name (an operator pointing both channels at the same bot);
 		// buildBuzzMonitor's router.Lookup-before-Register handles that
 		// (and the Run()-side team-entry pre-registration) uniformly now,
 		// so no queueAlreadyRegistered flag is needed here.
-		return buildBuzzMonitor(buildCtx, botCfg, store, r, managerCfg.BotsDir, managerCfg.MemoryRoot, shutdownFn, bridge)
+		return buildBuzzMonitor(buildCtx, botCfg, store, r, managerCfg.BotsDir, managerCfg.MemoryRoot, shutdownFn, bridge, chatStore)
 	})
 
 	return mgr.Run(ctx)
@@ -222,7 +233,18 @@ func run(ctx context.Context, cfg config.Config) error {
 // dispatched tasks flow through Dispatcher/DirectTaskStore/BoardStore
 // instead of the direct queue.Send fallback (see monitor.go's
 // WithTaskDispatcher option doc comment).
-func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.SecretStore, router *queue.Router, botsDir, memoryRoot string, shutdownFn buzzinfra.ShutdownFunc, td domain.BuzzTaskDispatcher) *buzzinfra.Monitor {
+//
+// chatStore, when non-nil, is wired as the Monitor's own ChatStore
+// reference (WithChatStore) so outbound (bot-authored) replies get recorded
+// for FR-206 history replay too -- see monitor.go's recordOutbound.
+//
+// DM support (P2.1-P2.4) is activated unconditionally whenever this
+// persona's own channel key (sk, already resolved above) is available --
+// spec.md's Goals: "any Buzz-enabled persona with a provisioned key is
+// reachable via a direct 1:1 message ... using its existing channel
+// identity -- no separate DM key," so there is no separate DM-enable
+// config flag to check.
+func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.SecretStore, router *queue.Router, botsDir, memoryRoot string, shutdownFn buzzinfra.ShutdownFunc, td domain.BuzzTaskDispatcher, chatStore domain.ChatStore) *buzzinfra.Monitor {
 	bc := cfg.Buzz
 	if !bc.Enabled {
 		return nil
@@ -312,9 +334,15 @@ func buildBuzzMonitor(ctx context.Context, cfg config.Config, store domain.Secre
 	monOpts := []buzzinfra.MonitorOption{
 		buzzinfra.WithShutdownFunc(shutdownFn),
 		buzzinfra.WithMonitorLogger(slog.Default()),
+		// P2.1: DM support over this persona's own channel key -- no
+		// separate DM key/secret (see this function's doc comment).
+		buzzinfra.WithDMKeyer(buzzinfra.NewDMKeyer(sk)),
 	}
 	if td != nil {
 		monOpts = append(monOpts, buzzinfra.WithTaskDispatcher(td))
+	}
+	if chatStore != nil {
+		monOpts = append(monOpts, buzzinfra.WithChatStore(chatStore))
 	}
 
 	return buzzinfra.NewMonitor(rc, monCfg, q, screener, monOpts...)

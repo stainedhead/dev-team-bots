@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -397,5 +398,316 @@ func TestBuzzTaskBridge_Dispatch_EventIDDedupExpires(t *testing.T) {
 	}
 	if r2.Duplicate {
 		t.Fatal("expected the dedup window to have expired, allowing a second dispatch")
+	}
+}
+
+// --- P1.3: KnownThread / dispatchedThreads -----------------------------------
+
+func TestBuzzTaskBridge_KnownThread_UnknownRoot_ReturnsFalse(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+
+	if bridge.KnownThread("architect", "never-dispatched") {
+		t.Fatal("expected KnownThread=false for a thread never dispatched in")
+	}
+}
+
+func TestBuzzTaskBridge_KnownThread_EmptyRootID_ReturnsFalse(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+	_, _ = bridge.Dispatch(context.Background(), "architect", "evt-1", "some-thread", "hello")
+
+	if bridge.KnownThread("architect", "") {
+		t.Fatal("expected KnownThread=false for an empty rootID")
+	}
+}
+
+func TestBuzzTaskBridge_KnownThread_AfterDispatch_ReturnsTrue(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "thread-root-1", "hello"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !bridge.KnownThread("architect", "thread-root-1") {
+		t.Fatal("expected KnownThread=true after a successful Dispatch for this bot/thread")
+	}
+}
+
+// TestBuzzTaskBridge_KnownThread_StrictlyPerPersona is the spec.md edge
+// case: KnownThread must be keyed by botName + rootID, not just rootID, so
+// persona A's dispatched thread never leaks into persona B's
+// classification.
+func TestBuzzTaskBridge_KnownThread_StrictlyPerPersona(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "shared-thread-root", "hello"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !bridge.KnownThread("architect", "shared-thread-root") {
+		t.Fatal("expected KnownThread=true for architect/shared-thread-root")
+	}
+	if bridge.KnownThread("reviewer", "shared-thread-root") {
+		t.Fatal("expected KnownThread=false for a different persona (reviewer) on the same rootID")
+	}
+}
+
+func TestBuzzTaskBridge_KnownThread_DuplicateEventDoesNotUnmarkThread(t *testing.T) {
+	// A duplicate (relay-replayed) event short-circuits before
+	// markDispatchedThread would run again, but the thread should already
+	// be known from the first, successful Dispatch.
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+	ctx := context.Background()
+
+	if _, err := bridge.Dispatch(ctx, "architect", "evt-1", "thread-root-2", "hello"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result, err := bridge.Dispatch(ctx, "architect", "evt-1", "thread-root-2", "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Duplicate {
+		t.Fatal("expected the second identical event ID to be reported as a duplicate")
+	}
+	if !bridge.KnownThread("architect", "thread-root-2") {
+		t.Fatal("expected KnownThread=true to remain true after a duplicate-event no-op")
+	}
+}
+
+// --- P1.5: ChatStore history replay ------------------------------------------
+
+// fakeBuzzChatStore is a minimal, in-memory domain.ChatStore fake giving
+// buzz_task_bridge_test.go control over List/Append errors (fail-open
+// coverage) that the real InMemoryChatStore implementation doesn't easily
+// let a test simulate.
+type fakeBuzzChatStore struct {
+	mu        sync.Mutex
+	messages  []domain.ChatMessage
+	listErr   error
+	appendErr error
+}
+
+func (f *fakeBuzzChatStore) CreateThread(_ context.Context, title string, participants []string) (domain.ChatThread, error) {
+	return domain.ChatThread{ID: "thread-1", Title: title, Participants: participants}, nil
+}
+func (f *fakeBuzzChatStore) ListThreads(_ context.Context) ([]domain.ChatThread, error) {
+	return nil, nil
+}
+func (f *fakeBuzzChatStore) DeleteThread(_ context.Context, _ string) error { return nil }
+
+func (f *fakeBuzzChatStore) Append(_ context.Context, msg domain.ChatMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	// Newest-first, matching InMemoryChatStore's documented List order.
+	f.messages = append([]domain.ChatMessage{msg}, f.messages...)
+	return nil
+}
+
+func (f *fakeBuzzChatStore) List(_ context.Context, threadID string) ([]domain.ChatMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []domain.ChatMessage
+	for _, m := range f.messages {
+		if m.ThreadID == threadID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeBuzzChatStore) ListAll(_ context.Context) ([]domain.ChatMessage, error) { return nil, nil }
+func (f *fakeBuzzChatStore) ListByBot(_ context.Context, _ string) ([]domain.ChatMessage, error) {
+	return nil, nil
+}
+
+var _ domain.ChatStore = (*fakeBuzzChatStore)(nil)
+
+// TestBuzzTaskBridge_Dispatch_NoChatStore_InstructionUnaugmented verifies
+// the pre-existing (no history replay) behaviour is preserved when no
+// ChatStore is wired (NewBuzzTaskBridge, not …WithChatStore).
+func TestBuzzTaskBridge_Dispatch_NoChatStore_InstructionUnaugmented(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	bridge := orchestrator.NewBuzzTaskBridge(d, board, nil)
+
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "thread-1", "first message"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.calls[0].Instruction != "first message" {
+		t.Fatalf("expected unaugmented instruction, got %q", d.calls[0].Instruction)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_FirstMessage_NoHistoryBlock verifies
+// that a thread's first-ever message dispatches with no "Prior
+// conversation" block (there is no prior history to replay yet).
+func TestBuzzTaskBridge_Dispatch_ChatStore_FirstMessage_NoHistoryBlock(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+
+	if _, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "thread-1", "first message"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.calls[0].Instruction != "first message" {
+		t.Fatalf("expected unaugmented instruction for a thread's first message, got %q", d.calls[0].Instruction)
+	}
+
+	msgs, _ := cs.List(context.Background(), "thread-1")
+	if len(msgs) != 1 || msgs[0].Content != "first message" || msgs[0].Direction != domain.ChatDirectionOutbound {
+		t.Fatalf("expected the inbound message recorded in ChatStore, got %+v", msgs)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_SecondTurn_ReplaysBotReply is P1.5's
+// core acceptance criterion (FR-206): a two-turn thread conversation where
+// the second turn's dispatched instruction reflects context from the
+// first turn -- specifically the BOT'S OWN prior reply, not just the human
+// side (advisor finding: ChatStore's outbound-append side must be owned
+// somewhere, or continuation silently carries no bot context).
+func TestBuzzTaskBridge_Dispatch_ChatStore_SecondTurn_ReplaysBotReply(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+	ctx := context.Background()
+
+	if _, err := bridge.Dispatch(ctx, "architect", "evt-1", "thread-1", "what is the deploy status?"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Simulate the bot's reply being recorded (Monitor.recordOutbound's
+	// job in production -- this test only needs BuzzTaskBridge's read side
+	// to see it).
+	if err := cs.Append(ctx, domain.ChatMessage{
+		ThreadID: "thread-1", BotName: "architect",
+		Direction: domain.ChatDirectionInbound, Content: "deploy is green",
+	}); err != nil {
+		t.Fatalf("append bot reply: %v", err)
+	}
+
+	if _, err := bridge.Dispatch(ctx, "architect", "evt-2", "thread-1", "and the last build?"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	second := d.calls[len(d.calls)-1].Instruction
+	if !strings.Contains(second, "deploy is green") {
+		t.Fatalf("expected the second turn's instruction to replay the bot's prior reply, got %q", second)
+	}
+	if !strings.Contains(second, "what is the deploy status?") {
+		t.Fatalf("expected the second turn's instruction to replay the human's prior message, got %q", second)
+	}
+	if !strings.Contains(second, "and the last build?") {
+		t.Fatalf("expected the second turn's instruction to still contain the current message, got %q", second)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_DifferentThread_NoCrossTalk verifies
+// that history replay is strictly per-threadID -- an unrelated thread's
+// history never leaks into this thread's instruction.
+func TestBuzzTaskBridge_Dispatch_ChatStore_DifferentThread_NoCrossTalk(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+	ctx := context.Background()
+
+	if _, err := bridge.Dispatch(ctx, "architect", "evt-1", "thread-A", "secret project alpha details"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := bridge.Dispatch(ctx, "architect", "evt-2", "thread-B", "unrelated question"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	second := d.calls[len(d.calls)-1].Instruction
+	if strings.Contains(second, "secret project alpha details") {
+		t.Fatalf("expected thread-B's instruction not to contain thread-A's history, got %q", second)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_ListError_FailsOpen verifies that a
+// ChatStore.List failure degrades to an unaugmented instruction rather than
+// blocking dispatch.
+func TestBuzzTaskBridge_Dispatch_ChatStore_ListError_FailsOpen(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{listErr: errors.New("store unavailable")}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+
+	result, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "thread-1", "hello")
+	if err != nil {
+		t.Fatalf("expected Dispatch to succeed despite a ChatStore.List failure, got err=%v", err)
+	}
+	if result.Duplicate {
+		t.Fatal("did not expect a duplicate result")
+	}
+	if d.calls[0].Instruction != "hello" {
+		t.Fatalf("expected unaugmented instruction on a List failure, got %q", d.calls[0].Instruction)
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_AppendError_NonFatal verifies that
+// a ChatStore.Append failure (recording the inbound message) is logged and
+// non-fatal -- dispatch still proceeds.
+func TestBuzzTaskBridge_Dispatch_ChatStore_AppendError_NonFatal(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{appendErr: errors.New("write failed")}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+
+	result, err := bridge.Dispatch(context.Background(), "architect", "evt-1", "thread-1", "hello")
+	if err != nil {
+		t.Fatalf("expected Dispatch to succeed despite a ChatStore.Append failure, got err=%v", err)
+	}
+	if result.Duplicate {
+		t.Fatal("did not expect a duplicate result")
+	}
+	if len(d.calls) != 1 {
+		t.Fatalf("expected dispatch to proceed despite the append failure, got %d calls", len(d.calls))
+	}
+}
+
+// TestBuzzTaskBridge_Dispatch_ChatStore_CapsAtTenPriorMessages verifies the
+// history-replay window matches handleChatSend's own 10-message cap
+// (architecture.md's RQ1 resolution: no separate dormancy mechanism, the
+// conversation "naturally" fades past this window).
+func TestBuzzTaskBridge_Dispatch_ChatStore_CapsAtTenPriorMessages(t *testing.T) {
+	d := &fakeScheduledDispatcher{}
+	board := &fakeBuzzBoardStore{}
+	cs := &fakeBuzzChatStore{}
+	bridge := orchestrator.NewBuzzTaskBridgeWithChatStore(d, board, nil, cs)
+	ctx := context.Background()
+
+	// 12 prior turns, oldest ("turn-0") should be excluded from the replay.
+	for i := 0; i < 12; i++ {
+		if _, err := bridge.Dispatch(ctx, "architect", "", "thread-1", "turn-"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("dispatch turn %d: %v", i, err)
+		}
+	}
+	// 13th turn: build its instruction and inspect what got replayed.
+	if _, err := bridge.Dispatch(ctx, "architect", "", "thread-1", "turn-12"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := d.calls[len(d.calls)-1].Instruction
+	if strings.Contains(last, "turn-0\n") || strings.Contains(last, "turn-0:") {
+		t.Fatalf("expected the oldest prior message (turn-0) to fall outside the 10-message cap, got %q", last)
+	}
+	if !strings.Contains(last, "turn-11") {
+		t.Fatalf("expected the most recent prior message (turn-11) within the cap, got %q", last)
 	}
 }

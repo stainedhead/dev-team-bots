@@ -275,6 +275,56 @@ func TestHandleSharedTaskResult_BuzzTask_RecordsExactlyOneMessage(t *testing.T) 
 	}
 }
 
+// TestHandleSharedTaskResult_BuzzTask_ErrorOnly_RecordsRawOutputVerbatim
+// pins a deliberate, documented FR-301 side effect (see
+// implementation-notes.md): handleSharedTaskResult records p.Output
+// VERBATIM, including empty, unlike Monitor.HandleResult's own
+// relay-published text, which falls back to p.Error when p.Success is
+// false and p.Output is empty (and to a literal "(no output)" when both are
+// empty). Before FR-301, the correctly-threaded ChatStore copy came from
+// Monitor.recordOutbound, which received that NORMALIZED text -- so a
+// failed task's ChatStore/FR-206-replay record could show the error text.
+// Post-FR-301, handleSharedTaskResult is the only writer and never sees
+// p.Error, so that row is now empty on this exact input shape. Accepted
+// as-is (not fixed) per architecture.md/spec.md's own risk note that this
+// shared handler serves every DirectTaskSource, not just Buzz --
+// normalizing content here would change recording behaviour for Chat/
+// Board/Operator sources too, which already record raw p.Output today.
+func TestHandleSharedTaskResult_BuzzTask_ErrorOnly_RecordsRawOutputVerbatim(t *testing.T) {
+	ctx := context.Background()
+	chatStore := orchestratorlocal.NewInMemoryChatStore("")
+	taskStore := orchestratorlocal.NewInMemoryDirectTaskStore("")
+
+	task, err := taskStore.Create(ctx, domain.DirectTask{
+		BotName:  "buzz-bot",
+		Source:   domain.DirectTaskSourceBuzz,
+		ThreadID: "root-event-hex-2",
+		Status:   domain.DirectTaskStatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	tm := &TeamManager{sharedChatStore: chatStore, sharedTaskStore: taskStore}
+	tm.handleSharedTaskResult(ctx, domain.TaskResultPayload{
+		TaskID:  task.ID,
+		Output:  "", // empty on a failed task -- Monitor.HandleResult would fall back to Error/"(no output)" for the relay-published text
+		Error:   "something went wrong",
+		Success: false,
+	}, nil)
+
+	msgs, err := chatStore.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 chat message, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Content != "" {
+		t.Errorf("expected raw (unnormalized) empty content recorded verbatim, got %q -- if this now fails, the documented FR-301 tradeoff in implementation-notes.md needs updating, not this test", msgs[0].Content)
+	}
+}
+
 // TestHandleSharedTaskResult_UntrackedTaskID_NoAppend verifies the existing
 // "not a tracked chat task" short-circuit survives the FR-301 extraction
 // unchanged: a TaskResultPayload for a TaskID the shared task store doesn't

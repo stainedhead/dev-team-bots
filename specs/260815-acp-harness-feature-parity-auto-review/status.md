@@ -12,7 +12,7 @@
 | 2 | Research & Data Modeling | Complete |
 | 3 | Architecture & Planning | Complete |
 | 4 | Task Breakdown | Complete |
-| 5 | Implementation | Not Started |
+| 5 | Implementation | In Progress (1/5 tasks, T-FR1 complete) |
 | 6 | Completion & Archival | Not Started |
 
 ## Phase 0 Task Checklist
@@ -39,3 +39,4 @@
 
 - 2026-08-15: Spec directory created from `acp-harness-feature-parity-auto-review-PRD.md`; PRD moved into spec directory. This is the first P0 finding in this session's three feature-review cycles — a real, "reachable by construction" cross-process concurrency hazard on shared board state, confirmed against this session's own observation of the live deployment running 10 concurrent ACP-mode processes.
 - 2026-08-15: `/review-spec` run; codebase research resolved the fix mechanism concretely — reuse `lock.go`'s existing atomic-publish/stale-check primitive (not a new `flock` dependency), wrap in retry-with-backoff, combine with re-read-and-merge-by-item-ID before each persist. Spec now implementation-ready.
+- 2026-08-15: T-FR1 (P0) implemented and verified — new `internal/infrastructure/local/filelock` package + `board.go` persist() lock+reread+merge. TDD followed: RED test written and confirmed failing 5/5 against unfixed `persist()` before any production code touched, then GREEN 10/10 after the fix, plus an additional hook-based lock-contention test. Full suite (`go test -race -gcflags=all=-d=checkptr=0 ./...`), `go vet`, `golangci-lint run` all clean; domain+application aggregate coverage re-measured at 92.2%, matching the pre-existing baseline exactly (no regression). Existing single-process board tests pass unchanged.

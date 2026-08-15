@@ -5,14 +5,15 @@
 
 ## Progress Summary
 
-0/5 tasks complete.
+1/5 tasks complete.
 
 ## Phase 1 — P0 fix (must close before mergeable)
 
-### T-FR1 — Fix `board.json` cross-process concurrency hazard
+### T-FR1 — Fix `board.json` cross-process concurrency hazard — COMPLETE
 
 - **Depends on:** none
 - **Acceptance criteria:** per spec.md FR-1. TDD: failing cross-process test first (two `InMemoryBoardStore` instances, shared `persistPath`, concurrent `Create`/`Update` of distinct items via goroutines with a deterministic race-forcing hook per `lock_race_test.go`'s template, asserting the final on-disk file has both items — fails against current `persist()`), then: (1) extract `lock.go`'s atomic-publish/stale-check primitive into a small reusable helper; (2) wrap it in retry-with-backoff (not fail-fast); (3) modify `persist()` to acquire the lock, re-read `persistPath` from disk, merge by item ID (union, caller's own touched item(s) win), write, release. Existing single-process board tests must keep passing unchanged. `Reorder`'s true concurrent-conflict case documented as an accepted limitation, not solved.
+- **Done:** new `internal/infrastructure/local/filelock` package (`AcquireWait`, retry-with-backoff); `board.go`'s `persist()` now acquires `persistPath+".lock"`, re-reads disk, merges by item ID, writes; RED test (`board_concurrency_test.go`) confirmed failing 5/5 against unfixed code, then passing 10/10 after the fix; additional hook-based lock-contention test (`board_race_test.go`) added per the explicit lock_race_test.go-mirroring instruction. All existing single-process board tests pass unchanged. See implementation-notes.md for full detail and recorded deviations.
 
 ## Phase 2 — P1/P2 documentation fixes (independent, parallelizable)
 

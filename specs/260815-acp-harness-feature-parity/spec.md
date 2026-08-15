@@ -33,13 +33,13 @@ The live `orchestrator` persona, running in ACP mode, has repeatedly hit `stop_r
 
 **FR-401:** `execute_task.go`'s provider-selection logic treats `Source: "acp"` as a conversational source alongside `"chat"`/`"buzz"`, so a configured `models.chat_provider` applies to ACP-sourced tasks.
 
-**FR-402:** ACP mode's process (`cmd/boabot/acp.go`) constructs its own board-store instance. Design question (research phase): per-persona file path under the ACP process's own memory root, parallel to (not shared with) any concurrently-running native-mode instance.
+**FR-402:** ACP mode's process (`cmd/boabot/acp.go`) constructs its own board-store instance at `filepath.Join(memPath, "board.json")` (reusing the `memPath` already computed at `acp.go:103`), gated on `cfg.Bot.Type != "tech-lead"` — mirroring native mode's exact condition (`team_manager.go:1023-1024`), not an umbrella enabled flag.
 
-**FR-403:** ACP mode's MCP client is constructed with `WithBoardStore` wired to FR-402's board instance.
+**FR-403:** ACP mode's MCP client is constructed with `WithBoardStore` wired to FR-402's board instance whenever FR-402's type-gate passes.
 
-**FR-404:** ACP mode's process constructs its own plugin store when a plugin install directory is configured, and wires `WithPluginStore`/`WithInstallDir` into its MCP client.
+**FR-404:** ACP mode's process constructs its own plugin store gated on `cfg.Orchestrator.Plugins.InstallDir != ""` (mirroring `team_manager.go:513-516`'s exact condition), and wires `WithPluginStore`/`WithInstallDir` into its MCP client when so gated.
 
-**FR-405:** ACP mode's MCP client is constructed with `WithCLIRunner`/`WithCLITools` when CLI tool delegation is enabled for the persona, matching native mode's conditional wiring.
+**FR-405:** ACP mode's MCP client is always constructed with `WithCLIRunner` (unconditional, mirroring `team_manager.go:531`'s unconditional `cliagent.New()`), with `WithCLITools` reflecting per-tool `cfg.Orchestrator.CLITools.<tool>.Enabled` gating exactly as native mode does (`team_manager.go:526`).
 
 **FR-406 (documentation only):** `docs/architectural-decision-record.md` gains an entry explaining why mid-task clarifying questions remain ACP-mode-unsupported, citing the unstable-protocol/upstream-dependency finding.
 
@@ -64,7 +64,7 @@ The live `orchestrator` persona, running in ACP mode, has repeatedly hit `stop_r
 
 ## Breaking Changes
 
-None expected to public config schema — reuses existing `orchestrator.enabled`-style config surface (exact reuse decision deferred to research, see Open Questions) rather than inventing new fields.
+None expected to public config schema — reuses existing granular config fields (`Bot.Type`, `Orchestrator.Plugins.InstallDir`, `Orchestrator.CLITools.*`) rather than inventing new ones. Confirmed during research: `orchestrator.enabled` is deliberately *not* reused, since it specifically means "start the HTTP dashboard" in native mode and doesn't even gate board-store wiring there — reusing it for ACP would conflate unrelated concepts.
 
 ## Success Criteria and Acceptance Criteria
 
@@ -86,7 +86,7 @@ None expected to public config schema — reuses existing `orchestrator.enabled`
 | ACP mode's persistence/lifecycle design (FR-402) | Risk | Genuinely new design surface — ACP mode has never owned persistent board/plugin state before. | Resolve concretely during research phase, not assumed; see Open Questions. |
 | `buzz-acp` upstream elicitation support | Dependency (external) | Mid-task-question gap stays open until/unless upstream implements it — outside this repo's control. | Documented as Non-Goal (FR-406), not silently dropped. |
 | Multiple ACP-mode processes for different personas running concurrently | Risk | If FR-402's board is per-persona/per-process, confirm no unified-view expectation is broken (acceptable since ACP mode has no web UI to view a board in anyway). | State explicitly in implementation notes, don't assume. |
-| Reusing `orchestrator.enabled` as ACP mode's tool-wiring opt-in signal | Risk | That flag today only means something to native mode (control-plane/API/UI activation) — reusing it for ACP mode's tool wiring needs confirmation it has no unintended interaction if the same persona's config is ever read by both modes. | Resolve during research phase; see Open Questions. |
+| ~~Reusing `orchestrator.enabled` as ACP mode's tool-wiring opt-in signal~~ | ~~Risk~~ Resolved | Confirmed during research: `orchestrator.enabled` only means "start the HTTP dashboard" in native mode and doesn't gate board wiring there either. | Not reused — each ACP feature gated on its own granular field, matching native mode's actual per-feature conditions exactly (`Bot.Type`, `Orchestrator.Plugins.InstallDir`, `Orchestrator.CLITools.*`). |
 
 ## Timeline and Milestones
 

@@ -16,7 +16,7 @@ TDD throughout, per AGENTS.md. `acp.go` stays wiring-only — any new decision l
 
 ## Critical Path
 
-FR-401 is fully independent — smallest, safest first task. FR-402→FR-403 (board store then wiring it) and FR-404→FR-405 (plugin store then wiring it, plus CLI tools) can proceed in parallel once RQ1/RQ2 are resolved. FR-406 (docs) is independent of all code work.
+P1.1 (FR-401) is fully independent — smallest, safest first task. P2.1→P2.2 (board) and P3.1 (plugin) and P4.1 (CLI) are three independent workstreams that can run in parallel via worktrees/agent teammates once P1.1 lands (all touch the same `acp.go` file, so true parallel worktree execution would need care around merge order — likely more practical as sequential-but-fast single-agent work given the shared file, despite being logically independent). P5.1 (docs) is independent of all code work.
 
 ## Testing Strategy
 

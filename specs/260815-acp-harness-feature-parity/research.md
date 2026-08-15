@@ -5,10 +5,14 @@
 
 ## Research Questions
 
-1. FR-402's exact persistence design: what path should ACP mode's own board-store JSON file live at? Check what memory/vector store paths `acp.go` already constructs (it must derive a per-persona directory somehow) and mirror that convention for the board store, rather than inventing a new path scheme.
-2. Should FR-403–FR-405's tool wiring reuse the existing `orchestrator.enabled` config flag as ACP mode's opt-in signal, or introduce a new flag? Confirm whether `orchestrator.enabled: true` in a persona's `config.yaml` could realistically be read by BOTH an ACP-mode process and a native-mode process for the same persona at different times (per the cutover model, they're not meant to run concurrently for the same persona, but the same config.yaml file is shared across modes) — if so, does reusing this flag for ACP mode's tool-wiring risk a confusing double-meaning, or is it actually the cleanest signal precisely because it already means "this persona wants the full control-plane experience"?
-3. What plugin install-dir and CLI-tool-enablement config fields does native mode read to decide whether to wire `WithPluginStore`/`WithCLIRunner` (`team_manager.go:1023-1034` exact conditions)? ACP mode needs to read the identical fields from the same persona config, not invent parallel ones.
-4. Does `acp.go`'s existing `RulesTracker` construction (which already reads `cfg.Orchestrator.WorkDirs`, per prior research) offer a reusable pattern for how ACP mode should read persona-scoped config fields it doesn't currently touch?
+1. ~~Persistence path convention~~ — **Resolved.** `buildACPAgent` (`acp.go:83-150`) already computes `memPath := filepath.Join(memRoot, cfg.Bot.Name)` (line 103) for the memory/vector stores. **Decision:** board store lives at `filepath.Join(memPath, "board.json")`, reusing the already-computed `memPath` — exactly mirrors native mode's `<memRoot>/<orchestratorName>/board.json` convention (`team_manager.go:445-449`), with `cfg.Bot.Name` standing in for `orchestratorName` since ACP mode has one persona per process.
+2. ~~Config flag reuse vs. new flag~~ — **Resolved — do NOT reuse `orchestrator.enabled`.** Confirmed `Orchestrator.Enabled` is read in exactly two places outside native mode's own package (`team_manager.go:800,982`), both gating whether to start the HTTP/API/dashboard/UI server — a meaning that's inert in ACP mode (stdio-only, no HTTP server). Critically, native mode's own board-store wiring is **not** gated by `Enabled` at all (`tm.sharedBoard` constructed unconditionally, `team_manager.go:449`). Reusing it for ACP's tool wiring would conflate two unrelated concepts and misrepresent how native mode itself gates things. **Decision:** no new top-level flag needed either — gate each ACP feature on the same granular, mode-agnostic field native mode already uses per feature (see RQ3).
+3. ~~Native mode's exact wiring conditions~~ — **Resolved**, precise conditions from `team_manager.go:1020-1036`:
+   - `WithBoardStore`: gated on persona **type** != `"tech-lead"` (line 1023-1024), not any enabled flag — `tm.sharedBoard` is always non-nil.
+   - `WithPluginStore`/`WithInstallDir`: gated on `cfg.Orchestrator.Plugins.InstallDir != ""` (line 513-516 pattern) — a persona-scoped config field, not an umbrella flag.
+   - `WithCLIRunner`: unconditional (`cliagent.New()` always constructed, line 531) — the runner itself is always wired; `WithCLITools`: per-tool availability gated by each `CLIToolConfig.Enabled` bool inside `cfg.Orchestrator.CLITools` (line 526).
+   - **Decision:** ACP mode mirrors these exact same conditions read from its own persona's `config.yaml` — board wiring gated on `cfg.Bot.Type != "tech-lead"`, plugin wiring on `cfg.Orchestrator.Plugins.InstallDir != ""`, CLI runner unconditional with per-tool `cfg.Orchestrator.CLITools.<tool>.Enabled` gating — not approximated, not gated on `Enabled`.
+4. ~~`RulesTracker` precedent~~ — **Resolved, directly applicable.** `acp.go:136-137` already does exactly this pattern: `if len(cfg.Orchestrator.WorkDirs) > 0 { worker.WithRulesTracker(...) }`, its own doc comment stating it "mirrors team_manager.go's startBot exactly." This is a shipped precedent confirming the RQ2/RQ3 approach — ACP mode reading a specific persona-scoped `cfg.Orchestrator.*` field and gating on its own presence/value, never on `Enabled` — is the established, correct pattern in this codebase, not a new idea.
 
 ## Industry Standards
 
@@ -31,8 +35,7 @@
 
 ## Open Questions
 
-- RQ2 (config flag reuse vs. new flag) — the more consequential open question; affects both the PRD's Breaking Changes claim ("reuses existing config surface") and actual implementation shape. Must be resolved before task breakdown.
-- RQ1 (persistence path convention) — must be resolved before FR-402 implementation, low risk of surprising findings.
+None remaining — all four research questions resolved concretely above. spec.md's "reuses existing config surface" Breaking Changes claim needs a small correction: it's accurate in spirit (no new top-level flag) but should specify *which* existing granular fields (`Orchestrator.Plugins.InstallDir`, `Orchestrator.CLITools.*`, `Bot.Type`), not `orchestrator.enabled` as originally implied.
 
 ## References
 

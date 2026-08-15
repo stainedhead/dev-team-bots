@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.5.0...boabot/v0.6.0) (2026-08-15)
+
+
+### Features
+
+* ACP harness feature parity (chat_provider, board/plugin/CLI tools) ([67b1e72](https://github.com/stainedhead/dev-team-bots/commit/67b1e72a6d235e91802bb26870d4de8c3a977a5c))
+* **boabot:** wire chat provider, board/plugin/CLI tools into ACP mode (FR-401-405) ([3fcab64](https://github.com/stainedhead/dev-team-bots/commit/3fcab643787f95c7e3c63889d94674e3211f3d02))
+
+
+### Bug Fixes
+
+* **boabot:** make board.json safe under concurrent multi-process writes ([eba1ca7](https://github.com/stainedhead/dev-team-bots/commit/eba1ca785c3053b215e1aaf22fc2546bfa2e7ee9))
+* **boabot:** plugin e2e test now exercises the plugin-tool dispatch path; document per-persona board scope ([5808807](https://github.com/stainedhead/dev-team-bots/commit/58088070ef04b1f2d6e97fd647802be84614b958))
+* **boabot:** stop typed-nil ChannelMonitor from crash-looping the whole team ([4e203b0](https://github.com/stainedhead/dev-team-bots/commit/4e203b097744cf1a6ebf2cdaa8f07e19d26e9740))
+* **boabot:** stop typed-nil ChannelMonitor from crash-looping the whole team ([6f07c6d](https://github.com/stainedhead/dev-team-bots/commit/6f07c6dd265be90541cb7d9ba422346747639e97))
+
 ## [0.5.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.4.1...boabot/v0.5.0) (2026-08-15)
 
 

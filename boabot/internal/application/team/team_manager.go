@@ -154,8 +154,37 @@ type TeamManager struct {
 	// instead of main.go calling WithChannelMonitor directly.
 	buzzMonitorBuilder BuzzMonitorBuilder
 
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	wg sync.WaitGroup
+
+	// cancel and cancelMu guard Run's root-context CancelFunc: Run sets it
+	// once (after tm.cancel = cancel used to be an unsynchronized write) and
+	// Shutdown reads-then-calls it from a different goroutine -- a data race
+	// caught by the race detector (specs/260816-acp-native-shared-state/
+	// implementation-notes.md), pre-existing but previously rarely
+	// reproduced; this feature's sharedstate.EnsureOwner call added enough
+	// scheduling delay between goroutine launch and the write in Run to make
+	// it reliably reproducible under -race. A dedicated mutex, not tm's
+	// existing dynamicBotsMu -- unrelated field, no reason to couple them.
+	cancelMu sync.Mutex
+	cancel   context.CancelFunc
+}
+
+// setCancel stores fn as the Run-scoped cancel func under cancelMu.
+func (tm *TeamManager) setCancel(fn context.CancelFunc) {
+	tm.cancelMu.Lock()
+	tm.cancel = fn
+	tm.cancelMu.Unlock()
+}
+
+// callCancel invokes the Run-scoped cancel func, if one has been set, under
+// cancelMu -- safe to call concurrently with setCancel or itself.
+func (tm *TeamManager) callCancel() {
+	tm.cancelMu.Lock()
+	fn := tm.cancel
+	tm.cancelMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // BuzzMonitorBuilder constructs a per-persona Buzz domain.ChannelMonitor
@@ -574,7 +603,7 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	// Start each enabled bot in its own goroutine.
 	started := 0
 	runCtx, cancel := context.WithCancel(ctx)
-	tm.cancel = cancel
+	tm.setCancel(cancel)
 
 	for _, e := range teamCfg.Team {
 		if !e.Enabled {
@@ -616,9 +645,7 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 // goroutines to exit.  If the provided context is already cancelled it uses a
 // 30-second timeout.
 func (tm *TeamManager) Shutdown(ctx context.Context) error {
-	if tm.cancel != nil {
-		tm.cancel()
-	}
+	tm.callCancel()
 
 	// Broadcast shutdown to all bots so their poll loops unblock.
 	shutdownCtx := ctx

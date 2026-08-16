@@ -21,6 +21,13 @@ const (
 	// DirectTaskSourceChat so the UI and logs can trace multi-agent Buzz
 	// activity per-agent instead of lumping it in with web-UI chat.
 	DirectTaskSourceBuzz DirectTaskSource = "buzz"
+	// DirectTaskSourceACP means the task was triggered by a session/prompt
+	// call received through ACP mode (boabot -acp), typically relayed by
+	// buzz-acp. Kept distinct from DirectTaskSourceBuzz since ACP mode's
+	// single-persona, synchronous execution model records tasks directly
+	// (specs/260816-acp-native-shared-state/spec.md FR-504a), not via the
+	// same Dispatcher/queue path native mode's Buzz bridge uses.
+	DirectTaskSourceACP DirectTaskSource = "acp"
 )
 
 // DirectTask represents an out-of-band task assigned directly to a bot by an operator.

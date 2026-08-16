@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
+	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
 )
 
@@ -76,6 +77,37 @@ type Agent struct {
 	// itself to publish it.
 	publisher Publisher
 
+	// botName tags every DirectTask this Agent records (FR-504a) and is
+	// used for FR-503's ChatMessage.BotName field. Empty is safe -- both
+	// simply record an empty botName, matching pre-feature behavior for a
+	// persona that hasn't opted in.
+	botName string
+
+	// chatStore, when set, backs FR-503's conversation continuity: every
+	// turn's inbound/outbound message is appended to it, and each new
+	// turn's instruction is built by replaying recent history for the same
+	// thread -- mirroring BuzzTaskBridge's identical ChatStore usage in
+	// native mode. nil disables history replay entirely (pre-feature
+	// behavior).
+	chatStore domain.ChatStore
+
+	// taskStore and board, when both set, back FR-504a: every ACP-dispatched
+	// task is recorded as a real DirectTask and Kanban board item, updated
+	// to its final status/output when the turn completes. Either being nil
+	// disables this recording entirely (pre-feature behavior) -- a board
+	// item with no backing DirectTask, or vice versa, would be a broken
+	// half-write, so both must be present together.
+	taskStore domain.DirectTaskStore
+	board     domain.BoardStore
+
+	// chatTaskManager, when set, backs FR-504's scheduling-intent pre-check:
+	// DetectAndHandle runs on every turn's raw instruction before the
+	// existing synchronous worker.Execute path, exactly mirroring
+	// BuzzTaskBridge.Dispatch's identical use in native mode. nil disables
+	// scheduling detection entirely -- every message falls through to
+	// worker.Execute unchanged (pre-feature behavior).
+	chatTaskManager *apporchestrator.ChatTaskManager
+
 	mu           sync.Mutex
 	sessions     map[sdk.SessionId]*session
 	sessionOrder []sdk.SessionId // insertion order, for FIFO eviction once maxSessions is exceeded
@@ -105,6 +137,36 @@ func WithMaxSessions(n int) Option {
 // mechanism if it ever needs to.
 func WithPublisher(p Publisher) Option {
 	return func(a *Agent) { a.publisher = p }
+}
+
+// WithBotName sets the persona identity tagged onto every DirectTask/
+// ChatMessage this Agent records (FR-503/FR-504a). Unset (empty) is safe --
+// records are simply tagged with an empty name.
+func WithBotName(name string) Option {
+	return func(a *Agent) { a.botName = name }
+}
+
+// WithChatStore enables FR-503's conversation-continuity history replay.
+// Unset (nil, the default) disables it entirely -- pre-feature behavior.
+func WithChatStore(cs domain.ChatStore) Option {
+	return func(a *Agent) { a.chatStore = cs }
+}
+
+// WithDirectTaskStore and WithBoardStore together enable FR-504a's
+// automatic per-turn DirectTask/board-item recording. Both must be set for
+// recording to activate -- see the Agent.taskStore/board field doc comment.
+func WithDirectTaskStore(ts domain.DirectTaskStore) Option {
+	return func(a *Agent) { a.taskStore = ts }
+}
+
+func WithBoardStore(b domain.BoardStore) Option {
+	return func(a *Agent) { a.board = b }
+}
+
+// WithChatTaskManager enables FR-504's scheduling-intent pre-check. Unset
+// (nil, the default) disables it entirely -- pre-feature behavior.
+func WithChatTaskManager(m *apporchestrator.ChatTaskManager) Option {
+	return func(a *Agent) { a.chatTaskManager = m }
 }
 
 // New constructs an Agent backed by the Worker workerFactory.New() returns.

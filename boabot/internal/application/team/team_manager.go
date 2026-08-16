@@ -36,6 +36,7 @@ import (
 	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/sharedstate"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
@@ -444,6 +445,20 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	// Persist the chat store under the orchestrator's memory directory.
 	orchestratorMemPath := filepath.Join(tm.cfg.MemoryRoot, orchestratorName)
 	_ = os.MkdirAll(orchestratorMemPath, 0o755)
+
+	// FR-501 (specs/260816-acp-native-shared-state/spec.md): claim/check
+	// this directory's shared-state marker so an ACP-mode process later
+	// resolving the same path under a different persona identity gets a
+	// loud warning instead of silently sharing state under a mismatched
+	// name. See sharedstate.EnsureOwner's doc comment for what this can and
+	// cannot detect.
+	if matched, ownerErr := sharedstate.EnsureOwner(orchestratorMemPath, orchestratorName); ownerErr != nil {
+		slog.Warn("shared-state owner check failed", "path", orchestratorMemPath, "err", ownerErr)
+	} else if !matched {
+		slog.Warn("shared-state directory already claimed by a different identity; state may not be shared as expected",
+			"orchestrator", orchestratorName, "path", orchestratorMemPath)
+	}
+
 	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
 	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore(filepath.Join(orchestratorMemPath, "tasks.json"))
 	sharedBoard := orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))

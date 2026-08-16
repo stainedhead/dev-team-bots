@@ -274,3 +274,44 @@ models:
 		t.Fatal("expected an error for an unresolvable default provider, got nil")
 	}
 }
+
+// TestBuildACPAgent_SharedStateOwnerMismatch_DegradesGracefully verifies
+// FR-501's NFR-Reliability requirement end-to-end: a shared-state directory
+// already claimed by a different identity (e.g. because this persona was
+// renamed, or its memory.path was misconfigured to collide with another
+// persona's directory) must log a warning, not block agent construction --
+// mirroring the existing degrade-gracefully pattern for board/plugin store
+// construction failures (buildACPMCPOptions).
+func TestBuildACPAgent_SharedStateOwnerMismatch_DegradesGracefully(t *testing.T) {
+	memRoot := t.TempDir()
+	memPath := filepath.Join(memRoot, "test-bot")
+	if err := os.MkdirAll(memPath, 0o755); err != nil {
+		t.Fatalf("mkdir memPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memPath, ".shared-state-owner"), []byte(`{"owner":"a-different-persona"}`), 0o644); err != nil {
+		t.Fatalf("seed shared-state marker: %v", err)
+	}
+
+	configPath := writeACPTestPersona(t, fmt.Sprintf(`
+bot:
+  name: test-bot
+  type: test-bot
+memory:
+  path: %s
+models:
+  default: test-provider
+  providers:
+    - name: test-provider
+      type: anthropic
+      model_id: claude-x
+`, memRoot))
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	agent, err := buildACPAgent(configPath)
+	if err != nil {
+		t.Fatalf("buildACPAgent should degrade gracefully on a shared-state owner mismatch, got error: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("buildACPAgent returned a nil Agent with no error")
+	}
+}

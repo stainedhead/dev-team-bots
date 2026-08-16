@@ -21,6 +21,7 @@ import (
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/sharedstate"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 )
 
@@ -104,6 +105,23 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 		memRoot = filepath.Join(filepath.Dir(exe), "memory")
 	}
 	memPath := filepath.Join(memRoot, cfg.Bot.Name)
+
+	// FR-501 (spec.md): memPath is the directory native mode's TeamManager
+	// may also be writing board.json/chat.json/tasks.json to, if this
+	// persona's name matches the team's orchestrator entry and cfg.Memory.Path
+	// was set to native mode's shared memory root. There is no channel for
+	// this process to compare configuration with native mode directly (it
+	// may not even be running) -- EnsureOwner instead validates what is
+	// checkable purely from the directory itself: whether it was already
+	// claimed by a different identity (e.g. a renamed persona reusing an old
+	// directory). A mismatch degrades gracefully (NFR-Reliability): logged,
+	// does not block startup.
+	if matched, ownerErr := sharedstate.EnsureOwner(memPath, cfg.Bot.Name); ownerErr != nil {
+		slog.Warn("acp mode: shared-state owner check failed", "bot", cfg.Bot.Name, "path", memPath, "err", ownerErr)
+	} else if !matched {
+		slog.Warn("acp mode: shared-state directory already claimed by a different identity; state may not be shared as expected",
+			"bot", cfg.Bot.Name, "path", memPath)
+	}
 
 	memStore, err := fs.New(memPath)
 	if err != nil {

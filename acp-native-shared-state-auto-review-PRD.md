@@ -51,6 +51,8 @@ No P0 (blocker) or P1 (high) findings.
 
 ## Guidance for Implementing Fixes (Step 9)
 
-- Both findings are optional hardening, not defects — apply via TDD (failing test first) if implemented, same as every other change in this feature.
+- **TDD is mandatory for any fix implemented from this PRD**, no exceptions for "small" or "optional" findings: write the failing test first (e.g. for FR-R2, a test asserting a malformed marker logs a distinct warning before being overwritten), confirm it's genuinely red, then implement.
+- **Conduct a brief code and design review as each fix completes**, before moving to the next — don't batch both findings into one unreviewed change.
+- Both findings are optional hardening, not defects — apply via TDD if implemented.
 - No P0 items exist, so this PRD does not block the branch from proceeding to Step 11 (Final Quality Pass) even without further fixes; implementing FR-R2's logging improvement is recommended (small, low-risk) but not required.
-- No git worktree or agent-teammate parallelization is needed for a fix set this small — a single sequential pass covers both findings.
+- **Agent teammates / git worktrees:** not needed for a fix set this small (two independent, low-risk P2 items with no shared files beyond `sharedstate.go`) — a single sequential pass covers both findings faster than the coordination overhead of parallelizing them. If future review PRDs from this pipeline carry multiple P0/P1 items touching disjoint files, use worker agent teammates in separate git worktrees per the standard dev-flow pattern.

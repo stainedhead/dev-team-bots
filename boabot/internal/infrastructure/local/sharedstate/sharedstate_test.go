@@ -1,13 +1,28 @@
 package sharedstate_test
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/sharedstate"
 )
+
+// captureLogs swaps slog's default logger for the duration of the test,
+// returning a function that yields everything logged so far. Restores the
+// prior default logger on test cleanup.
+func captureLogs(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf.String
+}
 
 // TestEnsureOwner_FirstCall_ClaimsDirectoryAndReturnsMatched verifies that
 // the first process to resolve a shared-state directory (e.g. the orchestrator
@@ -111,5 +126,50 @@ func TestEnsureOwner_ConcurrentFirstClaims_OneWinnerNoCorruption(t *testing.T) {
 	}
 	if matchedA == matchedB {
 		t.Fatalf("expected exactly one identity to have won the race, got matchedA=%v matchedB=%v", matchedA, matchedB)
+	}
+}
+
+// TestEnsureOwner_MalformedMarker_LogsDistinctWarningAndReclaims is
+// FR-R2's regression test (acp-native-shared-state-auto-review-PRD.md): a
+// marker file that exists but fails to parse (or has an empty owner) is
+// still tolerated as "unclaimed" and overwritten -- mirroring board.go's
+// "malformed = empty" convention -- but must log a warning distinct from
+// the identity-mismatch case, so an operator has a trail if this ever
+// happens in practice (e.g. a torn write from a crash mid-publish).
+func TestEnsureOwner_MalformedMarker_LogsDistinctWarningAndReclaims(t *testing.T) {
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, sharedstate.MarkerFileName)
+	if err := os.WriteFile(markerPath, []byte("not valid json"), 0o644); err != nil {
+		t.Fatalf("seed malformed marker: %v", err)
+	}
+
+	logs := captureLogs(t)
+	matched, err := sharedstate.EnsureOwner(dir, "orchestrator")
+	if err != nil {
+		t.Fatalf("EnsureOwner: %v", err)
+	}
+	if !matched {
+		t.Fatalf("expected a malformed marker to be tolerated as unclaimed and reclaimed, got matched=false")
+	}
+	if !strings.Contains(logs(), "malformed") {
+		t.Errorf("expected a warning mentioning the malformed marker, got logs: %q", logs())
+	}
+	if strings.Contains(logs(), "already claimed by a different identity") {
+		t.Errorf("malformed-marker warning must be distinct from the identity-mismatch warning, got logs: %q", logs())
+	}
+}
+
+// TestEnsureOwner_FirstClaim_LogsNothing guards FR-R2's negative case: the
+// normal "no marker exists yet" path must not log anything new -- only a
+// marker that exists but fails to parse should.
+func TestEnsureOwner_FirstClaim_LogsNothing(t *testing.T) {
+	dir := t.TempDir()
+
+	logs := captureLogs(t)
+	if _, err := sharedstate.EnsureOwner(dir, "orchestrator"); err != nil {
+		t.Fatalf("EnsureOwner: %v", err)
+	}
+	if got := logs(); got != "" {
+		t.Errorf("expected no log output for a normal first claim, got: %q", got)
 	}
 }

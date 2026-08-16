@@ -20,6 +20,7 @@ package sharedstate
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -64,12 +65,19 @@ func EnsureOwner(dir, identity string) (bool, error) {
 	data, readErr := os.ReadFile(markerPath)
 	if readErr == nil {
 		var state markerState
-		if unmarshalErr := json.Unmarshal(data, &state); unmarshalErr == nil && state.Owner != "" {
+		unmarshalErr := json.Unmarshal(data, &state)
+		if unmarshalErr == nil && state.Owner != "" {
 			return state.Owner == identity, nil
 		}
 		// Malformed marker content: treat as unclaimed and overwrite below,
 		// mirroring the other shared-state stores' "malformed = empty"
-		// tolerance (board.go's readDiskItems doc comment).
+		// tolerance (board.go's readDiskItems doc comment) -- but log it,
+		// distinct from the identity-mismatch warning below, since an
+		// unexpectedly malformed marker (e.g. a torn write from a crash
+		// mid-publish) is worth an operator's attention even though it's
+		// tolerated rather than treated as fatal.
+		slog.Warn("sharedstate: malformed owner marker encountered; treating directory as unclaimed and reclaiming it",
+			"path", markerPath, "unmarshal_err", unmarshalErr)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {

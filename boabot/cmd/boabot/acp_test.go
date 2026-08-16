@@ -79,7 +79,7 @@ models:
 `)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
-	agent, err := buildACPAgent(configPath)
+	agent, _, err := buildACPAgent(configPath)
 	if err != nil {
 		t.Fatalf("buildACPAgent returned error: %v", err)
 	}
@@ -107,7 +107,7 @@ models:
 `)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
-	agent, err := buildACPAgent(configPath)
+	agent, _, err := buildACPAgent(configPath)
 	if err != nil {
 		t.Fatalf("buildACPAgent returned error: %v", err)
 	}
@@ -133,7 +133,7 @@ models:
 		t.Fatalf("write config.yaml: %v", err)
 	}
 
-	if _, err := buildACPAgent(configPath); err == nil {
+	if _, _, err := buildACPAgent(configPath); err == nil {
 		t.Fatal("expected an error when SOUL.md is missing, got nil")
 	}
 }
@@ -153,7 +153,7 @@ models:
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	t.Setenv("BOABOT_ACP_KEEPALIVE_INTERVAL", "not-a-duration")
 
-	if _, err := buildACPAgent(configPath); err == nil {
+	if _, _, err := buildACPAgent(configPath); err == nil {
 		t.Fatal("expected an error for an invalid BOABOT_ACP_KEEPALIVE_INTERVAL, got nil")
 	}
 }
@@ -186,7 +186,7 @@ func TestBuildACPWorker_ChatProviderUsedForACPSource(t *testing.T) {
 		Models: config.ModelsConfig{Default: "default", ChatProvider: "chat"},
 	}
 
-	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
 		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-1", Source: "acp", Instruction: "hello"})
@@ -218,7 +218,7 @@ func TestBuildACPWorker_ChatProviderUnresolvable_FallsBackToDefault(t *testing.T
 		Models: config.ModelsConfig{Default: "default", ChatProvider: "does-not-exist"},
 	}
 
-	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
 		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-2", Source: "acp", Instruction: "hello"})
@@ -248,7 +248,7 @@ func TestBuildACPWorker_NoChatProvider_UsesDefault(t *testing.T) {
 		Models: config.ModelsConfig{Default: "default"},
 	}
 
-	worker := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
+	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
 		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-3", Source: "acp", Instruction: "hello"})
@@ -270,7 +270,7 @@ models:
   providers: []
 `)
 
-	if _, err := buildACPAgent(configPath); err == nil {
+	if _, _, err := buildACPAgent(configPath); err == nil {
 		t.Fatal("expected an error for an unresolvable default provider, got nil")
 	}
 }
@@ -307,7 +307,7 @@ models:
 `, memRoot))
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
-	agent, err := buildACPAgent(configPath)
+	agent, _, err := buildACPAgent(configPath)
 	if err != nil {
 		t.Fatalf("buildACPAgent should degrade gracefully on a shared-state owner mismatch, got error: %v", err)
 	}

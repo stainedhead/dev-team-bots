@@ -36,7 +36,7 @@ const boardItemTitleMaxLen = 80
 //     as a synchronous pre-check on the raw instruction -- a scheduling
 //     confirmation short-circuits the turn without ever calling
 //     worker.Execute, exactly mirroring BuzzTaskBridge.Dispatch's identical
-//     use of the same ChatTaskManager. See noImmediateDispatchQueue (dispatch.go)
+//     use of the same ChatTaskManager. See NoImmediateDispatchQueue (dispatch.go)
 //     for why this pre-check cannot resolve to an ASAP/immediate schedule.
 //   - FR-504a: if taskStore and board are both set, every turn that reaches
 //     worker.Execute records a real DirectTask and Kanban board item,

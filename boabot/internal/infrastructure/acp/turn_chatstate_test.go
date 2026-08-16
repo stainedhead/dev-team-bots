@@ -21,7 +21,7 @@ func newChatStateAgent(t *testing.T, worker domain.Worker) (a *Agent, chatStore 
 	chatStore = orchestratorlocal.NewInMemoryChatStore("")
 	taskStore = orchestratorlocal.NewInMemoryDirectTaskStore("")
 	board = orchestratorlocal.NewInMemoryBoardStore("")
-	dispatcher := orchestratorlocal.NewLocalTaskDispatcher(taskStore, noImmediateDispatchQueue{}, "test-bot")
+	dispatcher := orchestratorlocal.NewLocalTaskDispatcher(taskStore, NoImmediateDispatchQueue{}, "test-bot")
 	chatTaskManager := apporchestrator.NewChatTaskManager(dispatcher)
 
 	a = New(&fakeWorkerFactory{worker: worker}, "/work",
@@ -180,7 +180,7 @@ func TestAgent_Prompt_SchedulingConfirmation_CreatesRecurringTask(t *testing.T) 
 // message queue for delegation -- a multi-bot concept ACP mode does not
 // have (architecture.md AD-1/AD-2, this feature's Non-Goals). The turn must
 // still end normally with a clear reply, not a hard failure -- see
-// noImmediateDispatchQueue. LocalTaskDispatcher.DispatchWithSchedule
+// NoImmediateDispatchQueue. LocalTaskDispatcher.DispatchWithSchedule
 // persists the DirectTask before attempting delivery (task_dispatcher.go),
 // so the record survives marked Failed -- correct, honest observability
 // (an operator sees why it didn't run), not nothing at all.

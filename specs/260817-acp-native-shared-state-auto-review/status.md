@@ -8,11 +8,11 @@
 |---|---|---|
 | 0 | Initial Research (Review PRD) | ✅ Complete |
 | 1 | Specification (spec.md) | ✅ Complete |
-| 2 | Research & Data Modeling | ⬜ Not Started |
-| 3 | Architecture & Planning | ⬜ Not Started |
-| 4 | Task Breakdown | ⬜ Not Started |
-| 5 | Implementation | ⬜ Not Started |
-| 6 | Completion & Archival | ⬜ Not Started |
+| 2 | Research & Data Modeling | ✅ Complete |
+| 3 | Architecture & Planning | ✅ Complete |
+| 4 | Task Breakdown | ✅ Complete |
+| 5 | Implementation | ✅ Complete |
+| 6 | Completion & Archival | 🔄 In Progress |
 
 ## Phase 0 Task Checklist
 
@@ -27,3 +27,4 @@ None.
 ## Recent Activity
 
 - 2026-08-17: Spec directory created from `acp-native-shared-state-auto-review-PRD.md`.
+- 2026-08-17: Both findings implemented via TDD (FR-R2 confirmed genuinely red before the fix). Full module test suite green under `-race`, `golangci-lint` clean. Commit `a131fe6`.

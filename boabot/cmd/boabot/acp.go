@@ -21,7 +21,11 @@ import (
 	orchestratorlocal "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/orchestrator"
 	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/sharedstate"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
+
+	apporchestrator "github.com/stainedhead/dev-team-bots/boabot/internal/application/orchestrator"
 )
 
 // singleWorkerFactory adapts one already-constructed domain.Worker to
@@ -61,9 +65,27 @@ func resolveACPConfigPath(configExplicit bool, configPath, botsDir, agent string
 // boabot-team/bots/<type>/config.yaml shape native daemon mode uses -- FR-004)
 // and serves it as an ACP agent over stdio until the peer disconnects.
 func runACP(ctx context.Context, configPath string) error {
-	agent, err := buildACPAgent(configPath)
+	agent, cfg, err := buildACPAgent(configPath)
 	if err != nil {
 		return fmt.Errorf("build acp agent: %w", err)
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// FR-505 (spec.md): mirrors team_manager.go's identical gate and
+	// shutdown-via-cancel wiring -- ACP mode gets the same graceful
+	// heap-limit shutdown native-mode bots already have. cancel here stops
+	// this function's own select below, which returns nil (no
+	// heap-hard-limit-specific error path) -- matching native mode's own
+	// watchdog, which triggers ordinary shutdown, not a distinguished error.
+	if cfg.Memory.HeapWarnMB > 0 || cfg.Memory.HeapHardMB > 0 {
+		wd := watchdog.New(watchdog.Config{WarnMB: cfg.Memory.HeapWarnMB, HardMB: cfg.Memory.HeapHardMB}, cancel)
+		go wd.Run(runCtx)
+		slog.Info("acp mode: heap watchdog activated", "bot", cfg.Bot.Name,
+			"warn_mb", cfg.Memory.HeapWarnMB, "hard_mb", cfg.Memory.HeapHardMB)
+	} else {
+		slog.Info("acp mode: heap watchdog not activated (heap_warn_mb/heap_hard_mb not set)", "bot", cfg.Bot.Name)
 	}
 
 	conn := sdk.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
@@ -72,7 +94,7 @@ func runACP(ctx context.Context, configPath string) error {
 
 	select {
 	case <-conn.Done():
-	case <-ctx.Done():
+	case <-runCtx.Done():
 	}
 	return nil
 }
@@ -83,10 +105,10 @@ func runACP(ctx context.Context, configPath string) error {
 // filesystem memory/vector stores, and the local filesystem MCP client --
 // without going through team.yaml or TeamManager at all, since ACP mode
 // has no multi-bot orchestration to coordinate (architecture.md).
-func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
+func buildACPAgent(configPath string) (*acpinfra.Agent, config.Config, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("load config %q: %w", configPath, err)
+		return nil, config.Config{}, fmt.Errorf("load config %q: %w", configPath, err)
 	}
 
 	// SOUL.md lives alongside this persona's own config.yaml -- e.g.
@@ -95,7 +117,7 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 	soulPath := filepath.Join(filepath.Dir(configPath), "SOUL.md")
 	soulBytes, err := os.ReadFile(soulPath)
 	if err != nil {
-		return nil, fmt.Errorf("read SOUL.md for %q: %w", cfg.Bot.Name, err)
+		return nil, config.Config{}, fmt.Errorf("read SOUL.md for %q: %w", cfg.Bot.Name, err)
 	}
 
 	memRoot := cfg.Memory.Path
@@ -105,24 +127,75 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 	}
 	memPath := filepath.Join(memRoot, cfg.Bot.Name)
 
+	// FR-501 (spec.md): memPath is the directory native mode's TeamManager
+	// may also be writing board.json/chat.json/tasks.json to, if this
+	// persona's name matches the team's orchestrator entry and cfg.Memory.Path
+	// was set to native mode's shared memory root. There is no channel for
+	// this process to compare configuration with native mode directly (it
+	// may not even be running) -- EnsureOwner instead validates what is
+	// checkable purely from the directory itself: whether it was already
+	// claimed by a different identity (e.g. a renamed persona reusing an old
+	// directory). A mismatch degrades gracefully (NFR-Reliability): logged,
+	// does not block startup.
+	if matched, ownerErr := sharedstate.EnsureOwner(memPath, cfg.Bot.Name); ownerErr != nil {
+		slog.Warn("acp mode: shared-state owner check failed", "bot", cfg.Bot.Name, "path", memPath, "err", ownerErr)
+	} else if !matched {
+		slog.Warn("acp mode: shared-state directory already claimed by a different identity; state may not be shared as expected",
+			"bot", cfg.Bot.Name, "path", memPath)
+	}
+
 	memStore, err := fs.New(memPath)
 	if err != nil {
-		return nil, fmt.Errorf("create memory store for %q: %w", cfg.Bot.Name, err)
+		return nil, config.Config{}, fmt.Errorf("create memory store for %q: %w", cfg.Bot.Name, err)
 	}
 	vecStore, err := vector.New(memPath)
 	if err != nil {
-		return nil, fmt.Errorf("create vector store for %q: %w", cfg.Bot.Name, err)
+		return nil, config.Config{}, fmt.Errorf("create vector store for %q: %w", cfg.Bot.Name, err)
 	}
 
 	pf := team.NewLocalProviderFactory(cfg.Models.Providers)
 	provider, err := pf.Get(cfg.Models.Default)
 	if err != nil {
-		return nil, fmt.Errorf("get provider %q for %q: %w", cfg.Models.Default, cfg.Bot.Name, err)
+		return nil, config.Config{}, fmt.Errorf("get provider %q for %q: %w", cfg.Models.Default, cfg.Bot.Name, err)
 	}
 
 	embedder := domain.Embedder(bm25.DefaultEmbedder())
 
-	worker := buildACPWorker(cfg, memPath, string(soulBytes), pf, provider, memStore, embedder, vecStore)
+	// FR-503 (chat), FR-504/504a (tasks/scheduling): same tech-lead gate
+	// buildACPMCPOptions uses for the board store (its own doc comment) --
+	// board/chat/task/scheduling activate together, not independently,
+	// since FR-504a's per-turn recording needs all three plus the
+	// ChatTaskManager. The board *instance* itself is constructed inside
+	// buildACPWorker/buildACPMCPOptions (unchanged from the prior ACP-parity
+	// feature, preserving buildACPMCPOptions' own direct unit tests) and
+	// returned here so the Agent's own WithBoardStore option (below) shares
+	// the identical instance the MCP tool surface uses -- two separate
+	// instances over the same board.json wouldn't corrupt the file
+	// (persist() merges by ID), but each would carry a stale in-memory view
+	// of the other's writes, so a board read via the MCP tool surface could
+	// miss turn.go's own automatic DirectTask/board-item recording.
+	var chatStore domain.ChatStore
+	var taskStore domain.DirectTaskStore
+	var chatTaskManager *apporchestrator.ChatTaskManager
+	if cfg.Bot.BotType != "tech-lead" {
+		chatPath := filepath.Join(memPath, "chat.json")
+		chatStore = orchestratorlocal.NewInMemoryChatStore(chatPath)
+
+		tasksPath := filepath.Join(memPath, "tasks.json")
+		ts := orchestratorlocal.NewInMemoryDirectTaskStore(tasksPath)
+		taskStore = ts
+
+		dispatcher := orchestratorlocal.NewLocalTaskDispatcher(ts, acpinfra.NoImmediateDispatchQueue{}, cfg.Bot.Name)
+		chatTaskManager = apporchestrator.NewChatTaskManager(dispatcher)
+
+		slog.Info("acp mode: chat store activated", "bot", cfg.Bot.Name, "path", chatPath)
+		slog.Info("acp mode: direct task store activated", "bot", cfg.Bot.Name, "path", tasksPath)
+		slog.Info("acp mode: scheduling detection activated", "bot", cfg.Bot.Name)
+	} else {
+		slog.Info("acp mode: chat/task store and scheduling detection not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
+	}
+
+	worker, board := buildACPWorker(cfg, memPath, string(soulBytes), pf, provider, memStore, embedder, vecStore)
 
 	// Mirrors team_manager.go's startBot exactly (RT3/FR-004, auto-review):
 	// native mode wires a RulesTracker under this identical condition so the
@@ -138,16 +211,27 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, error) {
 		worker.WithRulesTracker(localrules.NewTracker(cfg.Orchestrator.WorkDirs))
 	}
 
-	var opts []acpinfra.Option
+	opts := []acpinfra.Option{
+		acpinfra.WithBotName(cfg.Bot.Name),
+	}
+	if chatStore != nil {
+		opts = append(opts, acpinfra.WithChatStore(chatStore))
+	}
+	if taskStore != nil && board != nil {
+		opts = append(opts, acpinfra.WithDirectTaskStore(taskStore), acpinfra.WithBoardStore(board))
+	}
+	if chatTaskManager != nil {
+		opts = append(opts, acpinfra.WithChatTaskManager(chatTaskManager))
+	}
 	if raw := os.Getenv("BOABOT_ACP_KEEPALIVE_INTERVAL"); raw != "" {
 		d, parseErr := time.ParseDuration(raw)
 		if parseErr != nil {
-			return nil, fmt.Errorf("invalid BOABOT_ACP_KEEPALIVE_INTERVAL %q: %w", raw, parseErr)
+			return nil, config.Config{}, fmt.Errorf("invalid BOABOT_ACP_KEEPALIVE_INTERVAL %q: %w", raw, parseErr)
 		}
 		opts = append(opts, acpinfra.WithKeepAliveInterval(d))
 	}
 
-	return acpinfra.New(singleWorkerFactory{w: worker}, "", opts...), nil
+	return acpinfra.New(singleWorkerFactory{w: worker}, "", opts...), cfg, nil
 }
 
 // buildACPWorker constructs the *application.ExecuteTaskUseCase buildACPAgent
@@ -169,8 +253,8 @@ func buildACPWorker(
 	memStore domain.MemoryStore,
 	embedder domain.Embedder,
 	vecStore domain.VectorStore,
-) *application.ExecuteTaskUseCase {
-	mcpOpts := buildACPMCPOptions(cfg, memPath)
+) (*application.ExecuteTaskUseCase, domain.BoardStore) {
+	mcpOpts, board := buildACPMCPOptions(cfg, memPath)
 	mcpClient := localmcp.NewClient(cfg.Orchestrator.WorkDirs, mcpOpts...)
 
 	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, soulPrompt)
@@ -194,7 +278,7 @@ func buildACPWorker(
 		}
 	}
 
-	return worker
+	return worker, board
 }
 
 // buildACPMCPOptions constructs the functional options for ACP mode's local
@@ -211,8 +295,13 @@ func buildACPWorker(
 // surface. Startup logs state clearly whether each tool surface activated
 // for this persona (NFR-Observability), mirroring how Buzz monitor
 // activation is already logged in main.go.
-func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Client) {
+// buildACPMCPOptions also returns the constructed domain.BoardStore (nil if
+// the tech-lead gate skipped it), so buildACPAgent can share the identical
+// instance for the Agent's own automatic per-turn recording (FR-504a) --
+// see buildACPWorker's doc comment for why one shared instance matters.
+func buildACPMCPOptions(cfg config.Config, memPath string) ([]func(*localmcp.Client), domain.BoardStore) {
 	var opts []func(*localmcp.Client)
+	var board domain.BoardStore
 
 	// Board store (FR-402/403): equivalent to team_manager.go:1023's
 	// persona-type gate by convention, not by construction -- team_manager.go
@@ -229,7 +318,9 @@ func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Clie
 	// so there is nothing to log-and-skip here beyond activation.
 	if cfg.Bot.BotType != "tech-lead" {
 		boardPath := filepath.Join(memPath, "board.json")
-		opts = append(opts, localmcp.WithBoardStore(orchestratorlocal.NewInMemoryBoardStore(boardPath)))
+		b := orchestratorlocal.NewInMemoryBoardStore(boardPath)
+		board = b
+		opts = append(opts, localmcp.WithBoardStore(b))
 		slog.Info("acp mode: board store activated", "bot", cfg.Bot.Name, "path", boardPath)
 	} else {
 		slog.Info("acp mode: board store not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
@@ -278,5 +369,5 @@ func buildACPMCPOptions(cfg config.Config, memPath string) []func(*localmcp.Clie
 		"openai_codex_enabled", cfg.Orchestrator.CLITools.OpenAICodex.Enabled,
 		"opencode_enabled", cfg.Orchestrator.CLITools.OpenCode.Enabled)
 
-	return opts
+	return opts, board
 }

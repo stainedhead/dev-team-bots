@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/domain"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/filelock"
 )
 
 // chatStoreState is the JSON-serialisable state persisted to disk.
@@ -60,32 +61,104 @@ func (s *InMemoryChatStore) loadFromDisk() {
 	}
 }
 
-// persist writes current state to disk atomically (write to .tmp then rename).
-// The caller must hold the write lock.
-func (s *InMemoryChatStore) persist() {
-	if s.persistPath == "" {
-		return
-	}
-	threads := make([]domain.ChatThread, 0, len(s.threads))
-	for _, t := range s.threads {
-		threads = append(threads, t)
-	}
+// readDiskChatState reads and decodes path's current on-disk chat state. A
+// missing file or malformed content is treated as "empty state", not an
+// error -- callers persisting for the first time, or racing a concurrent
+// writer's own in-progress first write, must not fail.
+func readDiskChatState(path string) chatStoreState {
 	state := chatStoreState{
-		Threads:  threads,
-		Messages: s.messages,
+		Threads:  make([]domain.ChatThread, 0),
+		Messages: make([]domain.ChatMessage, 0),
 	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return state
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return chatStoreState{
+			Threads:  make([]domain.ChatThread, 0),
+			Messages: make([]domain.ChatMessage, 0),
+		}
+	}
+	return state
+}
+
+// writeChatStateAtomically marshals state and atomically publishes it under
+// path via a same-directory-temp-file-then-rename sequence.
+func writeChatStateAtomically(path string, state chatStoreState) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return
 	}
-	tmp := s.persistPath + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.persistPath), 0o755); err != nil {
+	tmp := path + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}
-	_ = os.Rename(tmp, s.persistPath)
+	_ = os.Rename(tmp, path)
+}
+
+// persist writes this process's just-made mutation to persistPath so it
+// survives alongside any other process's concurrently-persisted state,
+// mirroring InMemoryBoardStore.persist()'s fix (board.go): it acquires a
+// cross-process file lock at persistPath+".lock" (waiting its turn rather
+// than failing fast), re-reads the current on-disk state immediately before
+// writing, and merges it with this call's own touched thread(s)/message(s)
+// by ID -- every other on-disk thread/message (written by another process,
+// e.g. native mode and an ACP-mode process sharing chat.json under FR-502's
+// shared-state root) passes through untouched. The caller must hold the
+// write lock.
+func (s *InMemoryChatStore) persist(threadUpsert []domain.ChatThread, threadDeleteIDs []string, msgUpsert []domain.ChatMessage, msgDeleteIDs []string) {
+	if s.persistPath == "" {
+		return
+	}
+
+	lockPath := s.persistPath + ".lock"
+	lock, err := filelock.AcquireWait(lockPath, persistLockTimeout)
+	if err != nil {
+		return
+	}
+	defer func() { _ = lock.Release() }()
+
+	disk := readDiskChatState(s.persistPath)
+
+	threads := make(map[string]domain.ChatThread, len(disk.Threads))
+	for _, t := range disk.Threads {
+		threads[t.ID] = t
+	}
+	for _, t := range threadUpsert {
+		threads[t.ID] = t
+	}
+	for _, id := range threadDeleteIDs {
+		delete(threads, id)
+	}
+
+	messages := make(map[string]domain.ChatMessage, len(disk.Messages))
+	for _, m := range disk.Messages {
+		messages[m.ID] = m
+	}
+	for _, m := range msgUpsert {
+		messages[m.ID] = m
+	}
+	for _, id := range msgDeleteIDs {
+		delete(messages, id)
+	}
+
+	mergedThreads := make([]domain.ChatThread, 0, len(threads))
+	for _, t := range threads {
+		mergedThreads = append(mergedThreads, t)
+	}
+	mergedMessages := make([]domain.ChatMessage, 0, len(messages))
+	for _, m := range messages {
+		mergedMessages = append(mergedMessages, m)
+	}
+
+	writeChatStateAtomically(s.persistPath, chatStoreState{
+		Threads:  mergedThreads,
+		Messages: mergedMessages,
+	})
 }
 
 // ── Thread lifecycle ──────────────────────────────────────────────────────────
@@ -106,7 +179,7 @@ func (s *InMemoryChatStore) CreateThread(_ context.Context, title string, partic
 	}
 	s.mu.Lock()
 	s.threads[id] = t
-	s.persist()
+	s.persist([]domain.ChatThread{t}, nil, nil, nil)
 	s.mu.Unlock()
 	return t, nil
 }
@@ -133,14 +206,17 @@ func (s *InMemoryChatStore) DeleteThread(_ context.Context, threadID string) err
 
 	delete(s.threads, threadID)
 
+	deletedIDs := make([]string, 0)
 	filtered := s.messages[:0]
 	for _, m := range s.messages {
 		if m.ThreadID != threadID {
 			filtered = append(filtered, m)
+		} else {
+			deletedIDs = append(deletedIDs, m.ID)
 		}
 	}
 	s.messages = filtered
-	s.persist()
+	s.persist(nil, []string{threadID}, nil, deletedIDs)
 	return nil
 }
 
@@ -165,14 +241,16 @@ func (s *InMemoryChatStore) Append(_ context.Context, msg domain.ChatMessage) er
 	s.messages = append(s.messages, msg)
 
 	// Update the parent thread's UpdatedAt.
+	var threadUpsert []domain.ChatThread
 	if msg.ThreadID != "" {
 		if t, ok := s.threads[msg.ThreadID]; ok {
 			t.UpdatedAt = msg.CreatedAt
 			s.threads[msg.ThreadID] = t
+			threadUpsert = []domain.ChatThread{t}
 		}
 	}
 
-	s.persist()
+	s.persist(threadUpsert, nil, []domain.ChatMessage{msg}, nil)
 	s.mu.Unlock()
 	return nil
 }

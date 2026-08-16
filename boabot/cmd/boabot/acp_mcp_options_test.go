@@ -39,7 +39,7 @@ func listToolNames(t *testing.T, client *localmcp.Client) map[string]bool {
 
 func TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["complete_board_item"] {
@@ -49,7 +49,7 @@ func TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead(t *testing.T) {
 
 func TestBuildACPMCPOptions_BoardStore_NotActivatedForTechLead(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "tl-bot", BotType: "tech-lead"}}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["complete_board_item"] {
@@ -72,7 +72,7 @@ func TestBuildACPMCPOptions_BoardStore_EndToEnd_CompletesItem(t *testing.T) {
 	})
 
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts := buildACPMCPOptions(cfg, memPath)
+	opts, _ := buildACPMCPOptions(cfg, memPath)
 	mcpClient := localmcp.NewClient(nil, opts...)
 
 	n := 0
@@ -115,7 +115,7 @@ func TestBuildACPMCPOptions_PluginStore_ActivatedWhenInstallDirSet(t *testing.T)
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: filepath.Join(t.TempDir(), "plugins")}},
 	}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["read_skill"] {
@@ -125,7 +125,7 @@ func TestBuildACPMCPOptions_PluginStore_ActivatedWhenInstallDirSet(t *testing.T)
 
 func TestBuildACPMCPOptions_PluginStore_NotActivatedWhenInstallDirEmpty(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["read_skill"] {
@@ -143,7 +143,7 @@ func TestBuildACPMCPOptions_PluginStore_RelativeInstallDirResolvedAgainstMemPath
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: "plugins"}},
 	}
-	opts := buildACPMCPOptions(cfg, memPath)
+	opts, _ := buildACPMCPOptions(cfg, memPath)
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["read_skill"] {
@@ -170,7 +170,7 @@ func TestBuildACPMCPOptions_PluginStore_ConstructionFailureDegradesGracefully(t 
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: filepath.Join(blocker, "plugins")}},
 	}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["read_skill"] {
@@ -226,7 +226,7 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: installDir}},
 	}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	mcpClient := localmcp.NewClient(nil, opts...)
 
 	// Confirm ListTools actually advertises the plugin's own declared tool
@@ -272,7 +272,7 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 
 func TestBuildACPMCPOptions_CLIRunner_AlwaysWired_NoToolsListedWithoutEnabling(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	names := listToolNames(t, client)
@@ -293,7 +293,7 @@ func TestBuildACPMCPOptions_CLITools_PerToolGatingMatchesEnabledFlag(t *testing.
 			},
 		},
 	}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	client := localmcp.NewClient(nil, opts...)
 
 	names := listToolNames(t, client)
@@ -322,7 +322,7 @@ func TestBuildACPMCPOptions_CLITools_EndToEnd_RunOpenCode(t *testing.T) {
 			},
 		},
 	}
-	opts := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
 	mcpClient := localmcp.NewClient([]string{workDir}, opts...)
 
 	n := 0

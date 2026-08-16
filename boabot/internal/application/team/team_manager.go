@@ -36,6 +36,7 @@ import (
 	localplugin "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/plugin"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/queue"
 	localrules "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/rules"
+	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/sharedstate"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/vector"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/local/watchdog"
 	openaiembedder "github.com/stainedhead/dev-team-bots/boabot/internal/infrastructure/openai"
@@ -153,8 +154,37 @@ type TeamManager struct {
 	// instead of main.go calling WithChannelMonitor directly.
 	buzzMonitorBuilder BuzzMonitorBuilder
 
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	wg sync.WaitGroup
+
+	// cancel and cancelMu guard Run's root-context CancelFunc: Run sets it
+	// once (after tm.cancel = cancel used to be an unsynchronized write) and
+	// Shutdown reads-then-calls it from a different goroutine -- a data race
+	// caught by the race detector (specs/260816-acp-native-shared-state/
+	// implementation-notes.md), pre-existing but previously rarely
+	// reproduced; this feature's sharedstate.EnsureOwner call added enough
+	// scheduling delay between goroutine launch and the write in Run to make
+	// it reliably reproducible under -race. A dedicated mutex, not tm's
+	// existing dynamicBotsMu -- unrelated field, no reason to couple them.
+	cancelMu sync.Mutex
+	cancel   context.CancelFunc
+}
+
+// setCancel stores fn as the Run-scoped cancel func under cancelMu.
+func (tm *TeamManager) setCancel(fn context.CancelFunc) {
+	tm.cancelMu.Lock()
+	tm.cancel = fn
+	tm.cancelMu.Unlock()
+}
+
+// callCancel invokes the Run-scoped cancel func, if one has been set, under
+// cancelMu -- safe to call concurrently with setCancel or itself.
+func (tm *TeamManager) callCancel() {
+	tm.cancelMu.Lock()
+	fn := tm.cancel
+	tm.cancelMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // BuzzMonitorBuilder constructs a per-persona Buzz domain.ChannelMonitor
@@ -444,6 +474,20 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	// Persist the chat store under the orchestrator's memory directory.
 	orchestratorMemPath := filepath.Join(tm.cfg.MemoryRoot, orchestratorName)
 	_ = os.MkdirAll(orchestratorMemPath, 0o755)
+
+	// FR-501 (specs/260816-acp-native-shared-state/spec.md): claim/check
+	// this directory's shared-state marker so an ACP-mode process later
+	// resolving the same path under a different persona identity gets a
+	// loud warning instead of silently sharing state under a mismatched
+	// name. See sharedstate.EnsureOwner's doc comment for what this can and
+	// cannot detect.
+	if matched, ownerErr := sharedstate.EnsureOwner(orchestratorMemPath, orchestratorName); ownerErr != nil {
+		slog.Warn("shared-state owner check failed", "path", orchestratorMemPath, "err", ownerErr)
+	} else if !matched {
+		slog.Warn("shared-state directory already claimed by a different identity; state may not be shared as expected",
+			"orchestrator", orchestratorName, "path", orchestratorMemPath)
+	}
+
 	tm.sharedChatStore = orchestratorlocal.NewInMemoryChatStore(filepath.Join(orchestratorMemPath, "chat.json"))
 	tm.sharedTaskStore = orchestratorlocal.NewInMemoryDirectTaskStore(filepath.Join(orchestratorMemPath, "tasks.json"))
 	sharedBoard := orchestratorlocal.NewInMemoryBoardStore(filepath.Join(orchestratorMemPath, "board.json"))
@@ -559,7 +603,7 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 	// Start each enabled bot in its own goroutine.
 	started := 0
 	runCtx, cancel := context.WithCancel(ctx)
-	tm.cancel = cancel
+	tm.setCancel(cancel)
 
 	for _, e := range teamCfg.Team {
 		if !e.Enabled {
@@ -601,9 +645,7 @@ func (tm *TeamManager) Run(ctx context.Context) error {
 // goroutines to exit.  If the provided context is already cancelled it uses a
 // 30-second timeout.
 func (tm *TeamManager) Shutdown(ctx context.Context) error {
-	if tm.cancel != nil {
-		tm.cancel()
-	}
+	tm.callCancel()
 
 	// Broadcast shutdown to all bots so their poll loops unblock.
 	shutdownCtx := ctx

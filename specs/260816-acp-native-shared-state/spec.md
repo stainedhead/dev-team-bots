@@ -33,7 +33,7 @@ Closes four gaps found by a deep audit of native daemon mode vs. ACP mode (`boab
 
 ## User Requirements / Functional Requirements
 
-**FR-501:** A new, explicit shared-state configuration mechanism (exact shape TBD at research) replaces path-inference for state ACP mode and native mode share. Native mode's top-level config and any ACP persona config intended to share state set this value identically. ACP mode's existing per-persona fallback remains available for standalone personas with no shared-state requirement.
+**FR-501 (revised during Step 3 implementation — see implementation-notes.md):** Research confirmed the original wording ("fail loudly if native mode's and an ACP persona's shared-state config diverge") is not implementable: an ACP worker only ever loads its own persona `config.yaml` and has no channel to read native mode's separate top-level config, which may not even be running. True cross-process path divergence cannot be detected. Implemented instead: `internal/infrastructure/local/sharedstate.EnsureOwner` writes/checks a `.shared-state-owner` marker file (filelock-guarded) inside the resolved board/chat/task directory, recording which bot/persona identity claimed it. A directory already claimed by a *different* identity than the current process's own (e.g. a renamed persona reusing an old directory, or two personas accidentally configured to the same root) logs a specific warning; construction is not blocked. This is the full implementable scope of "explicit, validated" for a filesystem-only shared channel — reusing the existing `memory.path` config field (already present on both native mode's and ACP personas' configs) as the shared-state root, no new config field needed.
 
 **FR-502:** This mechanism is designed once, applying to both existing `board.json` and new `chat.json` — not board-only.
 
@@ -70,7 +70,7 @@ None expected to public config schema for existing fields. FR-501 likely introdu
 
 ## Success Criteria and Acceptance Criteria
 
-- [ ] Native mode and an ACP persona configured to share state, when either's config diverges from the other's shared-state value, fail to start (or log a loud, specific warning) rather than silently writing to different paths.
+- [x] Native mode and an ACP persona resolving the same shared-state directory under a mismatched identity (the implementable subset of "diverge" — see revised FR-501) log a specific warning rather than silently corrupting shared state; true cross-process path divergence (two processes pointed at genuinely different roots) is undetectable with no shared channel and is not claimed as covered.
 - [ ] A follow-up question via ACP mode gets a response reflecting context from the earlier turn, verified end-to-end.
 - [ ] The ChatStore-recorded history is visible/consistent with what native mode's chat feed would show for the equivalent thread, when both share state.
 - [ ] A recurring-instruction Buzz request via ACP mode creates a real scheduled task, visible under the Tasks UI's "Scheduled" filter.

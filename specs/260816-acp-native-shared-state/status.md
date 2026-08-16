@@ -7,8 +7,8 @@
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Initial Research (PRD) | ✅ Complete |
-| 1 | Specification (spec.md) | 🔄 In Progress |
-| 2 | Research & Data Modeling | ⬜ Not Started |
+| 1 | Specification (spec.md) | ✅ Complete |
+| 2 | Research & Data Modeling | 🔄 In Progress |
 | 3 | Architecture & Planning | ⬜ Not Started |
 | 4 | Task Breakdown | ⬜ Not Started |
 | 5 | Implementation | ⬜ Not Started |
@@ -28,3 +28,4 @@ None currently.
 ## Recent Activity
 
 - 2026-08-16: Spec directory created, `spec.md` written from `acp-native-shared-state-PRD.md`.
+- 2026-08-16: Spec review complete — verdict "Implementation-ready." Two Warnings noted (FR-504 integration shape, chat.json edge-case detail) are intentional research-phase deferrals, not gaps; both resolve during Step 3 implementation per `plan.md`'s Critical Path.

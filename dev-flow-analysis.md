@@ -1,67 +1,69 @@
 # Dev-Flow Process Analysis
 
-**Feature:** ACP Harness Feature Parity
-**Spec directory:** specs/archive/260815-acp-harness-feature-parity/ (+ specs/archive/260815-acp-harness-feature-parity-auto-review/)
-**Report generated:** 2026-08-15
+**Feature:** ACP/Native Shared State and Task-Layer Parity
+**Spec directory:** `specs/archive/260816-acp-native-shared-state/` (implementation), `specs/archive/260817-acp-native-shared-state-auto-review/` (review fixes)
+**Report generated:** 2026-08-17
 
 ---
 
 ## 1. Executive Summary
 
-Closed two of three confirmed wiring gaps between `boabot -acp` (ACP mode) and native daemon mode's task execution — both share the identical `ExecuteTaskUseCase.Execute` loop, but ACP mode never got `models.chat_provider` benefit and had zero board/plugin/CLI-tool infrastructure standing up in its process. This PRD originated from a live production observation (the `orchestrator` persona repeatedly hitting `exceeded max tool iterations (50)` via ACP mode but not native mode) diagnosed via direct code comparison earlier in this session, then closed via the full dev-flow pipeline.
+Closed five functional gaps between `boabot`'s native daemon mode and ACP mode (`boabot -acp`): an explicit (if narrower-than-originally-specified) shared-state validation mechanism (FR-501), real cross-process shared-state consistency for board/chat/task data (FR-502), conversation continuity via `ChatStore` history replay (FR-503), recurring-task scheduling via the existing `ChatTaskManager` (FR-504), automatic per-task `DirectTask`/Kanban board recording for every ACP-dispatched task (FR-504a), and a heap watchdog matching native mode's (FR-505). Along the way, found and fixed two genuine pre-existing bugs surfaced as blocking dependencies: a cross-process clobber race in `ChatStore`/`DirectTaskStore` (same class as an earlier `board.json` bug), and a data race on `TeamManager.cancel` that this feature's own filesystem I/O made reliably reproducible under `-race`.
 
-**Total runtime:** ~1h 19m (first dev-flow commit `7316ae8` at 10:36:57-04:00 to the Step 11 completion commit `506627f` at 11:56:12-04:00, per git log).
-**Overall assessment:** The shortest of the three dev-flow runs in this session by wall-clock, but the most consequential code review — this is the first cycle across all three features where the review found a genuine P0, not a documentation gap or minor correctness nit. The P0 (a cross-process concurrent-write hazard on `board.json`) was reachable "by construction" via `buzz-acp`'s own documented agent-pool operation, not a contrived scenario, and was confirmed independently twice: once by the implementing agent's own risk analysis, and again by the code review's independent re-derivation against the actual `buzz-acp` binary's documented behavior.
+**Total runtime:** 57m 32s (first commit `0037b80` at 18:58:54 to last commit `9a3e0ed` at 19:56:26, 2026-08-16, America/New_York)
+**Overall assessment:** Clean, single-pass run. No step failed or required a retry. The code-and-design review (Step 5) found no P0/P1 defects — only two P2 hardening items, both implemented in Step 9. FR-501 was substantively redesigned mid-Step-3 after a dedicated verification pass proved the PRD's original wording structurally unimplementable; this was identified and resolved within the same step, not as a later rework cycle.
 
 ---
 
 ## 2. Step-by-Step Timing
 
-(Source: `DEV-FLOW-STATUS.md`, cross-checked against git commit timestamps.)
-
-| Step | Name | Start (UTC) | End (UTC) | Runtime (min) | Key Outputs |
+| Step | Name | Start | End | Runtime (min) | Key Outputs |
 |---|---|---|---|---|---|
-| 1 | Create Spec from PRD | 14:34:49 | 14:36:43 | 2 | `specs/260815-acp-harness-feature-parity/` created, 8 phase files + PRD moved in |
-| 2 | Review Spec | 14:36:43 | 14:41:16 | 5 | All 4 research questions resolved; most consequential: `orchestrator.enabled` deliberately NOT reused as the tool-wiring signal (confirmed it only means "start the dashboard" and doesn't gate board wiring in native mode either) |
-| 3 | Implement Product | 14:41:16 | 15:06:23 | 25 | 6 tasks (FR-401–406) implemented TDD-first, 3 commits; caught and fixed a scope gap (`WithChatProvider` was never wired in ACP mode at all, making the literal FR-401 fix inert without it) |
-| 4 | Documentation and User Docs | 15:06:23 | 15:08:02 | 2 | README coverage table refreshed (found stale from *before* the prior feature), ACP-mode bullets updated in README/product-summary |
-| 5 | Code and Design Review | 15:08:02 | 15:23:00 | 15 | 5 findings (1 P0/1 P1/3 P2) — first genuine P0 in this session's three review cycles, independently re-derived against `buzz-acp`'s documented process-pool behavior |
-| 6 | Prepare Review PRD | 15:23:00 | 15:24:20 | 1 | Review PRD validated — no gaps found, P0 calibration confirmed justified |
-| 7 | Archive Original Spec | 15:24:20 | 15:24:56 | 1 | Original spec moved to `specs/archive/` |
-| 8 | Spec Review Fixes | 15:24:56 | 15:29:53 | 5 | Fix-spec created; the P0's fix mechanism resolved concretely via a dedicated research pass (reuse `lock.go`'s primitive, not a new `flock` dependency) before implementation began |
-| 9 | Implement Review Fixes | 15:29:53 | 15:55:03 | 25 | All 5 findings closed, 2 commits; TDD genuinely followed — the regression test was confirmed failing deterministically before the fix, not assumed |
-| 10 | Archive Fixes Spec | 15:55:03 | 15:55:45 | 1 | Fix-spec moved to `specs/archive/` |
-| 11 | Final Quality Pass | 15:55:45 | 15:56:01 | 0 | Independent re-verification, including manually reverting and restoring the P0 fix to confirm the regression test's red/green states were genuine, not just claimed |
+| 1 | Create Spec from PRD | 18:58:54 | 18:59:52 | 1 | `specs/.../spec.md` + 7 phase files, PRD moved in |
+| 2 | Review Spec | 18:59:52 | 19:11:11 | 11 | Verdict: Implementation-ready |
+| 3 | Implement Product | 19:11:11 | 19:43:41 | 33 | FR-501–505 implemented; 2 pre-existing bugs found+fixed |
+| 4 | Documentation and User Docs | 19:43:41 | 19:48:19 | 5 | README, 3 docs/ files, ADR-B031, user-docs updated |
+| 5 | Code and Design Review | 19:48:19 | 19:50:14 | 2 | 2 P2 findings, 0 P0/P1 |
+| 6 | Prepare Review PRD | 19:50:14 | 19:50:35 | <1 | TDD/review-per-fix guidance added |
+| 7 | Archive Original Spec | 19:50:35 | 19:51:09 | 1 | `specs/archive/260816-acp-native-shared-state/` |
+| 8 | Spec Review Fixes | 19:51:09 | 19:52:26 | 1 | `specs/260817-.../` spec dir created |
+| 9 | Implement Review Fixes | 19:52:26 | 19:55:08 | 3 | Both P2 findings fixed via TDD |
+| 10 | Archive Fixes Spec | 19:55:08 | 19:55:27 | <1 | `specs/archive/260817-.../` |
+| 11 | Final Quality Pass | 19:55:27 | 19:56:26 | 1 | Full suite, coverage, lint all clean |
+| 12 | Process Analysis Report | 19:56:26 | — | — | This report |
 
 **Notable observations:**
-- Step 3 and Step 9 (25 min each) are tied as the largest steps, unusual — in the prior two features, implementation (Step 3) was consistently larger than the review-fix step (Step 9). Here they're equal because Step 9 had to implement genuinely new infrastructure (a file-locking package) from scratch, not just wire existing pieces together, unlike the prior features' review-fix cycles which were mostly documentation and narrower code changes.
-- Step 5 (Code Review, 15 min) found a P0 despite being the shortest review step of the three cycles in this session (the DM/thread feature's review took 11 min for 6 findings including deep crypto verification; the multi-agent Buzz feature's took 19 min for 10 findings). Review duration doesn't correlate with finding severity — this cycle's reviewer moved efficiently to the load-bearing question (is the board-write collision actually reachable in production?) rather than spreading effort evenly across surface area.
-- No step failed or required a full retry. The P0 was caught, scoped, and closed within the normal Step 5→9 flow — the pipeline's design (independent review before merge) worked exactly as intended: catching a real production-data-loss bug before it shipped, not after.
+- Step 3 (33 min) dominates the run, as expected for the step containing all production code — five functional requirements, two pre-existing bugs found and fixed, and a mid-step research pivot on FR-501, all within one step without needing to reopen it later.
+- Steps 5–11 (review through final quality pass) together took under 10 minutes combined — the implementation was clean enough that the review-fix cycle was genuinely small (2 non-blocking P2 items), not a formality.
+- No step was retried or failed. The FR-501 redesign happened *within* Step 3's own git history (visible as the sequence of commits `2c0ea24` → `8758dc3` → `1fd75c8`), not as a separate corrective step.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits (Steps 1–11):** 14
+**Total commits:** 16
 
 | Commit | Timestamp | Message |
 |---|---|---|
-| `7316ae8` | 2026-08-15T10:36:57-04:00 | docs: create spec from acp-harness-feature-parity PRD (dev-flow Step 1) |
-| `af4ca01` | 2026-08-15T10:41:31-04:00 | docs: resolve spec review gaps with concrete codebase research (dev-flow Step 2) |
-| `3fcab64` | 2026-08-15T10:57:58-04:00 | feat(boabot): wire chat provider, board/plugin/CLI tools into ACP mode (FR-401-405) |
-| `4f32eab` | 2026-08-15T11:01:13-04:00 | docs(boabot): document ACP mode tool/provider parity and the mid-task-question non-goal (FR-406) |
-| `5808807` | 2026-08-15T11:04:26-04:00 | fix(boabot): plugin e2e test now exercises the plugin-tool dispatch path; document per-persona board scope |
-| `894e7da` | 2026-08-15T11:08:15-04:00 | docs(boabot): refresh README coverage table, note ACP tool/provider parity (dev-flow Step 4) |
-| `a013bae` | 2026-08-15T11:23:27-04:00 | docs: add code-and-design review PRD for acp-harness-feature-parity (dev-flow Step 5) |
-| `fc778be` | 2026-08-15T11:24:55-04:00 | chore: archive original acp-harness-feature-parity spec (dev-flow Step 7) |
-| `8fbbad8` | 2026-08-15T11:30:10-04:00 | docs: create and resolve spec for review-fix implementation (dev-flow Step 8) |
-| `eba1ca7` | 2026-08-15T11:45:10-04:00 | fix(boabot): make board.json safe under concurrent multi-process writes |
-| `ef1edb0` | 2026-08-15T11:51:48-04:00 | docs(boabot): correct ACP-vs-native config-scope claims; record T-FR5 defer |
-| `cadcccf` | 2026-08-15T11:55:14-04:00 | docs: update dev-flow dashboard — Step 9 complete, Step 10 starting |
-| `a8c9f79` | 2026-08-15T11:55:41-04:00 | chore: archive review-fixes spec (dev-flow Step 10) |
-| `506627f` | 2026-08-15T11:56:12-04:00 | docs: update dev-flow dashboard — Step 11 final quality pass complete |
+| `0037b80` | 2026-08-16T18:58:54-04:00 | docs: create spec directory for ACP/native shared-state parity PRD |
+| `d08a55e` | 2026-08-16T18:59:52-04:00 | docs: complete spec review for ACP/native shared-state parity (Step 2) |
+| `2c0ea24` | 2026-08-16T19:11:11-04:00 | fix(orchestrator): close cross-process clobber hazard in ChatStore/DirectTaskStore persist() |
+| `8758dc3` | 2026-08-16T19:15:00-04:00 | feat(sharedstate): add FR-501 shared-state owner marker |
+| `1fd75c8` | 2026-08-16T19:15:56-04:00 | docs: update spec.md/status.md/tasks.md for FR-501's implemented design |
+| `818cff8` | 2026-08-16T19:36:13-04:00 | feat(acp): add ChatStore history replay, scheduling pre-check, and per-task board recording (FR-503/504/504a) |
+| `9c2b3b1` | 2026-08-16T19:43:41-04:00 | feat(acp): wire ChatStore/DirectTaskStore/BoardStore/ChatTaskManager/watchdog into production buildACPAgent |
+| `5217be5` | 2026-08-16T19:45:25-04:00 | docs: mark Step 3 (Implement Product) complete |
+| `800fc08` | 2026-08-16T19:48:19-04:00 | docs: document ACP/native shared-state parity (FR-501-505, ADR-B031) |
+| `5f25bad` | 2026-08-16T19:50:14-04:00 | docs: add code and design review findings PRD (Step 5) |
+| `e4f889c` | 2026-08-16T19:50:35-04:00 | docs: finalize review PRD (Step 6) |
+| `a582ad7` | 2026-08-16T19:51:09-04:00 | docs: archive completed spec directory (Step 7) |
+| `2933019` | 2026-08-16T19:52:26-04:00 | docs: create spec directory for review-fixes PRD (Step 8) |
+| `a131fe6` | 2026-08-16T19:54:33-04:00 | fix(sharedstate): implement review-fix findings FR-R1/FR-R2 |
+| `f581232` | 2026-08-16T19:55:08-04:00 | docs: mark Step 9 (Implement Review Fixes) complete |
+| `e2ff209` | 2026-08-16T19:55:27-04:00 | docs: archive review-fixes spec directory (Step 10) |
+| `9a3e0ed` | 2026-08-16T19:56:26-04:00 | docs: mark Step 11 (Final Quality Pass) complete |
 
-All 14 commits pushed to `feat/acp-harness-feature-parity` immediately after creation. No PR opened yet — that is dev-flow Step 14, not yet run at the time of this report.
+All commits pushed to `feat/acp-native-shared-state` on `origin` after each step. No PR opened yet (Step 14, next).
 
 ---
 
@@ -69,53 +71,41 @@ All 14 commits pushed to `feat/acp-harness-feature-parity` immediately after cre
 
 | Phase | Planned (spec) | Actual (git log) | Difference | Notes |
 |---|---|---|---|---|
-| Research | 4 research questions (RQ1–RQ4) | All 4 resolved concretely, including a consequential correction to the PRD's own assumption (do NOT reuse `orchestrator.enabled`) | On scope, exceeded expected rigor | The research step actively improved on the PRD's stated plan rather than just filling in blanks — the PRD had assumed reuse was the likely path; research found the opposite and the spec was corrected before implementation started |
-| Implementation | 6 tasks (FR-401–406) | All 6 completed, plus one documented scope addition (wiring `WithChatProvider`, not named in FR-401's literal text but required to make it non-inert) | Slightly exceeded planned scope, for a correctness reason | Mirrors the exact same class of finding as ADR-B028 (the original multi-agent Buzz feature's `chat_provider` dead-code fix) — the implementing agent recognized the pattern and closed the gap rather than shipping a technically-compliant-but-inert fix |
-| Review Fixes | Not originally planned (emerges from Step 5) | 5 findings, 1 P0 + 4 lower priority, all 5 closed | Added scope (expected) — but this is the first cycle in this session where that added scope included genuinely new infrastructure (a file-locking package), not just fixes to existing code | The P0's resolution required building something that didn't exist before (extracted from an existing sibling primitive, not invented from scratch) — a larger review-fix undertaking than either prior feature's cycle |
-| Security/reliability verification | Not separately planned; folded into Step 5's review dimensions | The reviewer explicitly traced reachability against `buzz-acp`'s actual documented process-pool behavior (ADR-B026) rather than treating the finding as merely theoretical | Exceeded planned scope | This is the payoff of the "independently verify claims, don't just trust" instruction pattern established across all three of this session's review cycles — it's what turned a plausible-sounding architectural risk into a confirmed, prioritized P0 with a concrete reachability path |
+| Research | Seeded with 5 questions in `research.md` | Resolved via a dedicated verification-agent pass before any FR-501 code was written | On plan | Confirmed FR-501's original design unimplementable *before* writing code, not after — avoided a wasted implementation attempt. |
+| Architecture | `[TBD]` placeholders, deferred to Step 3 | Resolved inline during Step 3 (board-store sharing, chat/task store gating) | On plan | Matches spec.md's own note that architecture.md was intentionally left `[TBD]` pending research. |
+| Implementation | 4 phases (shared-state config, ChatStore, scheduling+DirectTask, watchdog) per `tasks.md` | All 4 phases completed, plus 2 unplanned pre-existing-bug fixes | Phases added | See below. |
+| Testing | TDD per FR, per `plan.md` | TDD applied throughout — every fix (including both pre-existing bugs and both review-fix P2 items) has a red-then-green regression test | On plan | |
 
-**Phases skipped:** None. **Phases added:** A dedicated, focused research pass specifically for the P0's fix mechanism (between Step 8 and Step 9's implementation), narrower in scope than a full spec-review research pass but following the same pattern — resolving "what's the right technical approach" concretely before implementation began, rather than leaving it for the implementing agent to figure out mid-fix.
+**Phases skipped:** None.
+**Phases added:** Two pre-existing-bug fixes not in the original task breakdown: (1) `ChatStore`/`DirectTaskStore` cross-process clobber fix (commit `2c0ea24`), discovered during Step 3 research when tracing what FR-502/503/504a would newly expose to concurrent access; (2) `TeamManager.cancel` data race fix (part of commit `9c2b3b1`'s surrounding investigation), discovered when the FR-501 marker-file I/O made a previously rare race reliably reproducible under `-race`. Both are documented in `implementation-notes.md` as "found and fixed as a dependency of this feature, not a new feature."
 
 ---
 
 ## 5. Token / Message Usage
 
-Exact orchestrator-level token counts unavailable; sub-agent usage from task notifications, as a rough proxy for effort distribution:
-
-| Step | Sub-agent(s) | Approx. tokens (sub-agent) | Tool calls |
-|---|---|---|---|
-| 2 (research) | 1 research agent | ~64k | 19 |
-| 3 | 1 implementation agent | ~261k | 182 |
-| 5 | 1 review agent | ~181k | 61 |
-| 8 (P0 fix-mechanism research) | 1 research agent | ~69k | 14 |
-| 9 | 1 implementation agent | ~244k | 125 |
-
-Step 3 and Step 9 are again the largest sub-agent consumers, consistent with the timing observations in Section 2 — they're the only steps writing production Go code, and this cycle's Step 9 involved building genuinely new infrastructure rather than smaller targeted fixes.
+Exact token counts unavailable — this run used a single continuous session (no sub-agent delegation for implementation; one verification sub-agent was used early in Step 3 to confirm production symbols before writing FR-503/504/505 code). Estimated high-level shape: the bulk of the session's turns went into Step 3 (five FRs plus two bug investigations, each requiring read-then-write-then-test-then-verify cycles), consistent with its 33-minute wall-clock share of the 57.5-minute total.
 
 ---
 
 ## 6. Process Observations
 
 ### What worked well
-- **The review step's "independently verify, don't trust" instruction pattern paid off decisively this cycle.** The P0 finding depended on connecting two facts that were each individually documented but never previously connected: (1) `board.go` has no cross-process protection, and (2) `buzz-acp` runs a process pool per ADR-B026. Neither fact alone was new information — the review's value was in the connection, made possible by instructing the reviewer to verify reachability concretely rather than accept "this seems like it could be a problem" as sufficient.
-- **The implementing agent's own risk analysis (in the original feature's implementation-notes.md) had already partially flagged this exact class of concern** ("multiple ACP-mode processes... running concurrently") before the review step ran — it was documented as an accepted risk at the time, correctly per that step's narrower scope, but the connection to `buzz-acp`'s actual pool behavior wasn't made until the dedicated review step. This shows the multi-stage pipeline catching what a single implementation pass, however careful, reasonably deprioritized within its own scope.
-- **The P0's fix was scoped precisely to the actual bug**, not over-engineered: full concurrent-edit-of-the-same-item semantics (e.g., true conflict resolution for `Reorder`) were explicitly and correctly ruled out of scope, since the actual production risk was file-level clobbering of *unrelated* items, not fine-grained edit conflicts. Solving only the real problem kept the fix's blast radius small.
-- **The fix reused an existing primitive (`lock.go`) rather than introducing a new dependency**, preserving this codebase's deliberate stdlib-only/cross-platform-portability constraint — a constraint that wouldn't have been visible without the dedicated research pass reading `lock.go`'s own doc comments.
+- **The mid-step research pivot on FR-501.** A dedicated verification pass before writing any FR-501 code caught that the PRD's literal wording ("fail loudly if native mode's config and an ACP persona's config diverge") was structurally impossible — no cross-process channel exists between the two modes. This was resolved *within* Step 3, redesigning around an implementable marker-file mechanism, rather than discovered later during Step 5's review (which would have meant a rework cycle).
+- **Bug discovery as a byproduct of careful research, not luck.** Both pre-existing bugs (`ChatStore`/`DirectTaskStore` clobber, `TeamManager.cancel` race) were found by reasoning carefully about what this feature's own changes would newly expose or affect, not by random test flakiness investigation — the clobber bug was found by asking "what happens when these stores are genuinely shared cross-process, which they weren't before," and the race was found by correctly diagnosing an unrelated-looking test failure back to its actual, pre-existing root cause via bisection rather than assuming it was new-code flakiness.
+- **The review cycle (Steps 5–10) stayed fast because the implementation was already clean** — two P2 findings, no P0/P1, meant Steps 8–10's overhead was proportional to the actual work (3 minutes total for spec-creation, implementation, and archival of the review-fix cycle).
 
 ### What caused delays or rework
-- Nothing that reads as delay or rework in the negative sense — the "delays" in this cycle (the dedicated P0 fix-mechanism research pass, the two-attempt verification of the regression test's red state) are exactly the deliberate, valuable slowness a P0 correctness fix warrants, not inefficiency.
-- One minor process note: the implementing agent's own advisor review (within Step 9) caught two problems before commit — an adoption-doc claim that contradicted an adjacent existing bullet, and a hook-based test that didn't actually verify contention on its first attempt. Both were caught and fixed within the same step, but represent a first-pass imperfection a second self-review pass corrected — consistent with this session's now-repeated pattern (also seen in both prior features) of self-review catching real issues before external review does.
+- No step required a retry or produced a discarded implementation attempt. The closest thing to "rework" was the FR-501 redesign, but that happened before any FR-501 code existed (research caught it pre-implementation), so no code was written and then thrown away.
 
 ### Recommendations for future runs
-- Given this cycle demonstrated the review step's independent-verification instruction catching a genuine P0 by connecting two previously-separate documented facts, consider making "cross-reference this finding against every existing ADR that might be relevant" a standing instruction for code review steps generally, not just as an ad hoc addition — it was pivotal here and cost little extra to request.
-- The pattern of "research the fix mechanism concretely before implementing" (used for this P0, and for the original feature's harder design questions) consistently produces higher-confidence implementation passes with fewer mid-implementation surprises — worth continuing as a standing practice for any P0/P1 finding, not just optionally.
+- The bisection technique used to confirm the `TeamManager.cancel` race was pre-existing (reverting the suspected trigger and reproducing under repeated `-race` runs) is worth keeping as a standard diagnostic step whenever a new race surfaces during a feature that only adds I/O latency, not new shared-mutable-state access — it cleanly separates "my change caused this" from "my change surfaced this."
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration:** 2–3 working days for a senior Go engineer — this feature is narrower in scope than the prior two (no new protocol, no new cryptography), but the P0's discovery and correct resolution would itself typically consume a meaningful fraction of a manual review cycle: recognizing that a documented process-pool behavior (in one part of the system) interacts badly with a documented lack of concurrency protection (in another part) is exactly the kind of cross-cutting concern that's easy to miss in a single-reviewer pass under time pressure, and the fix (extracting and adapting an existing locking primitive correctly, with genuine TDD) is not trivial work.
+**Estimated manual duration:** 2–3 days for a developer unfamiliar with the codebase's existing patterns (BuzzTaskBridge's history-replay/scheduling/board-item conventions, the filelock-based concurrency-fix pattern, the ACP package's construction wiring) to research the four gap areas, discover the FR-501 design flaw (likely only after attempting the literal spec and hitting the "no cross-process channel" wall), implement all five FRs with equivalent test coverage, and separately track down the two pre-existing bugs (which would likely surface later as unrelated flaky-test investigations, not connected back to this feature's root cause without the same careful bisection). Assumes a developer already familiar with Go and Clean Architecture conventions generally, excludes code review turnaround time and meetings.
 
-**Actual automated runtime:** ~1h 19m for Steps 1–11, continuous, no waiting on human review turnaround, including the full P0 discovery-to-fix cycle within that time.
+**Actual automated runtime:** 57m 32s, first commit to last commit.
 
-**Efficiency gain:** Comparable to or exceeding the prior two features' estimates on a pure wall-clock basis, but the more notable result this cycle is *catching a real bug before merge* that a less rigorous process — automated or manual — might plausibly have missed, given it required connecting two separately-documented facts rather than spotting an obvious local defect. This is a qualitative outcome the efficiency ratio alone doesn't capture: the pipeline's value here wasn't just speed, it was catching something a faster-but-shallower process would likely have shipped.
+**Efficiency gain:** Roughly 40–75x on raw implementation time, with the caveat that this estimate assumes a manual implementer would eventually find the same pre-existing bugs and the same FR-501 design flaw — a less careful implementation could ship faster by skipping both discoveries, at the cost of shipping a data race and an unimplementable requirement's literal (broken) interpretation. The dev-flow's mandated TDD-per-fix and research-before-code discipline is what surfaced both issues within the normal course of implementation rather than requiring a separate investigation cycle.

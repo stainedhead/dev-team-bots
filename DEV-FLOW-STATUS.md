@@ -23,8 +23,8 @@
 | 9  | Implement Review Fixes          | ✅ Complete | 2026-08-17T01:37:00Z | 2026-08-17T01:37:00Z | 0 (no findings to fix) |
 | 10 | Archive Fixes Spec              | ✅ Complete | 2026-08-17T01:37:00Z | 2026-08-17T01:38:00Z | 1 |
 | 11 | Final Quality Pass              | ✅ Complete | 2026-08-17T01:38:00Z | 2026-08-17T01:42:00Z | 4 |
-| 12 | Process Analysis Report         | 🔄 In Progress | 2026-08-17T01:42:00Z | — | — |
-| 13 | Archive Spec                    | ⬜ Pending | — | — | — |
-| 14 | Open Pull Request               | ⬜ Pending | — | — | — |
+| 12 | Process Analysis Report         | ✅ Complete | 2026-08-17T01:42:00Z | 2026-08-17T01:46:00Z | 4 |
+| 13 | Archive Spec                    | ✅ Complete | 2026-08-17T01:46:00Z | 2026-08-17T01:46:30Z | <1 |
+| 14 | Open Pull Request               | 🔄 In Progress | 2026-08-17T01:46:30Z | — | — |
 
 **Demo tomorrow night.** FR-601/602/604 shipped (must-have). FR-603 explicitly deferred (stretch). Live-deployment verification (rebuild+restart+manual Buzz test) blocked mid-flow by an environment issue backgrounding a long-lived daemon from this tool's sandbox (SIGKILLed within ~1-2s even with sandbox disabled) — binary rebuilt and deployed to disk, stale ACP pool processes cleared so buzz-acp respawns fresh ones; user restarting native mode manually. Live verification to resume once confirmed running.

@@ -68,7 +68,18 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 
 	rawInstruction := extractText(params.Prompt)
 	threadID := a.resolveThreadID(rawInstruction, params.SessionId)
-	a.recordChatMessage(turnCtx, threadID, domain.ChatDirectionOutbound, rawInstruction)
+	// humanMessage isolates the real human-authored text from buzz-acp's
+	// assembled prompt (see extractHumanMessage's doc comment for the live
+	// production bug this fixes: scoring/recording buzz-acp's entire
+	// multi-thousand-character injected prompt as "the message" caused
+	// near-guaranteed false-positive scheduling-intent matches and
+	// unbounded history-replay bloat). Used for anything meant to reflect
+	// what the human actually said (chat history, scheduling detection,
+	// board/task titles) -- NOT for task.Instruction below, which must
+	// still carry buzz-acp's full injected context (tool docs, platform
+	// instructions) so the model keeps functioning correctly each turn.
+	humanMessage := extractHumanMessage(rawInstruction)
+	a.recordChatMessage(turnCtx, threadID, domain.ChatDirectionOutbound, humanMessage)
 
 	// FR-504: scheduling-intent pre-check. A "handled" result ends the turn
 	// here, whether it's a confirmation prompt, a cancellation ack, or an
@@ -76,14 +87,14 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 	// of these (NFR-Correctness's flip side: this must NOT slow down or
 	// alter the non-scheduling path below, which it doesn't touch at all).
 	if a.chatTaskManager != nil {
-		resp, handled, scheduled, detectErr := a.chatTaskManager.DetectAndHandle(turnCtx, threadID, rawInstruction, domain.DirectTaskSourceACP)
+		resp, handled, scheduled, detectErr := a.chatTaskManager.DetectAndHandle(turnCtx, threadID, humanMessage, domain.DirectTaskSourceACP)
 		if handled {
 			reply := resp
 			if detectErr != nil {
 				reply = schedulingFailureMessage(detectErr)
 			}
 			if scheduled != nil {
-				a.recordScheduledTask(turnCtx, *scheduled, rawInstruction)
+				a.recordScheduledTask(turnCtx, *scheduled, humanMessage)
 			}
 			a.recordChatMessage(turnCtx, threadID, domain.ChatDirectionInbound, reply)
 			a.emit(context.Background(), params.SessionId, sdk.UpdateAgentMessageText(reply))
@@ -102,7 +113,7 @@ func (a *Agent) Prompt(ctx context.Context, params sdk.PromptRequest) (sdk.Promp
 
 	slog.Info("acp turn started", "session_id", params.SessionId, "task_id", task.ID)
 
-	directTaskID, boardItemID := a.startDirectTask(turnCtx, threadID, rawInstruction)
+	directTaskID, boardItemID := a.startDirectTask(turnCtx, threadID, humanMessage)
 
 	// Keep-alive: a progress-driven signal when the Worker offers one, plus
 	// a ticker fallback for a single long silent tool call with no
@@ -366,7 +377,7 @@ func (a *Agent) buildInstructionWithHistory(ctx context.Context, threadID, instr
 // BuzzTaskBridge, which legitimately trusts the parsed name for cross-bot
 // delegation. Then records the FR-504a board item for the scheduled task
 // (status Backlog, since it has not run yet).
-func (a *Agent) recordScheduledTask(ctx context.Context, task domain.DirectTask, rawInstruction string) {
+func (a *Agent) recordScheduledTask(ctx context.Context, task domain.DirectTask, humanMessage string) {
 	if a.taskStore != nil && task.BotName != a.botName {
 		task.BotName = a.botName
 		if updated, err := a.taskStore.Update(ctx, task); err != nil {
@@ -375,7 +386,7 @@ func (a *Agent) recordScheduledTask(ctx context.Context, task domain.DirectTask,
 			task = updated
 		}
 	}
-	a.createBoardItemForTask(ctx, task, rawInstruction, domain.WorkItemStatusBacklog)
+	a.createBoardItemForTask(ctx, task, humanMessage, domain.WorkItemStatusBacklog)
 }
 
 // startDirectTask records a Running DirectTask and an in-progress board
@@ -384,7 +395,7 @@ func (a *Agent) recordScheduledTask(ctx context.Context, task domain.DirectTask,
 // follows) when recording is disabled, or if either write fails -- a
 // write failure here is logged, not fatal, mirroring
 // BuzzTaskBridge.createBoardItem's identical non-fatal treatment.
-func (a *Agent) startDirectTask(ctx context.Context, threadID, rawInstruction string) (directTaskID, boardItemID string) {
+func (a *Agent) startDirectTask(ctx context.Context, threadID, humanMessage string) (directTaskID, boardItemID string) {
 	if a.taskStore == nil || a.board == nil {
 		return "", ""
 	}
@@ -393,7 +404,7 @@ func (a *Agent) startDirectTask(ctx context.Context, threadID, rawInstruction st
 		BotName:      a.botName,
 		Source:       domain.DirectTaskSourceACP,
 		ThreadID:     threadID,
-		Instruction:  rawInstruction,
+		Instruction:  humanMessage,
 		Status:       domain.DirectTaskStatusRunning,
 		DispatchedAt: &now,
 	})
@@ -401,7 +412,7 @@ func (a *Agent) startDirectTask(ctx context.Context, threadID, rawInstruction st
 		slog.Warn("acp mode: failed to record direct task", "bot", a.botName, "err", err)
 		return "", ""
 	}
-	itemID := a.createBoardItemForTask(ctx, created, rawInstruction, domain.WorkItemStatusInProgress)
+	itemID := a.createBoardItemForTask(ctx, created, humanMessage, domain.WorkItemStatusInProgress)
 	return created.ID, itemID
 }
 
@@ -449,13 +460,13 @@ func (a *Agent) finishDirectTask(ctx context.Context, directTaskID, boardItemID 
 // alongside a DirectTask, returning its ID (or "" if a.board is nil or the
 // write fails -- logged, not fatal, mirroring
 // BuzzTaskBridge.createBoardItem's identical non-fatal treatment).
-func (a *Agent) createBoardItemForTask(ctx context.Context, task domain.DirectTask, rawInstruction string, status domain.WorkItemStatus) string {
+func (a *Agent) createBoardItemForTask(ctx context.Context, task domain.DirectTask, humanMessage string, status domain.WorkItemStatus) string {
 	if a.board == nil {
 		return ""
 	}
 	item := domain.WorkItem{
-		Title:        titleFromInstruction(rawInstruction),
-		Description:  rawInstruction,
+		Title:        titleFromInstruction(humanMessage),
+		Description:  humanMessage,
 		AssignedTo:   a.botName,
 		Status:       status,
 		ActiveTaskID: task.ID,

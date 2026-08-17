@@ -28,6 +28,8 @@ const (
 type Client struct {
 	allowedDirs []string // absolute, cleaned paths
 	boardStore  domain.BoardStore
+	taskStore   domain.DirectTaskStore
+	botName     string
 	pluginStore domain.PluginStore
 	installDir  string
 	// CLI tool support
@@ -38,10 +40,26 @@ type Client struct {
 	progressFn func(line string) // optional; called for each output line from CLI tools
 }
 
-// WithBoardStore adds the complete_board_item tool to the client, allowing
-// standalone bots to mark a Kanban item done when they finish independently.
+// WithBoardStore adds the complete_board_item and list_board_items tools to
+// the client, allowing standalone bots to mark a Kanban item done when they
+// finish independently, and to read real board state when asked about it --
+// channel-agnostic-tool-parity-PRD.md's FR-601: this is the same instance
+// and the same construction site every other board tool already uses, so
+// every channel/mode that gets complete_board_item also gets this.
 func WithBoardStore(bs domain.BoardStore) func(*Client) {
 	return func(c *Client) { c.boardStore = bs }
+}
+
+// WithDirectTaskStore adds the list_my_tasks tool to the client (FR-602),
+// scoped to botName -- ACP mode is single-persona (architecture.md
+// AD-1/AD-2), so cross-bot task visibility is out of scope; native mode's
+// per-bot Worker construction already has its own bot name available at
+// this same call site.
+func WithDirectTaskStore(ts domain.DirectTaskStore, botName string) func(*Client) {
+	return func(c *Client) {
+		c.taskStore = ts
+		c.botName = botName
+	}
 }
 
 // WithPluginStore adds plugin tool support to the client.
@@ -160,6 +178,25 @@ func (c *Client) ListTools(ctx context.Context) ([]domain.MCPTool, error) {
 					"item_id": map[string]any{"type": "string", "description": "The board item ID (visible in the item details)"},
 					"output":  map[string]any{"type": "string", "description": "Summary of what you did and the outcome. Include any errors, blockers, or results. This is shown to the operator in the Output tab."},
 				},
+			},
+		})
+		tools = append(tools, domain.MCPTool{
+			Name:        "list_board_items",
+			Description: "List every item currently on the Kanban board, with its ID, title, status, and assignee. Call this whenever asked what's on the board, what's in progress, or what's assigned to whom -- do not guess or answer from memory, always check.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		})
+	}
+
+	if c.taskStore != nil {
+		tools = append(tools, domain.MCPTool{
+			Name:        "list_my_tasks",
+			Description: "List your own direct/scheduled tasks, with ID, status, instruction, and next-run time for scheduled ones. Call this whenever asked what's scheduled, running, or recently completed -- do not guess or answer from memory, always check.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
 			},
 		})
 	}
@@ -281,6 +318,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 		return c.runShell(args)
 	case "complete_board_item":
 		return c.completeBoardItem(ctx, args)
+	case "list_board_items":
+		return c.listBoardItems(ctx)
+	case "list_my_tasks":
+		return c.listMyTasks(ctx)
 	case "read_skill":
 		return c.readSkill(ctx, args)
 	case "run_claude_code":
@@ -519,6 +560,81 @@ func (c *Client) completeBoardItem(ctx context.Context, args map[string]any) (do
 		return errResult(fmt.Sprintf("complete_board_item: update failed: %v", err)), nil
 	}
 	return okResult(fmt.Sprintf("board item %q marked as done", itemID)), nil
+}
+
+// boardItemSummary is the minimal, chat-readable shape list_board_items
+// returns -- title/status/assignee/ID, matching data-dictionary.md's
+// "minimal summary, not a full object dump" scope decision.
+type boardItemSummary struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	AssignedTo string `json:"assigned_to,omitempty"`
+}
+
+// listBoardItems implements FR-601: an agent-callable read of real board
+// state, closing the confirmed gap where complete_board_item's write-only
+// access left every channel (including native chat) unable to answer "what's
+// on the board" except by guessing.
+func (c *Client) listBoardItems(ctx context.Context) (domain.MCPToolResult, error) {
+	if c.boardStore == nil {
+		return errResult("list_board_items: board store not available"), nil
+	}
+	items, err := c.boardStore.List(ctx, domain.WorkItemFilter{})
+	if err != nil {
+		return errResult(fmt.Sprintf("list_board_items: %v", err)), nil
+	}
+	summaries := make([]boardItemSummary, 0, len(items))
+	for _, it := range items {
+		summaries = append(summaries, boardItemSummary{
+			ID:         it.ID,
+			Title:      it.Title,
+			Status:     string(it.Status),
+			AssignedTo: it.AssignedTo,
+		})
+	}
+	data, err := json.Marshal(summaries)
+	if err != nil {
+		return errResult(fmt.Sprintf("list_board_items: marshal: %v", err)), nil
+	}
+	return okResult(string(data)), nil
+}
+
+// directTaskSummary is the minimal, chat-readable shape list_my_tasks
+// returns.
+type directTaskSummary struct {
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	Instruction string     `json:"instruction"`
+	NextRunAt   *time.Time `json:"next_run_at,omitempty"`
+}
+
+// listMyTasks implements FR-602: an agent-callable read of the calling
+// bot's own direct/scheduled task state, scoped to c.botName (ACP mode is
+// single-persona -- cross-bot visibility is out of scope by design, see
+// architecture.md AD-1/AD-2).
+func (c *Client) listMyTasks(ctx context.Context) (domain.MCPToolResult, error) {
+	if c.taskStore == nil {
+		return errResult("list_my_tasks: direct task store not available"), nil
+	}
+	tasks, err := c.taskStore.List(ctx, c.botName)
+	if err != nil {
+		return errResult(fmt.Sprintf("list_my_tasks: %v", err)), nil
+	}
+	summaries := make([]directTaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		summaries = append(summaries, directTaskSummary{
+			ID:          t.ID,
+			Status:      string(t.Status),
+			Instruction: t.Instruction,
+			NextRunAt:   t.NextRunAt,
+		})
+	}
+	data, err := json.Marshal(summaries)
+	if err != nil {
+		return errResult(fmt.Sprintf("list_my_tasks: marshal: %v", err)), nil
+	}
+	return okResult(string(data)), nil
 }
 
 // callCLITool dispatches a run_<tool> call by resolving the binary and invoking

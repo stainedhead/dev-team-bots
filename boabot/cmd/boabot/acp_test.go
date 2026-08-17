@@ -187,7 +187,7 @@ func TestBuildACPWorker_ChatProviderUsedForACPSource(t *testing.T) {
 	}
 
 	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
-		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{}, nil)
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-1", Source: "acp", Instruction: "hello"})
 	if err != nil {
@@ -219,7 +219,7 @@ func TestBuildACPWorker_ChatProviderUnresolvable_FallsBackToDefault(t *testing.T
 	}
 
 	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
-		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{}, nil)
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-2", Source: "acp", Instruction: "hello"})
 	if err != nil {
@@ -249,7 +249,7 @@ func TestBuildACPWorker_NoChatProvider_UsesDefault(t *testing.T) {
 	}
 
 	worker, _ := buildACPWorker(cfg, t.TempDir(), "soul prompt", pf, defaultProvider,
-		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{})
+		&mocks.MemoryStore{}, &mocks.Embedder{}, &mocks.VectorStore{}, nil)
 
 	_, err := worker.Execute(context.Background(), domain.Task{ID: "t-acp-3", Source: "acp", Instruction: "hello"})
 	if err != nil {

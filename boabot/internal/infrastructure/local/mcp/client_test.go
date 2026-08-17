@@ -53,7 +53,11 @@ func (s *stubBoardStore) Create(_ context.Context, item domain.WorkItem) (domain
 }
 
 func (s *stubBoardStore) List(_ context.Context, _ domain.WorkItemFilter) ([]domain.WorkItem, error) {
-	return nil, nil
+	items := make([]domain.WorkItem, 0, len(s.items))
+	for _, it := range s.items {
+		items = append(items, it)
+	}
+	return items, nil
 }
 
 func (s *stubBoardStore) Delete(_ context.Context, id string) error {

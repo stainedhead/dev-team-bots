@@ -1,10 +1,10 @@
 # Dev-Flow Implementation Status
 
-**PRD:** specs/260816-acp-native-shared-state/acp-native-shared-state-PRD.md
-**Spec:** specs/260816-acp-native-shared-state
-**Branch:** feat/acp-native-shared-state
-**Review PRD:** acp-native-shared-state-auto-review-PRD.md
-**Process Start:** 2026-08-16T22:52:52Z
+**PRD:** specs/archive/260817-channel-agnostic-tool-parity/channel-agnostic-tool-parity-PRD.md
+**Spec:** specs/archive/260817-channel-agnostic-tool-parity
+**Branch:** feat/channel-agnostic-tool-parity
+**Review PRD:** specs/archive/260817-channel-agnostic-tool-parity-auto-review/channel-agnostic-tool-parity-auto-review-PRD.md
+**Process Start:** 2026-08-17T00:40:00Z
 **Process End:** —
 **Total Runtime:** —
 
@@ -12,17 +12,19 @@
 
 | Step | Name | Status | Start | End | Runtime (min) |
 |------|------|--------|-------|-----|---------------|
-| 1  | Create Spec from PRD            | ✅ Complete | 2026-08-16T22:52:52Z | 2026-08-16T23:10:00Z | 17 |
-| 2  | Review Spec                     | ✅ Complete | 2026-08-16T23:10:00Z | 2026-08-16T23:15:00Z | 5 |
-| 3  | Implement Product               | ✅ Complete | 2026-08-16T23:15:00Z | 2026-08-16T23:45:00Z | 30 |
-| 4  | Documentation and User Docs     | ✅ Complete | 2026-08-16T23:45:00Z | 2026-08-16T23:55:00Z | 10 |
-| 5  | Code and Design Review          | ✅ Complete | 2026-08-16T23:55:00Z | 2026-08-17T00:05:00Z | 10 |
-| 6  | Prepare Review PRD              | ✅ Complete | 2026-08-17T00:05:00Z | 2026-08-17T00:08:00Z | 3 |
-| 7  | Archive Original Spec           | ✅ Complete | 2026-08-17T00:08:00Z | 2026-08-17T00:09:00Z | 1 |
-| 8  | Spec Review Fixes               | ✅ Complete | 2026-08-17T00:09:00Z | 2026-08-17T00:14:00Z | 5 |
-| 9  | Implement Review Fixes          | ✅ Complete | 2026-08-17T00:14:00Z | 2026-08-17T00:22:00Z | 8 |
-| 10 | Archive Fixes Spec              | ✅ Complete | 2026-08-17T00:22:00Z | 2026-08-17T00:23:00Z | 1 |
-| 11 | Final Quality Pass              | ✅ Complete | 2026-08-17T00:23:00Z | 2026-08-17T00:27:00Z | 4 |
-| 12 | Process Analysis Report         | ✅ Complete | 2026-08-17T00:27:00Z | 2026-08-17T00:32:00Z | 5 |
-| 13 | Archive Spec                    | ✅ Complete | 2026-08-17T00:32:00Z | 2026-08-17T00:32:30Z | <1 |
-| 14 | Open Pull Request               | 🔄 In Progress | 2026-08-17T00:32:30Z | — | — |
+| 1  | Create Spec from PRD            | ✅ Complete | 2026-08-17T00:40:00Z | 2026-08-17T00:44:00Z | 4 |
+| 2  | Review Spec                     | ✅ Complete | 2026-08-17T00:44:00Z | 2026-08-17T00:46:00Z | 2 |
+| 3  | Implement Product               | ✅ Complete | 2026-08-17T00:46:00Z | 2026-08-17T01:24:00Z | 38 |
+| 4  | Documentation and User Docs     | ✅ Complete | 2026-08-17T01:24:00Z | 2026-08-17T01:30:00Z | 6 |
+| 5  | Code and Design Review          | ✅ Complete | 2026-08-17T01:30:00Z | 2026-08-17T01:33:00Z | 3 |
+| 6  | Prepare Review PRD              | ✅ Complete | 2026-08-17T01:33:00Z | 2026-08-17T01:34:00Z | 1 |
+| 7  | Archive Original Spec           | ✅ Complete | 2026-08-17T01:34:00Z | 2026-08-17T01:35:00Z | 1 |
+| 8  | Spec Review Fixes               | ✅ Complete | 2026-08-17T01:35:00Z | 2026-08-17T01:37:00Z | 2 |
+| 9  | Implement Review Fixes          | ✅ Complete | 2026-08-17T01:37:00Z | 2026-08-17T01:37:00Z | 0 (no findings to fix) |
+| 10 | Archive Fixes Spec              | ✅ Complete | 2026-08-17T01:37:00Z | 2026-08-17T01:38:00Z | 1 |
+| 11 | Final Quality Pass              | ✅ Complete | 2026-08-17T01:38:00Z | 2026-08-17T01:42:00Z | 4 |
+| 12 | Process Analysis Report         | ✅ Complete | 2026-08-17T01:42:00Z | 2026-08-17T01:46:00Z | 4 |
+| 13 | Archive Spec                    | ✅ Complete | 2026-08-17T01:46:00Z | 2026-08-17T01:46:30Z | <1 |
+| 14 | Open Pull Request               | 🔄 In Progress | 2026-08-17T01:46:30Z | — | — |
+
+**Demo tomorrow night.** FR-601/602/604 shipped (must-have). FR-603 explicitly deferred (stretch). Live-deployment verification (rebuild+restart+manual Buzz test) blocked mid-flow by an environment issue backgrounding a long-lived daemon from this tool's sandbox (SIGKILLed within ~1-2s even with sandbox disabled) — binary rebuilt and deployed to disk, stale ACP pool processes cleared so buzz-acp respawns fresh ones; user restarting native mode manually. Live verification to resume once confirmed running.

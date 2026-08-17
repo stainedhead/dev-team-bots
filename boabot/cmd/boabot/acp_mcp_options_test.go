@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application"
 	"github.com/stainedhead/dev-team-bots/boabot/internal/application/mocks"
@@ -39,7 +40,7 @@ func listToolNames(t *testing.T, client *localmcp.Client) map[string]bool {
 
 func TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["complete_board_item"] {
@@ -49,11 +50,50 @@ func TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead(t *testing.T) {
 
 func TestBuildACPMCPOptions_BoardStore_NotActivatedForTechLead(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "tl-bot", BotType: "tech-lead"}}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["complete_board_item"] {
 		t.Error("expected complete_board_item tool to be absent for a tech-lead persona, mirroring team_manager.go:1023-1024")
+	}
+}
+
+// TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead_IncludesListTool
+// is channel-agnostic-tool-parity-PRD.md FR-601's wiring-level regression
+// test: the read-side tool must reach the ACP-mode MCP client at the exact
+// same construction site/gate as complete_board_item, not just exist in the
+// mcp package in isolation.
+func TestBuildACPMCPOptions_BoardStore_ActivatedForNonTechLead_IncludesListTool(t *testing.T) {
+	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
+	client := localmcp.NewClient(nil, opts...)
+
+	if !listToolNames(t, client)["list_board_items"] {
+		t.Error("expected list_board_items tool to be present for a non-tech-lead persona")
+	}
+}
+
+// TestBuildACPMCPOptions_DirectTaskStore_ActivatedWhenProvided is FR-602's
+// wiring-level test: a non-nil taskStore reaches the ACP-mode MCP client as
+// list_my_tasks.
+func TestBuildACPMCPOptions_DirectTaskStore_ActivatedWhenProvided(t *testing.T) {
+	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
+	ts := &fakeDirectTaskStoreForACPTest{}
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), ts)
+	client := localmcp.NewClient(nil, opts...)
+
+	if !listToolNames(t, client)["list_my_tasks"] {
+		t.Error("expected list_my_tasks tool to be present when a direct task store is provided")
+	}
+}
+
+func TestBuildACPMCPOptions_DirectTaskStore_NotActivatedWhenNil(t *testing.T) {
+	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
+	client := localmcp.NewClient(nil, opts...)
+
+	if listToolNames(t, client)["list_my_tasks"] {
+		t.Error("expected list_my_tasks tool to be absent without a direct task store")
 	}
 }
 
@@ -72,7 +112,7 @@ func TestBuildACPMCPOptions_BoardStore_EndToEnd_CompletesItem(t *testing.T) {
 	})
 
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts, _ := buildACPMCPOptions(cfg, memPath)
+	opts, _ := buildACPMCPOptions(cfg, memPath, nil)
 	mcpClient := localmcp.NewClient(nil, opts...)
 
 	n := 0
@@ -115,7 +155,7 @@ func TestBuildACPMCPOptions_PluginStore_ActivatedWhenInstallDirSet(t *testing.T)
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: filepath.Join(t.TempDir(), "plugins")}},
 	}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["read_skill"] {
@@ -125,7 +165,7 @@ func TestBuildACPMCPOptions_PluginStore_ActivatedWhenInstallDirSet(t *testing.T)
 
 func TestBuildACPMCPOptions_PluginStore_NotActivatedWhenInstallDirEmpty(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["read_skill"] {
@@ -143,7 +183,7 @@ func TestBuildACPMCPOptions_PluginStore_RelativeInstallDirResolvedAgainstMemPath
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: "plugins"}},
 	}
-	opts, _ := buildACPMCPOptions(cfg, memPath)
+	opts, _ := buildACPMCPOptions(cfg, memPath, nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if !listToolNames(t, client)["read_skill"] {
@@ -170,7 +210,7 @@ func TestBuildACPMCPOptions_PluginStore_ConstructionFailureDegradesGracefully(t 
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: filepath.Join(blocker, "plugins")}},
 	}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	if listToolNames(t, client)["read_skill"] {
@@ -226,7 +266,7 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 		Bot:          config.BotConfig{Name: "worker-bot", BotType: "worker"},
 		Orchestrator: config.OrchestratorConfig{Plugins: config.PluginsConfig{InstallDir: installDir}},
 	}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	mcpClient := localmcp.NewClient(nil, opts...)
 
 	// Confirm ListTools actually advertises the plugin's own declared tool
@@ -272,7 +312,7 @@ func TestBuildACPMCPOptions_PluginStore_EndToEnd_ReadSkill(t *testing.T) {
 
 func TestBuildACPMCPOptions_CLIRunner_AlwaysWired_NoToolsListedWithoutEnabling(t *testing.T) {
 	cfg := config.Config{Bot: config.BotConfig{Name: "worker-bot", BotType: "worker"}}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	names := listToolNames(t, client)
@@ -293,7 +333,7 @@ func TestBuildACPMCPOptions_CLITools_PerToolGatingMatchesEnabledFlag(t *testing.
 			},
 		},
 	}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	client := localmcp.NewClient(nil, opts...)
 
 	names := listToolNames(t, client)
@@ -322,7 +362,7 @@ func TestBuildACPMCPOptions_CLITools_EndToEnd_RunOpenCode(t *testing.T) {
 			},
 		},
 	}
-	opts, _ := buildACPMCPOptions(cfg, t.TempDir())
+	opts, _ := buildACPMCPOptions(cfg, t.TempDir(), nil)
 	mcpClient := localmcp.NewClient([]string{workDir}, opts...)
 
 	n := 0
@@ -441,3 +481,36 @@ func fakeExecutable(t *testing.T, name, script string) string {
 	}
 	return path
 }
+
+// fakeDirectTaskStoreForACPTest is a minimal domain.DirectTaskStore for
+// buildACPMCPOptions' FR-602 wiring tests -- only List is ever exercised by
+// list_my_tasks; every other method is an unused stub.
+type fakeDirectTaskStoreForACPTest struct{}
+
+func (fakeDirectTaskStoreForACPTest) Create(_ context.Context, t domain.DirectTask) (domain.DirectTask, error) {
+	return t, nil
+}
+func (fakeDirectTaskStoreForACPTest) Update(_ context.Context, t domain.DirectTask) (domain.DirectTask, error) {
+	return t, nil
+}
+func (fakeDirectTaskStoreForACPTest) Get(_ context.Context, _ string) (domain.DirectTask, error) {
+	return domain.DirectTask{}, nil
+}
+func (fakeDirectTaskStoreForACPTest) List(_ context.Context, _ string) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (fakeDirectTaskStoreForACPTest) ListAll(_ context.Context) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (fakeDirectTaskStoreForACPTest) ListBySource(_ context.Context, _ domain.DirectTaskSource) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (fakeDirectTaskStoreForACPTest) Delete(_ context.Context, _ string) error { return nil }
+func (fakeDirectTaskStoreForACPTest) ListDue(_ context.Context, _ time.Time) ([]domain.DirectTask, error) {
+	return nil, nil
+}
+func (fakeDirectTaskStoreForACPTest) ClaimDue(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+var _ domain.DirectTaskStore = fakeDirectTaskStoreForACPTest{}

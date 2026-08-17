@@ -195,7 +195,7 @@ func buildACPAgent(configPath string) (*acpinfra.Agent, config.Config, error) {
 		slog.Info("acp mode: chat/task store and scheduling detection not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
 	}
 
-	worker, board := buildACPWorker(cfg, memPath, string(soulBytes), pf, provider, memStore, embedder, vecStore)
+	worker, board := buildACPWorker(cfg, memPath, string(soulBytes), pf, provider, memStore, embedder, vecStore, taskStore)
 
 	// Mirrors team_manager.go's startBot exactly (RT3/FR-004, auto-review):
 	// native mode wires a RulesTracker under this identical condition so the
@@ -253,8 +253,9 @@ func buildACPWorker(
 	memStore domain.MemoryStore,
 	embedder domain.Embedder,
 	vecStore domain.VectorStore,
+	taskStore domain.DirectTaskStore,
 ) (*application.ExecuteTaskUseCase, domain.BoardStore) {
-	mcpOpts, board := buildACPMCPOptions(cfg, memPath)
+	mcpOpts, board := buildACPMCPOptions(cfg, memPath, taskStore)
 	mcpClient := localmcp.NewClient(cfg.Orchestrator.WorkDirs, mcpOpts...)
 
 	worker := application.NewExecuteTaskUseCase(provider, mcpClient, memStore, embedder, vecStore, soulPrompt)
@@ -299,7 +300,11 @@ func buildACPWorker(
 // the tech-lead gate skipped it), so buildACPAgent can share the identical
 // instance for the Agent's own automatic per-turn recording (FR-504a) --
 // see buildACPWorker's doc comment for why one shared instance matters.
-func buildACPMCPOptions(cfg config.Config, memPath string) ([]func(*localmcp.Client), domain.BoardStore) {
+// taskStore, when non-nil, is the same DirectTaskStore instance buildACPAgent
+// already constructed for FR-504/504a's turn.go wiring -- wired here too
+// (channel-agnostic-tool-parity-PRD.md FR-602) so the model can read its own
+// task/schedule state, not just have it recorded automatically.
+func buildACPMCPOptions(cfg config.Config, memPath string, taskStore domain.DirectTaskStore) ([]func(*localmcp.Client), domain.BoardStore) {
 	var opts []func(*localmcp.Client)
 	var board domain.BoardStore
 
@@ -324,6 +329,11 @@ func buildACPMCPOptions(cfg config.Config, memPath string) ([]func(*localmcp.Cli
 		slog.Info("acp mode: board store activated", "bot", cfg.Bot.Name, "path", boardPath)
 	} else {
 		slog.Info("acp mode: board store not activated (persona type is tech-lead)", "bot", cfg.Bot.Name)
+	}
+
+	if taskStore != nil {
+		opts = append(opts, localmcp.WithDirectTaskStore(taskStore, cfg.Bot.Name))
+		slog.Info("acp mode: list_my_tasks tool activated", "bot", cfg.Bot.Name)
 	}
 
 	// Plugin store (FR-404): uses the same install-dir-presence gate and

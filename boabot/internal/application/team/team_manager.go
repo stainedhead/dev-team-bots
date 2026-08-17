@@ -1060,10 +1060,18 @@ func (tm *TeamManager) startBot(ctx context.Context, entry BotEntry, orchestrato
 	}
 
 	// Wire local filesystem MCP client. Non-tech-lead bots also get the
-	// complete_board_item tool so they can mark items done independently.
+	// complete_board_item/list_board_items tools so they can mark items done
+	// independently and answer questions about board state accurately
+	// (channel-agnostic-tool-parity-PRD.md FR-601) instead of guessing --
+	// this is the same tool set regardless of which channel (native chat,
+	// Buzz, ...) the resulting task came from, since MCP client construction
+	// never branches on task.Source.
 	var mcpOpts []func(*localmcp.Client)
 	if entry.Type != "tech-lead" && tm.sharedBoard != nil {
 		mcpOpts = append(mcpOpts, localmcp.WithBoardStore(tm.sharedBoard))
+	}
+	if entry.Type != "tech-lead" && tm.sharedTaskStore != nil {
+		mcpOpts = append(mcpOpts, localmcp.WithDirectTaskStore(tm.sharedTaskStore, entry.Name))
 	}
 	// Use pre-resolved plugin store (set in Run before goroutines start) to avoid data races.
 	if tm.resolvedPluginStore != nil {

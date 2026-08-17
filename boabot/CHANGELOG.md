@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.6.0...boabot/v0.7.0) (2026-08-17)
+
+
+### Features
+
+* **acp:** ACP/native shared-state, conversation continuity, scheduling, and task-board parity ([7c0f740](https://github.com/stainedhead/dev-team-bots/commit/7c0f740c324b0b4f19d1297be95b4fa913ad6945))
+* **acp:** add ChatStore history replay, scheduling pre-check, and per-task board recording (FR-503/504/504a) ([818cff8](https://github.com/stainedhead/dev-team-bots/commit/818cff85e8b41bfb7f25964f193d430c2b7a9509))
+* **acp:** wire ChatStore/DirectTaskStore/BoardStore/ChatTaskManager/watchdog into production buildACPAgent ([9c2b3b1](https://github.com/stainedhead/dev-team-bots/commit/9c2b3b1ff8fe0b96c49b1b53f91c5fb71a4c3728))
+* **mcp:** add list_board_items and list_my_tasks read tools (FR-601/602) ([e149351](https://github.com/stainedhead/dev-team-bots/commit/e1493510fa0c5c6d6058b7a4d99c3e8de362590d))
+* **mcp:** channel-agnostic board/task read tools (list_board_items, list_my_tasks) ([991bbf5](https://github.com/stainedhead/dev-team-bots/commit/991bbf50b3ab57461593957647bdc95f8373e69f))
+* **sharedstate:** add FR-501 shared-state owner marker ([8758dc3](https://github.com/stainedhead/dev-team-bots/commit/8758dc36e005f0da99df3fc4e0f089f20cb61c63))
+
+
+### Bug Fixes
+
+* **orchestrator:** close cross-process clobber hazard in ChatStore/DirectTaskStore persist() ([2c0ea24](https://github.com/stainedhead/dev-team-bots/commit/2c0ea24f8e50705334470c56eedfeba724285344))
+* **sharedstate:** implement review-fix findings FR-R1/FR-R2 ([a131fe6](https://github.com/stainedhead/dev-team-bots/commit/a131fe657e7e54bb5eb95c32e609db788fdcc58d))
+
 ## [0.6.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.5.0...boabot/v0.6.0) (2026-08-15)
 
 

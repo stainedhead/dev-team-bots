@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.7.0...boabot/v0.7.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **acp:** isolate real human message from buzz-acp's injected prompt boilerplate ([214806e](https://github.com/stainedhead/dev-team-bots/commit/214806e1985a20c623c56a54cae6076561f8738c))
+* **acp:** isolate real human message from buzz-acp's injected prompt boilerplate ([b039195](https://github.com/stainedhead/dev-team-bots/commit/b0391959658b67efa1154d1a5582f7b50ad6cdcf))
+
 ## [0.7.0](https://github.com/stainedhead/dev-team-bots/compare/boabot/v0.6.0...boabot/v0.7.0) (2026-08-17)
 
 

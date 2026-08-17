@@ -55,6 +55,41 @@ func extractChannelID(instruction string) (string, bool) {
 	return m[1], true
 }
 
+// humanMessagePattern matches the actual human-authored message text inside
+// buzz-acp's assembled prompt's trailing "[Buzz event: ...]" block --
+// everything else in the prompt (platform instructions, tool docs, replayed
+// conversation context) is buzz-acp's own injected boilerplate, not
+// something a human typed this turn. (?s) lets Content span multiple lines,
+// since buzz-acp's own docs describe multiline message content sent via
+// stdin. Matches greedily to the LAST "Content: ...\nTags:" occurrence (via
+// FindAllStringSubmatch in extractHumanMessage) since that block is always
+// the final section of the assembled prompt.
+var humanMessagePattern = regexp.MustCompile(`(?s)\nContent: (.*?)(?:\nTags:|\z)`)
+
+// extractHumanMessage isolates the real human-authored message from
+// buzz-acp's assembled prompt (see humanMessagePattern's doc comment).
+// Confirmed live production bug this fixes: scoring or recording buzz-acp's
+// ENTIRE assembled prompt (several thousand characters of platform
+// instructions/tool docs, which routinely contain words like
+// "schedule"/"every"/"bot") as if it were "the message" caused
+// ChatTaskManager's short-message NL heuristic to false-positive a
+// scheduling intent on nearly every turn, and would have compounded
+// unboundedly across turns once replayed as chat history. Falls back to
+// returning instruction unchanged if the expected block isn't found -- e.g.
+// a bare/non-buzz-acp ACP client sending a short instruction directly with
+// no wrapping context, which must behave exactly as before this fix.
+func extractHumanMessage(instruction string) string {
+	matches := humanMessagePattern.FindAllStringSubmatch(instruction, -1)
+	if len(matches) == 0 {
+		return instruction
+	}
+	text := strings.TrimSpace(matches[len(matches)-1][1])
+	if text == "" {
+		return instruction
+	}
+	return text
+}
+
 // calledPublish reports whether any tool call executed during the turn was
 // a run_shell invocation of "buzz messages send". A plain substring check
 // on the shell command, not a full parse -- run_shell takes an opaque shell

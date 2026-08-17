@@ -1,10 +1,10 @@
 # Dev-Flow Implementation Status
 
-**PRD:** specs/260816-acp-native-shared-state/acp-native-shared-state-PRD.md
-**Spec:** specs/260816-acp-native-shared-state
-**Branch:** feat/acp-native-shared-state
-**Review PRD:** acp-native-shared-state-auto-review-PRD.md
-**Process Start:** 2026-08-16T22:52:52Z
+**PRD:** specs/260817-channel-agnostic-tool-parity/channel-agnostic-tool-parity-PRD.md
+**Spec:** specs/260817-channel-agnostic-tool-parity
+**Branch:** feat/channel-agnostic-tool-parity
+**Review PRD:** channel-agnostic-tool-parity-auto-review-PRD.md
+**Process Start:** 2026-08-17T00:40:00Z
 **Process End:** —
 **Total Runtime:** —
 
@@ -12,17 +12,19 @@
 
 | Step | Name | Status | Start | End | Runtime (min) |
 |------|------|--------|-------|-----|---------------|
-| 1  | Create Spec from PRD            | ✅ Complete | 2026-08-16T22:52:52Z | 2026-08-16T23:10:00Z | 17 |
-| 2  | Review Spec                     | ✅ Complete | 2026-08-16T23:10:00Z | 2026-08-16T23:15:00Z | 5 |
-| 3  | Implement Product               | ✅ Complete | 2026-08-16T23:15:00Z | 2026-08-16T23:45:00Z | 30 |
-| 4  | Documentation and User Docs     | ✅ Complete | 2026-08-16T23:45:00Z | 2026-08-16T23:55:00Z | 10 |
-| 5  | Code and Design Review          | ✅ Complete | 2026-08-16T23:55:00Z | 2026-08-17T00:05:00Z | 10 |
-| 6  | Prepare Review PRD              | ✅ Complete | 2026-08-17T00:05:00Z | 2026-08-17T00:08:00Z | 3 |
-| 7  | Archive Original Spec           | ✅ Complete | 2026-08-17T00:08:00Z | 2026-08-17T00:09:00Z | 1 |
-| 8  | Spec Review Fixes               | ✅ Complete | 2026-08-17T00:09:00Z | 2026-08-17T00:14:00Z | 5 |
-| 9  | Implement Review Fixes          | ✅ Complete | 2026-08-17T00:14:00Z | 2026-08-17T00:22:00Z | 8 |
-| 10 | Archive Fixes Spec              | ✅ Complete | 2026-08-17T00:22:00Z | 2026-08-17T00:23:00Z | 1 |
-| 11 | Final Quality Pass              | ✅ Complete | 2026-08-17T00:23:00Z | 2026-08-17T00:27:00Z | 4 |
-| 12 | Process Analysis Report         | ✅ Complete | 2026-08-17T00:27:00Z | 2026-08-17T00:32:00Z | 5 |
-| 13 | Archive Spec                    | ✅ Complete | 2026-08-17T00:32:00Z | 2026-08-17T00:32:30Z | <1 |
-| 14 | Open Pull Request               | 🔄 In Progress | 2026-08-17T00:32:30Z | — | — |
+| 1  | Create Spec from PRD            | ✅ Complete | 2026-08-17T00:40:00Z | 2026-08-17T00:44:00Z | 4 |
+| 2  | Review Spec                     | 🔄 In Progress | 2026-08-17T00:44:00Z | — | — |
+| 3  | Implement Product               | ⬜ Pending | — | — | — |
+| 4  | Documentation and User Docs     | ⬜ Pending | — | — | — |
+| 5  | Code and Design Review          | ⬜ Pending | — | — | — |
+| 6  | Prepare Review PRD              | ⬜ Pending | — | — | — |
+| 7  | Archive Original Spec           | ⬜ Pending | — | — | — |
+| 8  | Spec Review Fixes               | ⬜ Pending | — | — | — |
+| 9  | Implement Review Fixes          | ⬜ Pending | — | — | — |
+| 10 | Archive Fixes Spec              | ⬜ Pending | — | — | — |
+| 11 | Final Quality Pass              | ⬜ Pending | — | — | — |
+| 12 | Process Analysis Report         | ⬜ Pending | — | — | — |
+| 13 | Archive Spec                    | ⬜ Pending | — | — | — |
+| 14 | Open Pull Request               | ⬜ Pending | — | — | — |
+
+**Demo deadline: tomorrow night.** FR-601/602/604 are must-have; FR-603 is explicitly cuttable if time runs short (see PRD's Dependencies and Risks). Live-deployment verification (rebuild + restart + manual Buzz test) is a required acceptance criterion, not optional.

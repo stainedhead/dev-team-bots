@@ -11,6 +11,7 @@ This is a Go monorepo containing three modules that together form the BaoBot coo
 | `boabot/` | Agent runtime binary — runs as a local single-process daemon, no AWS services required |
 | `boabotctl/` | Operator CLI — distributed to users via GitHub Releases |
 | `boabot-team/` | Bot personalities and configurations |
+| `paperclip-agent-factory-mobile/` | Native iOS and Android apps for managing Paperclip instances (Kotlin Multiplatform + SwiftUI/Compose). Not a Go module: follow its own `AGENTS.md` |
 
 Refer to `PRODUCT.md` at the root for the full product specification.
 
